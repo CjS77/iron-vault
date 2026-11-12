@@ -429,8 +429,16 @@ fn start_is_held(e: &StartError) -> bool {
 
 /// The token caller's `GET /<route>/latest`.
 pub async fn get(fixture: &Fixture, route: &str) -> Response {
-    let request = CallerRequest::get(&format!("/{route}/latest")).signed(Via::Unix);
-    let mut stream = UnixStream::connect(fixture.socket()).await.unwrap();
+    send_request(
+        &fixture.socket(),
+        &CallerRequest::get(&format!("/{route}/latest")).signed(Via::Unix),
+    )
+    .await
+}
+
+/// Sends `request` on a fresh connection to the Unix socket `socket` and reads the whole response.
+pub async fn send_request(socket: &Path, request: &CallerRequest) -> Response {
+    let mut stream = UnixStream::connect(socket).await.unwrap();
     stream.write_all(&request.to_bytes()).await.unwrap();
     let mut raw = Vec::new();
     tokio::time::timeout(WAIT, stream.read_to_end(&mut raw)).await.unwrap().unwrap();

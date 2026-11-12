@@ -6,7 +6,7 @@
 //! matched to the request the test sent and to the answer that caller got. A touch route goes through `config approve`
 //! and through a start, and never reaches the upstream.
 //!
-//! The first two tests serve a snapshot from [`Proxy`], whose buckets start full; the last two run the service from
+//! The first two tests serve a snapshot from [`Proxy`], whose buckets start full; the last three run the service from
 //! [`Fixture`], whose buckets start empty at each config check, as a real service's do.
 
 #![cfg(target_os = "linux")]
@@ -18,19 +18,17 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use common::WAIT;
-use common::approval_harness::{APPROVAL_PASSPHRASE, Fixture, approve, get, identity, state_dir_lock, versions};
+use common::approval_harness::{APPROVAL_PASSPHRASE, Fixture, approve, get, identity, send_request, state_dir_lock, versions};
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::proxy_harness::{CallerRequest, Credential, Proxy, Response, Setup, TOKEN_BYTES, TOKEN_HEADER, Via, token_hash};
 use iron_vault::admin::protocol::{AdminResponse, ErrorCode};
 use iron_vault::service_state::{FailureReason, ServiceState};
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_store::{OsFs, Vault};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
 
 const CA_FILE: &str = "/etc/iron-vault/ca/test.pem";
-/// A bucket no test can spend: it refills 100 000 tokens a second.
+/// A bucket no test can spend for long: it refills 100 000 tokens a second. In the [`Fixture`] tests it starts empty
+/// after each approval, so a request in the first moments after one can still be limited.
 const GENEROUS: &str = "{ requests = 100000, per_seconds = 1, burst = 100000 }";
 
 /// One request a caller sends: a method and a path below the route prefix.
@@ -180,7 +178,7 @@ async fn allowed_and_forbidden_requests_racing_on_one_route_reach_the_upstream_o
 /// The token of the second caller on the shared route.
 const SECOND_TOKEN: [u8; 32] = [9; 32];
 /// The shared route's burst. It refills `SHARED_BURST` tokens a minute, so the proxy's minute of accounting fills it and
-/// the next token comes thirty seconds after the first is spent: past [`WAIT`], which bounds every request here.
+/// the next token comes thirty seconds after the first is spent: past [`WAIT`](common::WAIT), which bounds every request here.
 const SHARED_BURST: usize = 2;
 /// How many requests each caller sends.
 const PER_CALLER: usize = 6;
@@ -247,13 +245,18 @@ fn reload_config(fixture: &Fixture, methods: &str, paths: &str) -> String {
     .replace("credential = \"api_key\"", "credential = \"fx_key\"")
 }
 
-/// The reload test's cases: the old policy allows all four, the new one only the first.
-const RELOAD: [Case; 4] = [
-    Case::new("GET", "a"),
+/// The reload test's cases: the old policy allows all but the last, the new one only the first, and neither the last.
+const RELOAD: [Case; 5] = [
+    NEW_ALLOWS,
     Case::new("POST", "a"),
     Case::new("GET", "b"),
     Case::new("POST", "b"),
+    BOTH_FORBID,
 ];
+/// The one reload case the new policy allows.
+const NEW_ALLOWS: Case = Case::new("GET", "a");
+/// The reload case neither policy allows: a method outside both.
+const BOTH_FORBID: Case = Case::new("DELETE", "a");
 const RELOAD_TASKS: usize = 4;
 
 /// One request of the reload test: its case, its tag, whether it was sent after the approval returned, and its status.
@@ -264,16 +267,22 @@ struct Sent {
     status: u16,
 }
 
-/// Sends `request` on a fresh connection to the Unix socket `socket` and reads the whole response.
-async fn exchange(socket: &Path, request: &CallerRequest) -> Response {
-    let mut stream = UnixStream::connect(socket).await.unwrap();
-    stream.write_all(&request.to_bytes()).await.unwrap();
-    let mut raw = Vec::new();
-    tokio::time::timeout(WAIT, stream.read_to_end(&mut raw)).await.unwrap().unwrap();
-    Response::parse(&String::from_utf8(raw).unwrap())
+/// The statuses a reload case may get, sent `after` the approval returned or before it.
+///
+/// After it, only the new policy answers. Before it, the old policy, the admission pause's `503` or the new policy may:
+/// the narrowing approval builds the `api` bucket empty, so a request admitted just after the pause may get `429`. A
+/// case both policies forbid is refused at authorization, which runs before the charge, so it is never `200` or `429`.
+fn permitted(case: Case, after: bool) -> &'static [u16] {
+    match (after, case == NEW_ALLOWS, case == BOTH_FORBID) {
+        (true, true, _) => &[200],
+        (true, false, _) => &[403],
+        (false, true, _) => &[200, 429, 503],
+        (false, false, false) => &[200, 403, 429, 503],
+        (false, false, true) => &[403, 503],
+    }
 }
 
-/// Task `task` sends the four cases in rounds, signalling `started` after its first round, until a round that began
+/// Task `task` sends the reload cases in rounds, signalling `started` after its first round, until a round that began
 /// after `reloaded` was set has ended. A request is tagged `post` when the flag was set before it was sent.
 async fn send_rounds(socket: &Path, task: usize, reloaded: &AtomicBool, started: tokio::sync::mpsc::Sender<()>) -> Vec<Sent> {
     let mut sent = Vec::new();
@@ -282,7 +291,7 @@ async fn send_rounds(socket: &Path, task: usize, reloaded: &AtomicBool, started:
         for case in RELOAD {
             let after = reloaded.load(Ordering::SeqCst);
             let tag = format!("{task}-{round}-{}", if after { "post" } else { "pre" });
-            let status = exchange(socket, &case.request("api", &tag)).await.status;
+            let status = send_request(socket, &case.request("api", &tag)).await.status;
             sent.push(Sent { case, tag, after, status });
         }
         if round == 0 {
@@ -300,13 +309,13 @@ async fn send_rounds(socket: &Path, task: usize, reloaded: &AtomicBool, started:
 ///
 /// Four callers' tasks send allowed and forbidden requests while `config approve` narrows the route from `GET` and
 /// `POST` on `/a/**` and `/b/**` to `GET` on `/a/**`. §12: "Never admit new requests under the previous policy after that
-/// commit." Every recorded request is allowed by the old policy, every request sent after the approval returned is
-/// answered by the new one, and the upstream saw one request for each `200`.
+/// commit." Every request is answered by the old policy or the new one, a request both forbid is never admitted, every
+/// request sent after the approval returned is answered by the new one, and the upstream saw one request for each `200`.
 ///
-/// Each approval builds new buckets, all empty. The configuration reference: "Every bucket starts empty each time the
-/// service becomes Ready, and fills from there: after `unlock`, an approval, a SIGHUP reload [...] Neither a restart
-/// nor a reload ever hands out a fresh burst." So `metered`, with a burst of five and a token an hour, refuses its first
-/// request after each approval.
+/// The configuration reference: "Every bucket starts empty each time the service becomes Ready, and fills from there:
+/// after `unlock`, an approval, a SIGHUP reload [...] Neither a restart nor a reload ever hands out a fresh burst." So
+/// `metered`, with a burst of five and a token an hour, starts empty after the first approval, and the narrowing approval
+/// gives it no fresh burst: it refuses its first request after each.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_approval_that_narrows_a_route_while_requests_run_admits_nothing_the_new_policy_forbids() {
     let fixture = Fixture::new().await;
@@ -321,7 +330,7 @@ async fn an_approval_that_narrows_a_route_while_requests_run_admits_nothing_the_
     );
     let metered = CallerRequest::get("/metered/meter").signed(Via::Unix);
     assert_eq!(
-        exchange(&fixture.socket(), &metered).await.status,
+        send_request(&fixture.socket(), &metered).await.status,
         429,
         "a fresh burst after the first approval"
     );
@@ -351,15 +360,8 @@ async fn an_approval_that_narrows_a_route_while_requests_run_admits_nothing_the_
     }
 
     sent.iter().for_each(|request| {
-        let permitted: &[u16] = match (request.after, request.case == RELOAD[0]) {
-            (true, true) => &[200],
-            (true, false) => &[403],
-            // Before the approval returned: the old policy, the admission pause's `503`, or the new policy.
-            (false, true) => &[200, 503],
-            (false, false) => &[200, 403, 503],
-        };
         assert!(
-            permitted.contains(&request.status),
+            permitted(request.case, request.after).contains(&request.status),
             "{:?} {}: {}",
             request.case,
             request.tag,
@@ -376,7 +378,7 @@ async fn an_approval_that_narrows_a_route_while_requests_run_admits_nothing_the_
     assert_eq!(fixture.upstream().requests().len(), answered.len());
     assert!(sent.iter().any(|request| request.after), "no request was sent after the approval");
     assert_eq!(
-        exchange(&fixture.socket(), &metered).await.status,
+        send_request(&fixture.socket(), &metered).await.status,
         429,
         "a fresh burst after the narrowing approval"
     );
