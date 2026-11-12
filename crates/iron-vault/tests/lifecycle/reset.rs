@@ -662,6 +662,7 @@ async fn an_init_and_an_import_swapped_under_the_confirmation_decline_and_remove
 /// Release check 10, import clause: an import writing at the summary that finishes before step 4 declines the reset.
 #[tokio::test(flavor = "multi_thread")]
 async fn release_check_10_an_import_finishing_before_step_4_declines_the_reset() {
+    let _one = super::export::one_at_a_time().await;
     let source = source().await;
     let fixture = Fixture::new().await;
     let service = fixture.ready().await;

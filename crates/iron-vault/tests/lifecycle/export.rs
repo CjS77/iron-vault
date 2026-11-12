@@ -46,9 +46,14 @@ const BIG_RECORDS: usize = 16;
 const BIG_LEN: usize = 48_000;
 
 /// Each export runs scrypt at 256 MiB, twice when it seals; one test at a time keeps the binary's memory bounded, and lets
-/// a test count the audit records it added to the log every test shares. The migration release checks, which export
-/// too, take it as well.
-pub(super) static ONE_AT_A_TIME: Mutex<()> = Mutex::const_new(());
+/// a test count the audit records it added to the log every test shares.
+static ONE_AT_A_TIME: Mutex<()> = Mutex::const_new(());
+
+/// The turn every test of this binary holds while it exports, whether through [`Served`], `migration_source::source` or
+/// its own `export` request: an export outside the turn adds `migration.exported` records to another test's count.
+pub(super) async fn one_at_a_time() -> MutexGuard<'static, ()> {
+    ONE_AT_A_TIME.lock().await
+}
 
 /// A Ready service whose envelopes open with [`PASSPHRASE`], with the service's handlers on its admin socket.
 struct Served {
@@ -71,7 +76,7 @@ impl Served {
 
     /// A service whose vault `pin` has changed before it starts.
     async fn pinning(big: bool, limits: Limits, pin: impl FnOnce(&Fixture)) -> Self {
-        let one = ONE_AT_A_TIME.lock().await;
+        let one = one_at_a_time().await;
         let logs = captured_logs();
         let fixture = Fixture::new().await;
         pin(&fixture);

@@ -388,6 +388,7 @@ async fn with_the_helper_socket_gone_the_tpm_approver_is_not_asked() {
 
 /// `export` answered with `answers`, and the bundle bytes the service streamed before its response.
 async fn export(vault: &TpmVault, answers: &[Answer<'_>]) -> (Exchanged, Vec<u8>) {
+    let _one = super::export::one_at_a_time().await;
     let mut stream = UnixStream::connect(&vault.path).await.unwrap();
     send(&mut stream, &Frame::Request(AdminRequest::Export)).await;
     let (mut notices, mut prompts, mut bundle) = (String::new(), Vec::new(), Vec::new());

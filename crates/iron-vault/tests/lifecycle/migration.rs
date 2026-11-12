@@ -16,6 +16,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::export::one_at_a_time;
 use common::approval_harness::{
     APPROVAL_PASSPHRASE, Captured, Exchanged, Fixture, IDENTITY, approve, captured_logs, converse, converse_revealing, error_code, get,
     identity, mkdir, send, service_locks, shutdown, spawn_admin, spawn_owner_admin, versions,
@@ -43,18 +44,12 @@ use iron_vault_store::migration_bundle::{BundleDecoder, EntryName, MAX_BUNDLE_LE
 use iron_vault_store::{OsFs, RecipientRole, RecoveryKey, RecoveryKeySecret, StoreFs, VaultIdentity, open_manifest, unwrap_identity};
 use secrecy::{ExposeSecret, SecretString};
 use tokio::net::UnixStream;
-use tokio::sync::MutexGuard;
 
 const DEST_PASSPHRASE: &str = "DEST-vault-passphrase-6e0d";
 /// The source's one credential's secret.
 const FX_SECRET: &str = "fx-secret";
 /// The answers of an owner who knows the export passphrase, chooses a vault passphrase and confirms the recovery key.
 const COMPLETE: [&str; 4] = [EXPORT_PASSPHRASE, DEST_PASSPHRASE, DEST_PASSPHRASE, "yes"];
-
-/// The export tests' lock: these tests export too, and the export tests count the `migration.exported` records they add.
-async fn one_at_a_time() -> MutexGuard<'static, ()> {
-    super::export::ONE_AT_A_TIME.lock().await
-}
 
 /// The destination: empty state and config directories in a temporary directory that is also the runtime directory.
 struct Dest {
