@@ -1,4 +1,19 @@
-//! The migration challenge and its binding digest (design/migration-authorization.md, "Migration challenge").
+//! The migration challenge and its binding digest
+//! ([migration authorization: Migration challenge](../../../../design/migration-authorization.md#migration-challenge)).
+//!
+//! The service issues a challenge just before it asks the owner for a source-owner proof, and later takes it back
+//! only by its binding digest. The digest covers the vault, the operation and its destination, a fresh nonce and both
+//! times, so a proof made for one pending migration matches no other. The digest covers this canonical encoding:
+//!
+//! ```text
+//! vault ID    16 bytes
+//! tag         0x01 for export, 0x02 for recipient add
+//! length      u64 big-endian: the length of the destination's age1… text (0 for export, which has no destination)
+//! destination the age1… text
+//! nonce       32 bytes from the operating system's random source
+//! issued at   u64 big-endian milliseconds from the service's clock origin
+//! expires at  u64 big-endian milliseconds from the clock origin: issued at + 120 000
+//! ```
 
 use std::fmt;
 
@@ -9,15 +24,16 @@ use tokio::time::{Duration, Instant};
 
 use super::MigrationOperation;
 
-/// How long a challenge stays valid after it is issued. It covers the vault passphrase prompt, the scrypt check and,
-/// for `export`, the export passphrase prompts that follow before the export starts.
+/// How long a challenge stays valid after it is issued: long enough for the vault passphrase prompt, the scrypt check
+/// and, for `export`, the export passphrase prompts that follow before the export starts.
 pub const CHALLENGE_LIFETIME: Duration = Duration::from_secs(120);
 
 /// The BLAKE2b personalization of the binding digest, which separates it from every other BLAKE2b use in the service.
-/// Its `v1` versions the canonical encoding: a change to the layout takes a new persona.
+/// Its `v1` versions the canonical encoding: a change to the layout needs a new persona.
 const BINDING_PERSONA: &[u8] = b"iv-migration-v1";
 
-/// The BLAKE2b-256 digest of a migration challenge's canonical encoding (glossary: *Binding digest*).
+/// The BLAKE2b-256 digest of a migration challenge's canonical encoding
+/// ([glossary: *Binding digest*](../../../../design/glossary.md#terms)).
 ///
 /// The service takes a challenge out of its pending slot only by this digest, so a proof for one pending migration
 /// matches no other.
@@ -25,14 +41,14 @@ const BINDING_PERSONA: &[u8] = b"iv-migration-v1";
 pub struct BindingDigest([u8; 32]);
 
 impl BindingDigest {
-    /// The digest's 32 bytes, which a signing source-owner method signs.
+    /// Returns the digest's 32 bytes, which a signing source-owner method wraps in its migration proof payload.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
 
 impl PartialEq for BindingDigest {
-    /// Constant time, as the approval digests compare, so no comparison leaks how much of a digest matched.
+    /// Compares in constant time, as the approval digests do, so no comparison leaks how much of a digest matched.
     fn eq(&self, other: &Self) -> bool {
         self.0.ct_eq(&other.0).into()
     }
@@ -40,8 +56,8 @@ impl PartialEq for BindingDigest {
 
 impl Eq for BindingDigest {}
 
-/// The short-lived, single-use value the service issues just before it asks for a source-owner proof (glossary:
-/// *Migration challenge*).
+/// The short-lived, single-use value the service issues just before it asks for a source-owner proof
+/// ([glossary: *Migration challenge*](../../../../design/glossary.md#terms)).
 ///
 /// It has no `Clone`, so a challenge taken out of the pending slot exists exactly once. Its `Debug` shows only the
 /// operation and the expiry.
@@ -56,7 +72,8 @@ pub struct MigrationChallenge {
 }
 
 impl MigrationChallenge {
-    /// A challenge issued at `now`, expiring [`CHALLENGE_LIFETIME`] later.
+    /// Makes a challenge issued at `now`, expiring [`CHALLENGE_LIFETIME`] later, with its times measured from
+    /// `origin`.
     pub(super) fn new(vault_id: VaultId, operation: MigrationOperation, nonce: [u8; 32], origin: Instant, now: Instant) -> Self {
         Self {
             vault_id,
@@ -68,7 +85,7 @@ impl MigrationChallenge {
         }
     }
 
-    /// The binding digest: BLAKE2b-256, personalized with `iv-migration-v1`, of the canonical encoding.
+    /// Computes the binding digest: BLAKE2b-256, personalized with `iv-migration-v1`, of the canonical encoding.
     pub fn binding_digest(&self) -> BindingDigest {
         BindingDigest(
             Blake2b256::new_customized(BINDING_PERSONA)
@@ -78,29 +95,29 @@ impl MigrationChallenge {
         )
     }
 
-    /// The vault the challenge binds to.
+    /// Returns the vault the challenge binds to.
     pub fn vault_id(&self) -> VaultId {
         self.vault_id
     }
 
-    /// The operation the challenge binds to, with its destination recipient when there is one.
+    /// Returns the operation the challenge binds to, with its destination recipient when there is one.
     pub fn operation(&self) -> &MigrationOperation {
         &self.operation
     }
 
-    /// The first instant at which the challenge is expired.
+    /// Returns the first instant at which the challenge is expired.
     pub fn expires_at(&self) -> Instant {
         self.expires_at
     }
 
-    /// Whether the challenge is expired at `now`. It is expired from `expires_at` on, so the lifetime is never exceeded.
+    /// Returns `true` if and only if `now` is at or after `expires_at`, so the lifetime is never exceeded.
     pub fn is_expired(&self, now: Instant) -> bool {
         now >= self.expires_at
     }
 
-    /// The encoding the digest covers, in the conventions of record payload v1: the vault ID's 16 bytes, the operation
-    /// tag, the destination as a `u64` big-endian length and its `age1…` text (zero length for export), the nonce,
-    /// then the issue time and the expiry as `u64` big-endian milliseconds from the clock origin.
+    /// Builds the encoding the digest covers, in the conventions of record payload v1: the vault ID's 16 bytes, the
+    /// operation tag, the destination as a `u64` big-endian length and its `age1…` text (zero length for `export`), the
+    /// nonce, then the issue time and the expiry as `u64` big-endian milliseconds from the clock origin.
     pub(super) fn canonical_encoding(&self) -> Vec<u8> {
         let destination = self.operation.destination().map(ToString::to_string).unwrap_or_default();
         let length = u64::try_from(destination.len()).unwrap_or(u64::MAX);
@@ -116,7 +133,7 @@ impl MigrationChallenge {
         .concat()
     }
 
-    /// Whole milliseconds from the clock origin to `instant`; zero before it, and saturating far past it.
+    /// Counts the whole milliseconds from the clock origin to `instant`: zero before it, and saturating far past it.
     fn millis_since_origin(&self, instant: Instant) -> u64 {
         u64::try_from(instant.saturating_duration_since(self.origin).as_millis()).unwrap_or(u64::MAX)
     }

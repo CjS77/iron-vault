@@ -1,5 +1,19 @@
-//! The TPM approval-key PIN as a source-owner method (design/tpm-approval-signer.md, "Migration";
-//! design/migration-authorization.md, "Source-owner method").
+//! A `tpm` approver's TPM approval PIN as a source-owner method
+//! ([TPM approval signer: Migration](../../../../../design/tpm-approval-signer.md#migration);
+//! [migration authorization: Source-owner method](../../../../../design/migration-authorization.md#source-owner-method)).
+//!
+//! The service never touches the TPM itself. It sends the TPM signing helper the PIN and a message, and checks the
+//! signature that comes back:
+//!
+//! ```text
+//! challenge ──→ binding digest ──→ MigrationProofPayload (IVMA) ──→ message
+//! owner input ──→ TpmApprovalPin ─────────────────────────────────┐   │
+//!                                                                  ▼   ▼
+//!                         proof (blocking pool): helper signs the message with the approver's TPM key
+//!                                                                  │
+//!                                                                  ▼
+//!                         signature verifies against the pinned key ──→ proved
+//! ```
 
 use std::future::Future;
 use std::sync::Arc;
@@ -12,11 +26,12 @@ use super::{MethodRefusal, MigrationChallenge, OwnerRefusal, SourceOwnerMethod};
 use crate::admin::protocol::OwnerInput;
 use crate::library_error::LibraryError;
 
-/// The proof a TPM approver gives: derive the authorization value from the PIN, have the TPM signing helper sign the
-/// message with the approver's key, and verify the signature against the pinned key. It blocks on the helper.
+/// The proof a TPM approver gives: it derives the authorization value from the PIN, has the TPM signing helper sign the
+/// message with the approver's key, and verifies the signature against the pinned key. It blocks on the helper.
 type PinProof = dyn Fn(TpmApprovalPin, &[u8]) -> Result<(), MethodRefusal> + Send + Sync;
 
-/// A `tpm` approver's TPM approval PIN, proving a challenge by having the TPM sign its migration proof payload (`IVMA`).
+/// A `tpm` approver's TPM approval PIN, which proves a challenge by having the TPM sign its migration proof payload
+/// (`IVMA`).
 ///
 /// The TPM signs the payload that wraps the challenge's binding digest, never the bare digest, so no earlier approval
 /// or presence signature, and no signature over another challenge, proves this one. The PIN is never cached: each proof
@@ -30,8 +45,8 @@ impl TpmApprovalPinMethod {
     /// The label the audit events' `method` field records.
     pub const LABEL: &'static str = "tpm_pin";
 
-    /// The method for `approver`, proving with `proof`, which the service context builds over the helper's socket and
-    /// the approver's key blob. Only the context makes one, so the proof is always the helper's.
+    /// Makes the method for `approver`, proving with `proof`, which the service context builds over the helper's socket
+    /// and the approver's key blob. Only the context makes one, so the proof is always the helper's.
     pub(crate) fn new(
         approver: PinnedApprover,
         proof: impl Fn(TpmApprovalPin, &[u8]) -> Result<(), MethodRefusal> + Send + Sync + 'static,
@@ -42,7 +57,7 @@ impl TpmApprovalPinMethod {
         }
     }
 
-    /// The `tpm` approver whose PIN this method asks for.
+    /// Returns the `tpm` approver whose PIN this method asks for.
     pub fn pinned(&self) -> &PinnedApprover {
         &self.approver
     }
@@ -68,8 +83,8 @@ impl SourceOwnerMethod for TpmApprovalPinMethod {
     }
 
     /// Runs the proof on the blocking pool, because the helper answers over a socket and a TPM signature takes a while.
-    /// An answer that is not UTF-8, or shorter than any enrolled PIN, is a wrong PIN and never reaches the TPM, so it spends
-    /// no lockout try.
+    /// An answer that is not UTF-8, or shorter than any enrolled PIN, is [`OwnerRefusal::WrongPin`] and never reaches the
+    /// TPM, so it spends no lockout try.
     fn prove(&self, challenge: &MigrationChallenge, input: OwnerInput) -> impl Future<Output = Result<(), MethodRefusal>> + Send {
         let proof = Arc::clone(&self.proof);
         let message = MigrationProofPayload::new(*challenge.binding_digest().as_bytes()).encode();
@@ -86,7 +101,8 @@ impl SourceOwnerMethod for TpmApprovalPinMethod {
     }
 }
 
-/// The owner's input as a PIN; the input's buffer is cleared when it drops here.
+/// Reads the owner's input as a PIN, or `None` when it is not UTF-8 or too short to be one. The input's buffer is cleared
+/// when it drops here.
 fn pin_of(input: OwnerInput) -> Option<TpmApprovalPin> {
     TpmApprovalPin::answered(std::str::from_utf8(input.expose_secret()).ok()?)
 }

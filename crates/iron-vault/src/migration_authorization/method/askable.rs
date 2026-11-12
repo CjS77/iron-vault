@@ -1,5 +1,18 @@
-//! The source-owner methods step 6 of the admin exchange can ask (design/migration-authorization.md, "Which method is
-//! asked"): the vault passphrase first, then each `tpm` approver in approver order, in one switchable prompt.
+//! The source-owner methods step 6 of the admin exchange can ask
+//! ([migration authorization: Which method is asked](../../../../../design/migration-authorization.md#which-method-is-asked)):
+//! the vault passphrase first, then each `tpm` approver in approver order, in one prompt the owner can switch between
+//! them.
+//!
+//! For example, with two `tpm` approvers and no cooldown, the prompt offers, in order:
+//!
+//! ```text
+//! Vault passphrase
+//! TPM approval PIN for "desk"
+//! TPM approval PIN for "laptop"
+//! ```
+//!
+//! During a cooldown the first line is left out. With no `tpm` approver as well, nothing is left to ask, and the
+//! exchange ends with `migration-rate-limited`.
 
 use iron_vault_store::ApproverId;
 
@@ -14,7 +27,8 @@ use crate::migration_authorization::MigrationRefusal;
 pub enum AskableMethod {
     /// The vault passphrase.
     VaultPassphrase(VaultPassphraseMethod),
-    /// A `tpm` approver's TPM approval PIN; boxed, since it holds the approver it asks.
+    /// A `tpm` approver's TPM approval PIN, boxed because the approver it holds makes it larger than the other
+    /// variant.
     TpmPin(Box<TpmApprovalPinMethod>),
 }
 
@@ -50,7 +64,7 @@ impl SourceOwnerMethod for AskableMethod {
     }
 }
 
-/// The methods step 6 asks, in order, and why the vault passphrase was left out, when it was for a cooldown.
+/// The methods step 6 asks, in order, and the cooldown that left the vault passphrase out, if one did.
 #[derive(Debug)]
 pub struct AskableMethods {
     asked: Vec<AskableMethod>,
@@ -58,7 +72,8 @@ pub struct AskableMethods {
 }
 
 impl AskableMethods {
-    /// The vault passphrase, unless the attempt limit is `cooling` down, then `tpm`.
+    /// Lists the vault passphrase, unless the attempt limit is `cooling` down, then each method in `tpm`, in the order
+    /// given.
     pub(crate) fn new(passphrase: VaultPassphraseMethod, cooling: Option<AttemptsCoolingDown>, tpm: Vec<TpmApprovalPinMethod>) -> Self {
         let passphrase = cooling.is_none().then_some(AskableMethod::VaultPassphrase(passphrase));
         let asked = passphrase
@@ -68,12 +83,13 @@ impl AskableMethods {
         Self { asked, cooling }
     }
 
-    /// The methods to ask, the first asked first; empty when none can be asked.
+    /// Returns the methods to ask, the first asked first; empty when none can be asked.
     pub fn asked(&self) -> &[AskableMethod] {
         &self.asked
     }
 
-    /// The refusal when no method can be asked: the cooldown that left the vault passphrase out, or else unavailable.
+    /// Returns the refusal when no method can be asked: [`MigrationRefusal::AttemptsCoolingDown`] when a cooldown left
+    /// the vault passphrase out, and [`MigrationRefusal::Unavailable`] otherwise.
     pub fn none_left(&self) -> MigrationRefusal {
         self.cooling
             .map_or(MigrationRefusal::Unavailable, MigrationRefusal::AttemptsCoolingDown)

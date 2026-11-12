@@ -1,4 +1,16 @@
-//! The pending slot: the one migration challenge the service holds (design/migration-authorization.md, "Lifetime").
+//! The pending slot: the one migration challenge the service holds
+//! ([migration authorization: Lifetime](../../../../design/migration-authorization.md#lifetime)).
+//!
+//! A challenge is single-use because the slot hands it out once:
+//!
+//! ```text
+//!            issue (slot empty)                 take(digest, now)
+//!   empty ──────────────────────→ pending ──────────────────────→ empty
+//!     ▲     issue while pending:     │      the challenge if the digest matches and it has not expired,
+//!     │     ChallengeBusy            │      else NotPending or Expired
+//!     └──────────────────────────────┘
+//!       retire: the exchange ended, its prompt was cancelled, or the service locked
+//! ```
 
 use iron_vault_store::VaultId;
 use thiserror::Error;
@@ -14,7 +26,7 @@ pub struct ChallengeBusy;
 /// The slot holding at most one pending migration challenge.
 ///
 /// Issuing never replaces a pending challenge, expired or not, because that would retire the challenge of an owner
-/// still typing at its prompt. Taking empties the slot whatever it finds, so no challenge is ever verified twice.
+/// still typing at its prompt. Taking always empties the slot, so no challenge is ever verified twice.
 #[derive(Debug)]
 pub struct PendingMigration {
     /// The service's clock origin, fixed when the service starts, which every challenge's encoding measures from.
@@ -23,13 +35,14 @@ pub struct PendingMigration {
 }
 
 impl PendingMigration {
-    /// An empty slot whose challenges measure their times from `origin`.
+    /// Makes an empty slot whose challenges measure their times from `origin`.
     pub fn new(origin: Instant) -> Self {
         Self { origin, slot: None }
     }
 
     /// Issues a challenge for `operation` on `vault_id` at `now`, with the `nonce` the caller drew from the operating
-    /// system's random source, and returns its binding digest. Refused while a challenge is pending.
+    /// system's random source, and returns its binding digest. Refuses with [`ChallengeBusy`] while a challenge is
+    /// pending.
     pub fn issue(
         &mut self,
         vault_id: VaultId,
@@ -48,9 +61,9 @@ impl PendingMigration {
 
     /// Takes the challenge named by `digest` out of the slot at `now`, before any source-owner method runs.
     ///
-    /// The slot is empty afterwards, whatever this returns: a challenge taken after its expiry is retired, and so is
-    /// one that a take with another digest finds, so a defect fails closed. An expired challenge is refused here, so
-    /// no passphrase is ever checked against one.
+    /// The slot is empty afterwards on every outcome. A take with another digest retires the challenge it finds and
+    /// returns [`MigrationRefusal::NotPending`], so a defect fails closed. A challenge taken at or after its expiry is
+    /// retired and refused with [`MigrationRefusal::Expired`], so no passphrase is ever checked against one.
     pub fn take(&mut self, digest: &BindingDigest, now: Instant) -> Result<MigrationChallenge, MigrationRefusal> {
         let challenge = self
             .slot
@@ -68,7 +81,7 @@ impl PendingMigration {
         self.slot = None;
     }
 
-    /// Whether a challenge is pending.
+    /// Returns `true` if and only if the slot holds a challenge, expired or not.
     pub fn is_pending(&self) -> bool {
         self.slot.is_some()
     }

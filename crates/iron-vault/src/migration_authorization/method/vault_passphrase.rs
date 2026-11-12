@@ -1,4 +1,21 @@
-//! The v0 source-owner method, the vault passphrase (design/migration-authorization.md, "The v0 method").
+//! The vault passphrase as a source-owner method, the one every vault has
+//! ([migration authorization: The v0 method](../../../../../design/migration-authorization.md#the-v0-method-the-vault-passphrase)).
+//!
+//! Being unlocked proves nothing here. Each proof reads the envelopes from disk again and opens them with the typed
+//! passphrase:
+//!
+//! ```text
+//! typed passphrase ──→ opens operational.age? ──no──→ WrongSecret
+//!                             │ yes
+//!                             ▼
+//!                     identity.age unwraps to the vault identity the service holds? ──no──→ NotThisVault
+//!                             │ yes
+//!                             ▼
+//!                          proved
+//! ```
+//!
+//! Both refusals count toward the passphrase attempt limit. An envelope that cannot be read or opened for another reason
+//! is [`MethodRefusal::Unavailable`], which judges the passphrase neither way and counts nothing.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -10,14 +27,14 @@ use super::{MethodRefusal, MigrationChallenge, OwnerRefusal, SourceOwnerMethod};
 use crate::admin::protocol::OwnerInput;
 use crate::library_error::LibraryError;
 
-/// The check that opens the envelopes on disk with a passphrase and compares the vault identity they hold with the
-/// one the service holds.
+/// The check that opens the envelopes on disk with a passphrase and compares the vault identity they hold with the one
+/// the service holds.
 type PassphraseCheck = dyn Fn(&Passphrase) -> Result<(), PassphraseCheckError> + Send + Sync;
 
-/// The v0 source-owner method: the vault passphrase, read against the envelopes on disk (design: "The v0 method").
+/// The vault passphrase, checked against the envelopes on disk.
 ///
-/// Nothing held in memory counts: every proof opens `operational.age` and `identity.age` again. It has nothing to sign;
-/// the challenge it proves is bound by the service, which took it out of the pending slot by its binding digest.
+/// Nothing held in memory counts: every proof opens `operational.age` and `identity.age` again. It has nothing to sign.
+/// The service binds the challenge instead, by taking it out of the pending slot by its binding digest.
 pub struct VaultPassphraseMethod {
     check: Arc<PassphraseCheck>,
 }
@@ -26,8 +43,8 @@ impl VaultPassphraseMethod {
     /// The label the audit events' `method` field records.
     pub const LABEL: &'static str = "vault_passphrase";
 
-    /// The method running `check`, which the service context builds over its state directory and the public key of
-    /// the vault identity it holds. Only the context makes one, so the check is always the store's.
+    /// Makes the method running `check`, which the service context builds over its state directory and the public key
+    /// of the vault identity it holds. Only the context makes one, so the check is always the store's.
     pub(crate) fn new(check: impl Fn(&Passphrase) -> Result<(), PassphraseCheckError> + Send + Sync + 'static) -> Self {
         Self { check: Arc::new(check) }
     }
@@ -46,7 +63,7 @@ impl SourceOwnerMethod for VaultPassphraseMethod {
         Self::LABEL
     }
 
-    /// The vault passphrase is the one method the passphrase attempt limit bounds.
+    /// Returns `true`: the vault passphrase is the one method the passphrase attempt limit bounds.
     fn attempt_limited(&self) -> bool {
         true
     }
@@ -68,8 +85,8 @@ impl SourceOwnerMethod for VaultPassphraseMethod {
     }
 }
 
-/// The store's answer as a method refusal. An unreadable or damaged envelope is the service's problem, not the owner's,
-/// so it is logged for the operator and judges the input neither way.
+/// Turns the store's answer into a method refusal. An unreadable or damaged envelope is the service's problem, not the
+/// owner's, so it is logged for the operator and judges the input neither way.
 fn method_refusal(error: PassphraseCheckError) -> MethodRefusal {
     match error {
         PassphraseCheckError::WrongPassphrase => MethodRefusal::Owner(OwnerRefusal::WrongSecret),
@@ -82,8 +99,8 @@ fn method_refusal(error: PassphraseCheckError) -> MethodRefusal {
     }
 }
 
-/// Which part of the vault stopped the check, as a fixed label: the store's error text may carry library text, which
-/// a log never formats (`design/audit-logging.md`, "Library errors").
+/// Names the part of the vault that stopped the check, as a fixed label. The store's error text may carry library text,
+/// which a log never formats ([audit logging: Library errors](../../../../../design/audit-logging.md#library-errors)).
 fn unavailable_failure(unavailable: &CheckUnavailable) -> &'static str {
     match unavailable {
         CheckUnavailable::Read(_) => "envelope_unreadable",

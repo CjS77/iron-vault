@@ -1,10 +1,33 @@
-//! Migration authorization (specification §16, §19; design/migration-authorization.md): the challenge the
-//! service issues for one pending migration, the pending slot that makes it single-use, and the move-only proof that
-//! the owner authorized that one migration operation.
+//! Checks, for one migration operation, that the owner proves now a factor already enrolled for this vault
+//! ([spec §16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration),
+//! [§19](../../../design/iron-vault-specification.md#19-v0-user-acceptance);
+//! [migration authorization](../../../design/migration-authorization.md)).
+//! `export` and `recipient add` each need one before they hand the vault identity to anyone new, so a service that is
+//! merely unlocked can do neither.
 //!
-//! Pure domain logic: the clock and the nonce are arguments, so the replay, expiry and binding rules are deterministic
-//! under test. The source-owner methods that prove a challenge live in [`method`], whose one proving path is the only
-//! constructor of a [`MigrationAuthorization`].
+//! This module holds the challenge the service issues for one pending migration, the pending slot that makes the
+//! challenge single-use, and the move-only proof that the owner authorized that one operation. The admin step that
+//! drives them is `admin::migration_authorization`. A proof moves through them like this:
+//!
+//! ```text
+//! PendingMigration::issue(vault ID, operation, now, nonce) ────→ ChallengeBusy  (a challenge is already pending)
+//!            │ the slot holds the new MigrationChallenge; its BindingDigest goes to the exchange
+//!            ▼
+//! PendingMigration::take(digest, now) ─────────────────────────→ NotPending, Expired  (the slot is empty either way)
+//!            │ the challenge, out of the slot
+//!            ▼
+//! prove_challenge(method, challenge, owner input) ─────────────→ Denied, Unavailable, TpmLockedOut, TpmUnavailable
+//!            │
+//!            ▼
+//! MigrationAuthorization (no Clone, never serialized)
+//!            │ authorize(vault ID, operation, now)
+//!            ├─────────────────────────────────────────────────→ BindingMismatch, Expired
+//!            ▼
+//! AuthorizedMigration ──→ export writes its bundle, or recipient add rewraps identity.age
+//! ```
+//!
+//! Nothing here reads a clock or a random source: the time and the nonce are arguments, so tests can drive the
+//! replay, expiry and binding rules exactly. The source-owner methods that check the owner's input are in `method`.
 
 mod challenge;
 mod method;
@@ -28,7 +51,7 @@ pub(crate) use method::prove_challenge;
 pub use method::{MethodRefusal, OwnerRefusal, SourceOwnerMethod};
 pub use pending::{ChallengeBusy, PendingMigration};
 
-/// What a migration authorization permits (glossary: *Migration operation*).
+/// What a migration authorization permits ([glossary: *Migration operation*](../../../design/glossary.md#terms)).
 ///
 /// The destination of `AddRecipient` is part of the operation, so an authorization to add one recipient never adds
 /// another. `Export` names none: its export passphrase is chosen only after authorization and is never evidence.
@@ -69,10 +92,17 @@ impl MigrationOperation {
 /// Why a migration authorization was refused, at its issue, its proof or its consumption. The messages are fixed phrases
 /// and hold no owner input.
 ///
-/// `Expired`, `NotPending`, `BindingMismatch` and `Denied` end the exchange with `migration-denied`, `Unavailable`,
-/// `TpmUnavailable` and a `WrongState` of Locked (a `lock` during the check) with `migration-unavailable`,
-/// `AttemptsCoolingDown` with `migration-rate-limited`, `TpmLockedOut` with `tpm-locked-out`, and `Busy` and any other
-/// `WrongState` with the admin protocol's `busy` and `wrong-state`.
+/// Each refusal ends the admin exchange with one error code
+/// ([migration authorization: Error codes](../../../design/migration-authorization.md#error-codes)):
+///
+/// ```text
+/// Expired, NotPending, BindingMismatch, Denied ────────────→ migration-denied
+/// Unavailable, TpmUnavailable, WrongState(Locked) ─────────→ migration-unavailable   (Locked: a `lock` during the check)
+/// AttemptsCoolingDown ─────────────────────────────────────→ migration-rate-limited
+/// TpmLockedOut ────────────────────────────────────────────→ tpm-locked-out
+/// Busy ────────────────────────────────────────────────────→ busy
+/// any other WrongState ────────────────────────────────────→ wrong-state
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MigrationRefusal {
     /// The challenge was taken, or the authorization consumed, at or after its expiry.
@@ -114,8 +144,8 @@ pub enum MigrationRefusal {
 }
 
 impl MigrationRefusal {
-    /// The label the audit events' `refusal` field records. A `lock` during the check is the design's `locked`;
-    /// `busy` and any other wrong state end an exchange before its challenge is issued, so no audit event carries them.
+    /// Returns the label the audit events' `refusal` field records. A `lock` during the check is `locked`. `busy` and
+    /// `wrong_state` end an exchange before its challenge is issued, so no audit event carries them.
     pub fn label(self) -> &'static str {
         match self {
             Self::Expired => "expired",
@@ -143,15 +173,16 @@ impl From<MethodRefusal> for MigrationRefusal {
     }
 }
 
-/// The move-only proof that the owner authorized one migration operation (glossary: *Migration authorization*).
+/// The move-only proof that the owner authorized one migration operation
+/// ([glossary: *Migration authorization*](../../../design/glossary.md#terms)).
 ///
-/// Only this module and the source-owner methods beside it construct one, from a challenge a method has just proved.
-/// It has no `Clone` or `Copy` and is never serialized, so it is consumed exactly once, by the operation it permits.
-/// Its `Debug` shows only the operation and the expiry.
+/// Only `method::prove_challenge` makes one, from a challenge a source-owner method has just proved. It has no `Clone`
+/// or `Copy` and is never serialized, so the operation it permits consumes it exactly once. Its `Debug` shows only the
+/// operation and the expiry.
 ///
 /// Being unlocked is not enough: nothing about the service's state makes one. Code outside this crate cannot build one
-/// from its field, cannot call its private constructor, and cannot write a source-owner method that proves every
-/// challenge, because the trait is sealed:
+/// from its fields, cannot call its private constructor, and cannot write a source-owner method that proves every
+/// challenge, because the trait is sealed. Each of these fails to compile:
 ///
 /// ```compile_fail,E0451
 /// use iron_vault::migration_authorization::{MethodName, MigrationAuthorization, MigrationChallenge};
@@ -191,26 +222,28 @@ pub struct MigrationAuthorization {
 }
 
 impl MigrationAuthorization {
-    /// The authorization the method `proved_by` yields once it has proved `challenge`, taken out of the pending slot.
-    /// Private, so [`method::prove_challenge`] is the only way to one.
+    /// Makes the authorization for `challenge`, which the method `proved_by` has just proved after the challenge was
+    /// taken out of the pending slot. It is private, so [`method::prove_challenge`] is the only way to one.
     #[cfg(target_os = "linux")]
     fn proved(challenge: MigrationChallenge, proved_by: MethodName) -> Self {
         Self { challenge, proved_by }
     }
 
-    /// The method that proved the challenge, which a refusal at consumption names.
+    /// Returns the method that proved the challenge, which a refusal at consumption names.
     pub fn proved_by(&self) -> MethodName {
         self.proved_by
     }
 
-    /// The operation this authorization permits.
+    /// Returns the operation this authorization permits.
     pub fn operation(&self) -> &MigrationOperation {
         self.challenge.operation()
     }
 
     /// Consumes the authorization for `operation` on `vault_id` at `now`, as that operation starts.
     ///
-    /// The binding is checked before the expiry, so a proof for another migration is always reported as a mismatch.
+    /// Refuses with [`MigrationRefusal::BindingMismatch`] when the vault ID or the operation, destination included, is
+    /// not the challenge's, and with [`MigrationRefusal::Expired`] at or after the challenge's expiry. The binding is
+    /// checked first, so a proof for another migration is always reported as a mismatch.
     pub fn authorize(
         self,
         vault_id: VaultId,
@@ -238,8 +271,8 @@ impl std::fmt::Debug for MigrationAuthorization {
     }
 }
 
-/// How the audit events name a source-owner method: its label, and for a method that proves with a pinned approver's key,
-/// that approver.
+/// How the audit events name a source-owner method: its label and, for a method that proves with a pinned approver's
+/// key, that approver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MethodName {
     /// The method's label, the `method` field.
@@ -249,7 +282,7 @@ pub struct MethodName {
 }
 
 impl MethodName {
-    /// The name of `method`.
+    /// Returns the name of `method`.
     pub fn of(method: &impl SourceOwnerMethod) -> Self {
         Self {
             label: method.label(),
@@ -258,15 +291,17 @@ impl MethodName {
     }
 }
 
-/// A consumed migration authorization: the witness that the operation it names may start now. Only
-/// [`MigrationAuthorization::authorize`] makes one, so an operation that takes it cannot run unauthorized.
+/// A consumed migration authorization: the witness that the operation it names may start now.
+///
+/// Only [`MigrationAuthorization::authorize`] makes one, so an operation that takes it as an argument cannot run
+/// unauthorized.
 #[derive(Debug)]
 pub struct AuthorizedMigration {
     operation: MigrationOperation,
 }
 
 impl AuthorizedMigration {
-    /// The operation that was authorized.
+    /// Returns the operation that was authorized.
     pub fn operation(&self) -> &MigrationOperation {
         &self.operation
     }

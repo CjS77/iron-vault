@@ -1,10 +1,12 @@
-//! Source-owner methods (design/migration-authorization.md, "Source-owner method"): the ways the owner proves authority
-//! over the vault identity for one migration challenge, and the one path from such a proof to a
-//! [`MigrationAuthorization`].
+//! Source-owner methods
+//! ([migration authorization: Source-owner method](../../../../design/migration-authorization.md#source-owner-method)):
+//! the ways the owner proves authority over the vault identity for one migration challenge, and the one path from such a
+//! proof to a [`MigrationAuthorization`].
 //!
-//! `export` and `recipient add` depend only on [`SourceOwnerMethod`], so a YubiKey touch arrives as a further method
-//! without touching either command. v0 has two, on Linux: the vault passphrase (`VaultPassphraseMethod`) and a `tpm`
-//! approver's TPM approval PIN (`TpmApprovalPinMethod`). Step 6 of the admin exchange asks them as [`AskableMethod`]s.
+//! `export` and `recipient add` depend only on [`SourceOwnerMethod`], so a later factor, such as a YubiKey touch, arrives
+//! as one more method without a change to either command. v0 has two, on Linux: the vault passphrase
+//! (`VaultPassphraseMethod`) and a `tpm` approver's TPM approval PIN (`TpmApprovalPinMethod`). Step 6 of the admin
+//! exchange offers them as [`AskableMethod`]s, and `prove_challenge` runs the one the owner answered.
 
 // Both methods run their check on tokio's blocking pool, which this crate has only on Linux.
 #[cfg(target_os = "linux")]
@@ -31,8 +33,8 @@ pub use tpm_pin::TpmApprovalPinMethod;
 #[cfg(target_os = "linux")]
 pub use vault_passphrase::VaultPassphraseMethod;
 
-/// The owner's input was checked and proves no authority. Only the vault passphrase's count toward the passphrase attempt
-/// limit; a wrong PIN is the TPM's to count.
+/// The owner's input was checked and proves no authority. Each such refusal of the vault passphrase counts toward the
+/// passphrase attempt limit; the TPM counts a wrong PIN itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum OwnerRefusal {
     /// The secret does not open the enrolled factor: for the vault passphrase, it does not open `operational.age`, or
@@ -48,7 +50,8 @@ pub enum OwnerRefusal {
 }
 
 impl OwnerRefusal {
-    /// The label the audit events' `refusal` field records. A wrong vault passphrase is `wrong_passphrase`.
+    /// Returns the label the audit events' `refusal` field records: `wrong_passphrase`, `not_this_vault` or
+    /// `wrong_pin`.
     pub fn label(self) -> &'static str {
         match self {
             Self::WrongSecret => "wrong_passphrase",
@@ -88,19 +91,21 @@ mod sealed {
     pub trait Sealed {}
 }
 
-/// A way to prove authority over the vault identity through a factor already enrolled for this vault (glossary:
-/// *Source-owner method*). The service runs it itself, for one challenge it has taken out of the pending slot.
+/// A way to prove authority over the vault identity through a factor already enrolled for this vault
+/// ([glossary: *Source-owner method*](../../../../design/glossary.md#terms)). The service runs it itself, for one challenge it has
+/// taken out of the pending slot.
 pub trait SourceOwnerMethod: sealed::Sealed + Sync {
-    /// The stable label the audit events' `method` field records.
+    /// Returns the stable label the audit events' `method` field records.
     fn label(&self) -> &'static str;
 
-    /// The pinned approver whose key proves the challenge, which the audit events record as `approver_id`.
+    /// Returns the pinned approver whose key proves the challenge, which the audit events record as `approver_id`, or
+    /// `None` for a method that uses no approver's key.
     fn approver(&self) -> Option<ApproverId> {
         None
     }
 
-    /// Whether the passphrase attempt limit bounds this method. Only the vault passphrase's does: a device's own lockout
-    /// bounds a hardware method, and the service adds no limit of its own for one.
+    /// Returns `true` if and only if the passphrase attempt limit bounds this method. Only the vault passphrase returns
+    /// `true`: a hardware method is bounded by its device's own lockout, and the service adds no limit of its own.
     fn attempt_limited(&self) -> bool {
         false
     }
@@ -109,8 +114,8 @@ pub trait SourceOwnerMethod: sealed::Sealed + Sync {
     fn prove(&self, challenge: &MigrationChallenge, input: OwnerInput) -> impl Future<Output = Result<(), MethodRefusal>> + Send;
 }
 
-/// Runs `method` on `challenge` and, only when it proves it, makes the authorization that carries the challenge: the one
-/// path to a [`MigrationAuthorization`]. A refused challenge is dropped here, so it can never be proved again.
+/// Runs `method` on `challenge` and, only when it proves it, makes the authorization that carries the challenge. This is
+/// the one path to a [`MigrationAuthorization`]. A refused challenge is dropped here, so it can never be proved again.
 // Only the Linux-only service context's migration session proves a challenge.
 #[cfg(target_os = "linux")]
 pub(crate) async fn prove_challenge<M: SourceOwnerMethod>(
