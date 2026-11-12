@@ -1,10 +1,39 @@
-//! The proxy handler: one request end to end, from the request server to the upstream and back (specification §8).
+//! The proxy handler: serves one caller request end to end, from the request server to the upstream and back
+//! ([spec §8][s8]). It is the request interface's [`RequestHandler`]: the part of the service that turns an approved
+//! route into an upstream call carrying the stored credential, without the caller ever holding that credential.
 //!
-//! Per request it loads the serving snapshot once and uses only that, runs the request pipeline (§8 steps 3-8),
-//! sends the checked request with the caller's body through the route's upstream client (step 9), and relays the
-//! response, decoded, through the scrubber with the injected credential's scrub patterns and re-encoded when the caller
-//! requires it (step 10, §11). Each failure gets one
-//! fixed answer, and none formats a library error (§18):
+//! A request's whole path through the service, with the module that owns each stage:
+//!
+//! ```text
+//!  caller
+//!    │ HTTP/1.1 request, with a caller token unless its listener or peer account identifies it
+//!    ▼
+//!  request listener     Unix socket or TCP, TLS handshake when configured;                      request_listeners
+//!    │                  tags the connection with its listener name and peer uid
+//!    ▼
+//!  request server       connection, header, body and time limits;                               request_server
+//!    │                  request form gate: origin-form targets only, no upgrade
+//!    ▼
+//!  proxy handler        loads the serving snapshot once, or answers 503                         this module
+//!    ▼
+//!  request pipeline     identify caller ─► authorize route ─► sanitize headers                  pipeline
+//!    │                  ─► charge rate limit ─► resolve credential
+//!    │                  ─► assemble, filling the slot once ─► final outgoing-request check
+//!    │ checked request and scrub patterns
+//!    ▼
+//!  upstream client      HTTPS with verified TLS, no ambient proxy, no redirects followed        upstream
+//!    │ response head, body still streaming
+//!    ▼
+//!  relay                headers: strip, rewrite `Location`, scrub                               proxy_handler::relay
+//!    │                  body: decode ─► decompression budget ─► scrub ─► re-encode
+//!    ▼
+//!  caller
+//! ```
+//!
+//! Per request the handler loads the serving snapshot once and uses only that. It runs the request pipeline
+//! ([§8][s8] steps 3-8), sends the checked request with the caller's body through the route's upstream client (step 9),
+//! and relays the response (step 10, [§11][s11]). Each failure gets one fixed answer, and none formats a library error
+//! ([§18][s18]):
 //!
 //! | Failure | Answer |
 //! |---|---|
@@ -16,10 +45,14 @@
 //! | The upstream exchange fails | [`TransportError::status`]: `502`, or `504` for a timeout |
 //! | No response headers by the request deadline | `504` |
 //! | The response has a content coding the service does not decode, a coded `206`, or a transfer coding besides `chunked` | `502` |
-//! | The response's `Location` leaves the route's upstream base or is ambiguous, or it has several (§11) | `502` |
+//! | The response's `Location` leaves the route's upstream base or is ambiguous, or it has several ([§11][s11]) | `502` |
 //! | The response body fails after its head was sent: upstream error, decode error, truncated coding, decompression budget | The caller's connection is aborted |
 //!
 //! The request deadline bounds the body as well: the request server fails a response body still streaming at it.
+//!
+//! [s8]: ../../../design/iron-vault-specification.md#8-request-flow
+//! [s11]: ../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing
+//! [s18]: ../../../design/iron-vault-specification.md#18-logging
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -57,7 +90,7 @@ pub struct ProxyHandler {
 }
 
 impl ProxyHandler {
-    /// A handler serving from whichever snapshot `snapshots` holds when each request arrives.
+    /// Creates a handler that serves each request from the snapshot `snapshots` holds when the request arrives.
     pub fn new(snapshots: Arc<SnapshotHolder>) -> Self {
         Self { snapshots }
     }
@@ -85,7 +118,8 @@ impl RequestHandler for ProxyHandler {
 
 /// Serves `request` from `snapshot` until the snapshot is withdrawn. A request withdrawn before its response head is
 /// dropped, which cancels its upstream request, and answered with a fixed `503`; one withdrawn after it has its body fail,
-/// so the caller's connection is aborted rather than ended as if the body were complete (§12).
+/// so the caller's connection is aborted instead of ended as if the body were complete
+/// ([§12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
 ///
 /// The response body keeps `snapshot` alive until the body is dropped, because the body owns the request's injected
 /// secret patterns: a lock that waits for the snapshot to drop therefore also waits for the body.
@@ -107,8 +141,8 @@ async fn serve(
     }
 }
 
-/// Runs the pipeline, sends and relays; any failure before the response head is a fixed answer, whose reason is recorded
-/// in `facts` together with the caller and route as far as they were found.
+/// Runs the pipeline, sends the request and relays the response. A failure before the response head becomes a fixed
+/// answer; its reason goes into `facts`, with the caller and route as far as the pipeline found them.
 async fn proxy(
     snapshot: &ServingSnapshot,
     tags: &ConnectionTags,
@@ -152,21 +186,22 @@ fn record_identity(facts: &RequestFacts, identified: &Identified) {
         .for_each(|(route, credential, host)| facts.route(route, credential, host));
 }
 
-/// The answer to a pipeline refusal. Its reason is recorded, and a service defect also raises its high-severity event.
+/// Records a pipeline refusal's reason and returns its answer. A service defect also raises its high-severity event.
 fn refuse_pipeline(facts: &RequestFacts, refusal: &PipelineRefusal) -> RefusalResponse {
     facts.refuse(refusal.into());
     refusal.defect().iter().for_each(|defect| facts.report_defect(defect));
     refusal.respond()
 }
 
-/// The fixed answer with `status`, recording `reason` as why the request failed.
+/// Records `reason` as why the request failed and returns the fixed answer with `status`.
 fn refused(facts: &RequestFacts, reason: ReasonCode, status: StatusCode) -> RefusalResponse {
     facts.refuse(reason);
     RefusalResponse::fixed(status.as_u16())
 }
 
-/// The request head the pipeline reads, or `None` if a header does not convert, which hyper's parser should never let
-/// through. hyper groups a repeated header's values together, so headers keep their order of first appearance.
+/// Copies the method, target and headers the pipeline reads out of hyper's request parts. Returns `None` if a header
+/// does not convert, which hyper's parser should never let through. hyper groups a repeated header's values together,
+/// so headers keep their order of first appearance.
 fn request_head(parts: &Parts) -> Option<RequestHead> {
     let headers = parts
         .headers
@@ -189,8 +224,9 @@ fn request_head(parts: &Parts) -> Option<RequestHead> {
     })
 }
 
-/// The caller's `Accept-Encoding`, its repeated headers joined into one list as RFC 9110 §5.3 allows; `None` when it
-/// sent none, or when the joined list is not a valid value, which `choose_emitted` would treat as absent too.
+/// Returns the caller's `Accept-Encoding`, its repeated headers joined into one list as
+/// [RFC 9110 §5.3](https://www.rfc-editor.org/rfc/rfc9110#section-5.3) allows. Returns `None` when the caller sent
+/// none, or when the joined list is not a valid header value, which `choose_emitted` would treat as absent too.
 fn accept_encoding(headers: &HeaderMap) -> Option<HttpHeaderValue> {
     let values: Vec<&[u8]> = headers.get_all(ACCEPT_ENCODING).iter().map(HttpHeaderValue::as_bytes).collect();
     (!values.is_empty())
@@ -198,7 +234,8 @@ fn accept_encoding(headers: &HeaderMap) -> Option<HttpHeaderValue> {
         .and_then(|joined| HttpHeaderValue::from_bytes(&joined).ok())
 }
 
-/// The caller's body as the upstream body: none when the caller sent none, else streamed with its declared length.
+/// Turns the caller's body into the upstream body: empty when the caller sent none, otherwise streamed with its declared
+/// length.
 ///
 /// A `Content-Length: 0` is a declared empty body, so it is forwarded as one; a request with no framing at all has no
 /// body and gets none.
@@ -214,7 +251,8 @@ fn upstream_body(parts: &Parts, body: RequestBody) -> UpstreamBody {
     }
 }
 
-/// The caller's body as the data chunks the upstream client forwards. Trailers are dropped: the client sends none.
+/// Yields the caller's body as the data chunks the upstream client forwards. Trailers are dropped: the client sends
+/// none.
 struct CallerChunks(RequestBody);
 
 impl Stream for CallerChunks {
@@ -235,8 +273,8 @@ impl Stream for CallerChunks {
     }
 }
 
-/// The caller-token header of the listener the request arrived on. The pipeline identified the caller there, so the
-/// listener is in the policy.
+/// Returns the caller-token header of the listener the request arrived on. The pipeline identified the caller there,
+/// so the listener is in the policy.
 fn token_header(snapshot: &ServingSnapshot, tags: &ConnectionTags) -> Option<HeaderName> {
     snapshot
         .policy()
@@ -246,14 +284,15 @@ fn token_header(snapshot: &ServingSnapshot, tags: &ConnectionTags) -> Option<Hea
         .map(ListenerConfig::caller_token_header)
 }
 
-/// The `503` for a request refused at admission: the redacted reason as its whole body. It is given before the caller is
-/// identified, because with no snapshot there is no policy to identify the caller against (§15).
+/// Answers a request refused at admission with `503`, the redacted [`UnavailableReason`] as its whole body. The caller
+/// is not identified first: with no snapshot there is no policy to identify it against
+/// ([§15](../../../design/iron-vault-specification.md#15-service-states-and-errors)).
 fn unavailable(reason: UnavailableReason, facts: &RequestFacts) -> Response<ResponseBody> {
     facts.refuse(reason.into());
     text_response(StatusCode::SERVICE_UNAVAILABLE, reason.as_str())
 }
 
-/// A refusal as a hyper response.
+/// Converts a refusal into a hyper response.
 fn fixed(refusal: &RefusalResponse) -> Response<ResponseBody> {
     let mut response = text_response(
         StatusCode::from_u16(refusal.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
@@ -268,7 +307,7 @@ fn fixed(refusal: &RefusalResponse) -> Response<ResponseBody> {
     response
 }
 
-/// A `text/plain` response with `status` and a constant `body`.
+/// Builds a `text/plain` response with `status` and a constant `body`.
 fn text_response(status: StatusCode, body: &'static str) -> Response<ResponseBody> {
     let body = Full::new(Bytes::from_static(body.as_bytes()));
     let mut response = Response::new(body.map_err(|never| match never {}).boxed_unsync());

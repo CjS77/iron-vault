@@ -1,12 +1,23 @@
-//! Relaying an upstream response to the caller (specification §8 step 10, §11): its status, its headers without
+//! Relays an upstream response to the caller ([spec §8][s8] step 10, [§11][s11]): its status, its headers without
 //! connection-scoped or caller-authentication headers and scrubbed, and its body decoded, scrubbed and, when the caller
 //! requires it, re-encoded chunk by chunk.
 //!
 //! Every response passes through the scrubber with the scrub patterns of the credential injected for its request; no
 //! path relays a response without it. A response the scrubber cannot see through, because its content coding is not
 //! one the service decodes or a transfer coding besides `chunked` hides the bytes, is refused with `502` before
-//! anything is sent (§11: no coding is forwarded opaquely). The order of the stages is set out once, on
-//! [`RelayedBody`].
+//! anything is sent ([§11][s11]: no coding is forwarded opaquely). The order of the stages is set out once, on
+//! [`RelayedBody`]:
+//!
+//! ```text
+//! upstream head ─► coding check ─► strip headers ─► rewrite Location ─► scrub headers ─► describe emitted body ─► caller
+//!                  (502 if unscreenable)            (502 if refused)
+//!
+//! upstream chunk ─► decode ─► decompression budget ─► scrub ─► encode, if the caller rules identity out ─► caller
+//!                   (each piece counted before it is scrubbed; any failure aborts the caller's connection)
+//! ```
+//!
+//! [s8]: ../../../../design/iron-vault-specification.md#8-request-flow
+//! [s11]: ../../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing
 
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
@@ -46,7 +57,7 @@ pub(crate) struct ResponseContext {
     pub(crate) limits: Limits,
 }
 
-/// The caller's response for `upstream`: the upstream's status, its headers less those [`strip_headers`] removes, with
+/// Builds the caller's response for `upstream`: the upstream's status, its headers less those [`strip_headers`] removes, with
 /// `Location` rewritten, then scrubbed, then rewritten to describe the emitted body, and its body as a [`RelayedBody`].
 /// `token_header` is the caller-token header of the listener the request arrived on. `route` and `request_url` (the URL
 /// actually sent, which may hold the secret) decide the `Location`. A response whose coding the service cannot screen,
@@ -92,7 +103,7 @@ struct Unscreenable;
 /// The upstream's `Location` must not reach the caller.
 struct RedirectRefused;
 
-/// The coding the upstream applied to the body, or [`Unscreenable`] when the scrubber could not see through it: a content coding
+/// Returns the coding the upstream applied to the body, or [`Unscreenable`] when the scrubber could not see through it: a content coding
 /// [`parse_content_encoding`] refuses, a transfer coding besides `chunked` (the only one hyper removes, so `gzip, chunked`
 /// would reach the scrubber still coded), or a coded `206`.
 ///
@@ -154,7 +165,7 @@ fn strip_headers(headers: &mut HeaderMap, token_header: Option<&HeaderName>) {
         });
 }
 
-/// Every transfer coding the `Transfer-Encoding` headers list, trimmed, empty list members skipped.
+/// Lists every transfer coding the `Transfer-Encoding` headers name, trimmed, with empty list members skipped.
 fn transfer_codings(headers: &HeaderMap) -> impl Iterator<Item = &[u8]> {
     headers
         .get_all(TRANSFER_ENCODING)
@@ -171,10 +182,11 @@ fn response(status: StatusCode, headers: HeaderMap, body: RelayedBody) -> Respon
     response
 }
 
-/// What the response stage knows about a response once it has ended cleanly, for the request event (EP-26).
+/// What the response stage knows about a response once it has ended cleanly, for the request event
+/// ([audit logging: Request event](../../../../design/audit-logging.md#request-event)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResponseOutcome {
-    /// Whether any scrub pattern matched in the response's headers or body.
+    /// `true` if and only if a scrub pattern matched in the response's headers or body.
     pub scrubbed: bool,
     /// The bytes the scrubber screened: the body after decoding, or as received when it had no content coding.
     pub decoded_bytes: u64,
@@ -332,7 +344,7 @@ impl Stages {
         Ok(None)
     }
 
-    /// The fed chunk's next decoded piece, or the whole chunk for an identity body.
+    /// Takes the fed chunk's next decoded piece, or the whole chunk for an identity body.
     fn next_piece(&mut self) -> Result<Option<Bytes>, RelayFailure> {
         match self.decoder.as_mut() {
             Some(decoder) => Ok(decoder.next_piece().transpose()?),
@@ -362,7 +374,7 @@ impl RelayedBody {
         }
     }
 
-    /// The outcome once the body has ended cleanly; `None` before then or after a failure.
+    /// Returns the outcome once the body has ended cleanly; `None` before then or after a failure.
     pub fn outcome(&self) -> Option<ResponseOutcome> {
         self.ended.then_some(ResponseOutcome {
             scrubbed: self.matches > 0,
@@ -379,7 +391,7 @@ impl RelayedBody {
         }
     }
 
-    /// Every match replaced so far, in the headers and the body.
+    /// Counts every match replaced so far, in the headers and the body.
     fn total_matches(&self) -> u64 {
         self.matches + self.stages.as_ref().map_or(0, |stages| stages.scrubber.matches())
     }
@@ -412,7 +424,7 @@ impl RelayedBody {
         Ok(tail)
     }
 
-    /// The next frame through the body stages.
+    /// Polls the next upstream frame and passes it through the body stages.
     fn poll_stages(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, RelayFailure>>> {
         loop {
             let Some(stages) = self.stages.as_mut() else {

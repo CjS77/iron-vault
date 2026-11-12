@@ -1,4 +1,5 @@
-//! A response body that fails once the serving snapshot it is served from is withdrawn.
+//! A response body that fails once the serving snapshot it is served from is withdrawn, so a `lock` or a failed config
+//! check cuts off a response still streaming instead of letting it run on a policy the service no longer serves.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -18,8 +19,8 @@ use crate::serving_snapshot::ServingSnapshot;
 #[error("the serving snapshot was withdrawn")]
 struct Withdrawn;
 
-/// `inner` until `withdrawn` completes, then an error, recorded as the request's `withdrawn` reason. The withdrawal is
-/// checked before the inner body on every poll, so a withdrawn snapshot releases no further bytes.
+/// Yields `inner` until the snapshot is withdrawn, then fails, recording `withdrawn` as the request's reason. The
+/// withdrawal is checked before the inner body on every poll, so a withdrawn snapshot releases no further bytes.
 ///
 /// It holds the snapshot for as long as it lives, because `inner` owns the request's secret patterns (the scrubber's)
 /// and a lock waits for the snapshot to drop before it reports the secrets cleared. `snapshot` is declared after
