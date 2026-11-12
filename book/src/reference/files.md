@@ -13,6 +13,16 @@ failed. The service never repairs a directory: an existing one with the wrong mo
 the package's `tmpfiles.d` puts back the owner and mode of its three directories (`/etc/iron-vault`,
 `/var/lib/iron-vault` and `/run/iron-vault`) at boot and on upgrade, so that refusal shows only until then.
 
+The four directories of a protected install, with the main files in each:
+
+```text
+/etc/iron-vault/            config directory      config.toml, config.toml.sig
+/var/lib/iron-vault/        state directory       identity.age, operational.age, recipients.age, approval.age,
+                                                  approver-<id>.age, manifest.age, record-<id>.age, recovery.toml
+/var/log/iron-vault/        log directory         iron-vault.log
+/run/iron-vault/            runtime directory     admin.sock, request sockets such as proxy.sock
+```
+
 ## Protected install
 
 The `.deb` package runs the service as the `iron-vault` system account.
@@ -42,7 +52,9 @@ The `.deb` package runs the service as the `iron-vault` system account.
 | `/etc/iron-vault-host/provisioning.txt` | root | `0600` | the helper | The acceptance record of the last provisioning: the mode (`server` or `portable`), each `--portable` warning, how it was accepted (`terminal` or `flag`) and `SUDO_USER`, with the time. Replaced whole each time; the same lines are in the journal under `iron-vault-host-unlock`. |
 
 The unit lets the service write only `/etc/iron-vault`, `/var/lib/iron-vault`, `/run/iron-vault` and its log
-directory. A protected install also reads the host unlock handoff when it is there; its two paths are in the [handoff table](#host-unlock-handoff) below. Uninstalling keeps the vault and the config. Purging deletes `/etc/iron-vault` and asks before it deletes the vault
+directory. A protected install also reads the host unlock handoff when it is there; its two paths are in the
+[handoff table](#host-unlock-handoff) below. Uninstalling keeps the vault and the config. Purging deletes
+`/etc/iron-vault` and asks before it deletes the vault
 ([installation guide](../installation/linux-install.md#uninstall-and-purge)).
 
 ## Development mode
@@ -87,21 +99,24 @@ The Protected and Container profiles read one more file when it is there, the ho
 
 | Path | Owner | Mode | Made by | What it is |
 |---|---|---|---|---|
-| `/run/iron-vault-unlock/` | root | `0711` on its ramfs; neither group nor others may write it | the host's handoff unit | In the Container profile, the host directory, bind-mounted read-only into the container at the same path. The directory is mounted, not the file, so a file missing or replaced on the host is seen as such. In a protected install it is the host's own ramfs, which the package's handoff unit `iron-vault-host-unlock.service` mounts over a root `0711` directory that `tmpfiles.d` creates. |
+| `/run/iron-vault-unlock/` | root | `0711` on its ramfs; neither group nor others may write it | the host's handoff unit | In the Container profile, the host directory, bind-mounted read-only into the container at the same path. The directory is mounted, not the file, so the container sees a file missing or replaced on the host as missing or replaced. In a protected install it is the host's own ramfs, which the package's handoff unit `iron-vault-host-unlock.service` mounts over a root `0711` directory that `tmpfiles.d` creates. |
 | `/run/iron-vault-unlock/host-unlock` | `iron-vault` | `0400` (no group or other bits; at most `0600` is accepted) | the host's handoff unit | The host unlock identity's secret text, one `AGE-SECRET-KEY-1…` line of at most 128 bytes. It lets the service unlock at startup without a passphrase. |
 
 The file must be a regular file, never a symlink, and no directory above it may be writable by group or others, not
-even a sticky one such as `/tmp`. A file that breaks the rule is refused, not read. At startup a
-Protected or Container service reads this file. When it opens the vault, the service goes from Starting to Checking with no
-passphrase. A missing file means no handoff, and a refused one (an unsafe path, an unreadable file, a key that is not
-one of the vault's recipients, or memory not locked against swap) is not: either way the service stays
-Locked, and a passphrase `unlock` still works. Each start writes one `vault.host-unlock` record
+even a sticky one such as `/tmp`. A file that breaks the rule is refused, not read.
+
+At startup a Protected or Container service reads this file. If the identity in it opens the vault, the service goes
+from Starting to Checking with no passphrase. If the file is missing, or is refused (an unsafe path, an unreadable file,
+a key that is not one of the vault's recipients, or memory not locked against swap), the service stays Locked and a
+passphrase `unlock` still works. Each start writes one `vault.host-unlock` record
 ([audit log](audit-log.md#service-and-lock-state)).
-When the file is missing, the service also looks for the **unseal-failure file**, `/run/iron-vault-unlock/unseal-failed`: an
-empty file that the host's handoff unit leaves when it fails, such as when a firmware update changes PCR 7. It counts only
-as a regular file owned by root, not a symlink. Present, the record says `unseal_failed` instead of `absent`; either way the
-service stays Locked, so it is a diagnostic only. The file is not read when the handoff is there. The host side, which unseals the identity from the TPM onto a ramfs, is in
-[docker-compose.md](../../../design/docker-compose.md#host-unlock).
+
+When the handoff file is missing, the service also looks for the **unseal-failure file**,
+`/run/iron-vault-unlock/unseal-failed`: an empty file that the host's handoff unit leaves when it fails, such as when a
+firmware update changes PCR 7. It counts only as a regular file owned by root, not a symlink. If it is there, the record
+says `unseal_failed` instead of `absent`. Either way the service stays Locked, so the file is a diagnostic only. The
+service does not look for it when the handoff file is there. The host side, which unseals the identity from the TPM onto
+a ramfs, is in [docker-compose.md](../../../design/docker-compose.md#host-unlock).
 
 ## The config directory
 
@@ -126,7 +141,7 @@ writes its own copy.
 | File | What it is |
 |---|---|
 | `identity.age` | The identity envelope: the vault identity, sealed to each recipient. |
-| `recipients.age` | The recipient inventory: who can open the vault (the vault passphrase and the recovery key), each with its role, label and enrolment time. `init` writes it. |
+| `recipients.age` | The recipient inventory: who can open the vault (the operational identity, the recovery key and any recipient added since), each with its role, label and enrolment time. `init` writes it. |
 | `recipients.age.staged` | A recipient change being committed. The next recipient command finishes or discards it. |
 | `operational.age` | The passphrase envelope: the operational identity, sealed with the vault passphrase. |
 | `approver-<id>.age` | An approver key envelope, one per software approver: the key that signs config approvals for it, sealed with its approval passphrase. `init` writes one for its approver. |

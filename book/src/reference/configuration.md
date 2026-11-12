@@ -125,7 +125,7 @@ path "/run/../a.sock" must not contain a '..' component
 |---------|----------|---------|--------------------------|
 | integer | yes      | none    | must be `1` this release |
 
-The version of the config's format. It is the only top-level key. (The glossary's *schema version* is the field of the
+The version of the config's format, and the only top-level key that is not a table. (The glossary's *schema version* is the field of the
 same name in a log record; it is a different number.)
 
 ```toml
@@ -407,6 +407,16 @@ upstream's base path. The service adds the base path when it forwards the reques
 `upstream = "https://api.venice.ai/api/v1"` and `prefix = "/venice"`, `paths = ["/chat/completions"]` allows a request
 for `/venice/chat/completions`, which is sent to `/api/v1/chat/completions`. Patterns never see the query string.
 
+```text
+caller sends     /venice/chat/completions
+                 └─────┘└───────────────┘
+                 prefix   matched against paths = ["/chat/completions"]
+
+upstream gets    https://api.venice.ai/api/v1/chat/completions
+                 └─── upstream, with its ───┘└───────────────┘
+                      base path /api/v1       the same path
+```
+
 Brave Search documents `/v1/web/search`, and its API lives under `/res`, so the route's `upstream` and `paths` are:
 
 ```toml
@@ -442,7 +452,7 @@ other characters are refused. Each pattern may be listed only once.
 
 ### `slot`: where the credential goes
 
-The slot is the one place the service writes the credential. It first removes whatever the caller sent there, so a
+The slot is the one place the service writes the credential. It first removes anything the caller sent there, so a
 placeholder key in the application is replaced, never forwarded. There are three kinds:
 
 | Slot                                              | Credential kind | What the upstream gets                     |
@@ -489,7 +499,7 @@ a reload ever hands out a fresh burst. In the example, the first request is allo
 becomes Ready, and the full burst of 10 only after ten quiet seconds.
 
 All the route's callers share its bucket. A caller's `rate_limits` entry adds a second bucket of its own, and a request
-needs a token from both. A route that should be effectively unlimited still gets a limit, a generous one.
+needs a token from both. A route you don't want limited still needs a limit: give it a generous one.
 
 | Fault       | Parser message                                     |
 |-------------|----------------------------------------------------|
@@ -521,8 +531,8 @@ ca_file = "/etc/iron-vault/ca/tickets.pem"
 ## Reserved headers
 
 The service removes these headers from every request before forwarding, and controls `Host` itself. None of them may be
-a route's slot, and none but `Proxy-Authorization` and `X-Iron-Vault-Token` may be a listener's `token_header`. Names are compared without
-regard to case.
+a route's slot, and none but `Proxy-Authorization` and `X-Iron-Vault-Token` may be a listener's
+`token_header`. Names are compared without regard to case.
 
 - Hop-by-hop: `Connection`, `Keep-Alive`, `Proxy-Connection`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`,
   `Trailer`, `Transfer-Encoding`, `Upgrade`.

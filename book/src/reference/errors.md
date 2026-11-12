@@ -123,10 +123,10 @@ change itself did; the message says whether it may have committed.
 |---|---|---|---|
 | `52` | `machine-not-forgotten` | The key is still a recipient of the vault. The message gives its role and says to run `recipient remove` with the same key. Nothing was changed. | Run the command the message names, then `forget-machine` again. If `recipient remove` refuses because the key is this machine's own host unlock identity, run `forget-machine` on the vault that stays. |
 
-`forget-machine` also answers `recipient-invalid` for a key that is not an `age1...` recipient key, `wrong-state` outside Ready,
-`busy` while another command holds the service-wide lock, `recipient-inventory-damaged` and `vault-write-failed` as the
-recipient commands do. A warning (a recovery check that is overdue, has never run or is not on record, or a broken independence rule) is not an error: it goes to stderr and
-the exit status is `0`.
+`forget-machine` also answers `recipient-invalid` for a key that is not an `age1...` recipient key, `wrong-state`
+outside Ready, `busy` while another command holds the service-wide lock, `recipient-inventory-damaged` and `vault-write-failed` as the
+recipient commands do. A warning (a recovery check that is overdue, has never run or is not on record, or a broken
+independence rule) is not an error: it goes to stderr and the exit status is `0`.
 
 ### `approver add` and `approver remove`
 
@@ -142,8 +142,8 @@ the exit status is `0`.
 | `18` | `passphrase-rejected` | The new approval passphrase is under 12 characters, or the two copies differ. Nothing was written. | Run the command again and choose a passphrase that meets the rule, different from the vault passphrase. |
 | `22` | `vault-write-failed` | The approval state (`approval.age`) did not read back before any prompt, or the enrollment or removal failed. The message says whether it may have committed. | When the message says nothing was changed, read the log's `approver.change-failed` and fix its cause. When it may have committed, check the approvers before trying again. |
 
-Both also answer `wrong-state` outside Ready (`approver add` also when a `lock` cancels it at the new passphrase prompt), and `busy` while
-another command holds the service-wide lock.
+Both also answer `wrong-state` outside Ready (`approver add` also when a `lock` cancels it at the new passphrase
+prompt), and `busy` while another command holds the service-wide lock.
 
 ### TPM approvers
 
@@ -158,9 +158,9 @@ another command holds the service-wide lock.
 | `49` | `nothing-to-reset` | No vault file is there, at the request or after you confirmed. The message says to run `init`, or names the first file that is there and says to move it aside first. Nothing was removed. | Run `iron-vault init`, or move the named file aside. |
 | `50` | `reset-failed` | Writing the reset marker or removing a file failed. The message says whether the vault is intact (the marker was not written) or the next `reset` finishes the job. | Fix the cause the message names, then run `iron-vault reset` again. `status` shows `reset unfinished` until it ends. |
 
-`reset` also answers `wrong-state` in Starting, Checking and Stopped, and `declined` when what you typed does not match, or when
-the vault changed between the summary and your confirmation. When stdin is not a terminal or `/dev/tty` cannot be opened,
-the CLI exits with `3` before it connects.
+`reset` also answers `wrong-state` in Starting, Checking and Stopped, and `declined` when what you typed does not
+match, or when the vault changed between the summary and your confirmation. When stdin is not a terminal or `/dev/tty`
+cannot be opened, the CLI exits with `3` before it connects.
 
 ### Migration authorization
 
@@ -188,7 +188,7 @@ under 12 characters or its two copies differ, and `wrong-state` outside Ready.
 
 ## Proxy refusals
 
-A refused request gets one of these statuses. Every body is a short fixed string, the same whatever caused it, so a
+A refused request gets one of these statuses. Each status has one short fixed body, whichever check refused the request, so a
 caller learns nothing about other callers' routes. The `reason` is in the log's `request.completed` record, never in
 the response. A refusal before the route's credential is added sends nothing upstream.
 
@@ -228,14 +228,14 @@ the response. A refusal before the route's credential is added sends nothing ups
 | `403` `not_granted` | The caller is known but its `routes` do not include this route. | Grant the route in the caller's table and approve. |
 | `403` `method_not_allowed` | The route's `methods` do not allow this method. | Widen `methods`, or call it differently. See [Widen or narrow a route](../cookbook/change-route.md). |
 | `403` `path_not_allowed` | The route's `paths` do not match. Patterns match the path after the route prefix, as the provider documents it, without the upstream's base path. | Check `paths` against the path you call after the prefix; leave the upstream's base path out. |
-| `404` `no_route` | No route has this prefix. The same answer whatever other callers may use. | Check the prefix in the URL. |
+| `404` `no_route` | No route has this prefix. Every caller gets the same answer, so it reveals nothing about other callers' routes. | Check the prefix in the URL. |
 
 ### 413, 408 and 429: limits
 
 | Status and `reason` | Cause | What to do |
 |---|---|---|
 | `413` `request_too_large` | The request body is over `max_request_body_bytes`, declared or as it streamed. | Send less, or raise the limit in `[limits]` and approve. |
-| `408` `request_timeout` | The service had not answered by its request timeout. | Check the upstream's latency. |
+| `408` `request_timeout` | The service had not answered within `request_timeout_secs`. | Check the upstream's latency, or raise the limit in `[limits]` and approve. |
 | `429` `rate_limited` | The route's or caller's token bucket is empty. `Retry-After` says when a request will pass. | Wait, or raise `rate_limit` and approve. |
 
 ### 500: a service defect
@@ -253,7 +253,7 @@ the response. A refusal before the route's credential is added sends nothing ups
 | `502` `upstream_body` | The upstream's body stopped before its end. | Usually the upstream's problem; retry. |
 | `502` `unsupported_coding` | The response uses a content coding the scrubber cannot decode, so it could not be screened for secrets. | The service decodes `gzip`, `deflate` and `br`. Ask the upstream for one of those, or for none. |
 | `502` `redirect_refused` | The upstream redirected outside the route's upstream base path, or sent an ambiguous `Location`. | Expected for a redirect that could land in another route. A redirect to another site is passed through instead. |
-| `504` `upstream_timeout` | No response head by the request deadline. | Check the upstream. |
+| `504` `upstream_timeout` | The upstream sent no response headers within `upstream_timeout_secs`, or before the request deadline. | Check the upstream, or raise the limit in `[limits]` and approve. |
 
 ### 503: not available now
 

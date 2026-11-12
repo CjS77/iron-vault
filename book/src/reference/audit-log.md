@@ -30,7 +30,7 @@ Every record has these fields:
 | `message` | string | a short fixed phrase; values are in fields, never in the message |
 | `event` | string | the event name; request and audit events only |
 
-Request and audit events are always written, whatever level is set for diagnostic records, so no setting can turn
+Request and audit events are always written, at any level set for diagnostic records, so no setting can turn
 the audit log off. A field with no value is left out, never written as `null` or `""`. Fixed labels are snake_case
 (`policy_invalid`, `wrong_passphrase`); event names are kebab-case after the dot. A list is one string with its items
 separated by `,`.
@@ -77,7 +77,7 @@ request: when the response body ends, fails or is dropped, or at once for a fixe
 | `response_bytes` | number | always | Body bytes sent to the caller, after scrubbing |
 | `duration_ms` | number | always | Whole milliseconds from receipt to the end of the response body |
 | `scrubbed` | boolean | once a relayed response was sent | Whether a scrub pattern matched |
-| `outcome` | string | always | `success` (an upstream response was relayed in full, whatever its status) or `failure` |
+| `outcome` | string | always | `success` (an upstream response was relayed in full, with any status) or `failure` |
 | `reason` | string | when `outcome` is `failure` | The reason code. The [errors reference](errors.md#proxy-refusals) lists every one with its status |
 
 ## Audit events
@@ -188,9 +188,10 @@ A `reset` writes three more, all at `WARN`:
 
 ### Recipients
 
-The first two are written by the inventory check that every recipient command, `recipient list` included, runs first;
-neither carries a recipient key or label. `recipient add` and `recipient remove` write the next three, which name the public
-recipient key, and `forget-machine` writes `recipient.forget-checked`; `recipient.added` and `recipient.removed` also carry the label, escaped.
+Every recipient command, `recipient list` included, first runs an inventory check, which may write
+`recipient.inventory-damaged` or `recipient.change-recovered`; neither carries a recipient key or label. `recipient add`
+and `recipient remove` write `recipient.added`, `recipient.removed` and `recipient.change-failed`, which name the public
+recipient key; the first two also carry the label, escaped. `forget-machine` writes `recipient.forget-checked`.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
@@ -203,8 +204,8 @@ recipient key, and `forget-machine` writes `recipient.forget-checked`; `recipien
 
 ### Approvers
 
-`approver add` and `approver remove` write these. They name approvers by their public approver ID and label (escaped); no passphrase or key
-file byte is logged.
+`approver add` and `approver remove` write these. They name approvers by their public approver ID and label (escaped);
+no passphrase or key file byte is logged.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
@@ -226,8 +227,8 @@ file byte is logged.
 ### Migration bundle
 
 `export` writes the first two; `import` writes the last four. A refused authorization or a rejected export passphrase
-writes neither: the authorization's own records say what happened. None of these carries a passphrase, a key or a byte of a credential
-record.
+writes neither: the authorization's own records say what happened. None of these carries a passphrase, a key or a byte
+of a credential record.
 
 | Event | Level | When | Fields |
 |---|---|---|---|

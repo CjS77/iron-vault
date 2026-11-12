@@ -56,12 +56,12 @@ While the service is not Ready, the request listeners come from the published `c
 verified. They answer only `503` with the reason: they never identify a caller, select a route or touch a credential.
 That way a caller sees why it is refused, instead of a refused connection.
 
-A listener that cannot be opened, whether provisional or approved, is left out and the others keep serving, so the state
-does not change. `iron-vault status` lists it under `Listeners not open:` with a reason: `tls-key-mismatch`, `tls-file-
-unreadable`, `tls-certificate-invalid`, `tls-key-unusable`, `address-in-use`, `plain-http-off-loopback`, `socket-path`,
-`socket-activation-missing`, `socket-activation-mismatch` or `bind-refused`. The log names the path or address. Fix the
-cause and approve a config again to open it; the entry drops off when the listener opens or the config no longer names
-it.
+A listener that cannot be opened, whether provisional or approved, is left out and the others keep serving, so the
+state does not change. `iron-vault status` lists it under `Listeners not open:` with a reason: `tls-key-mismatch`,
+`tls-file-unreadable`, `tls-certificate-invalid`, `tls-key-unusable`, `address-in-use`, `plain-http-off-loopback`,
+`socket-path`, `socket-activation-missing`, `socket-activation-mismatch` or `bind-refused`. The log names the path or
+address. Fix the cause and approve a config again to open it; the entry drops off when the listener opens or the config
+no longer names it.
 
 Unavailable has two reasons:
 
@@ -115,7 +115,7 @@ credential venice_chat: healthy
 | `service` | `starting`, `locked`, `checking`, `ready`, `unavailable`, `stopped` | The service state. |
 | `reason` | `policy invalid`, `recovery needed` | Only when the service is `unavailable`: why. |
 | `profile` | `protected`, `container`, `development — no isolation from malware running as <user>` | The deployment profile, fixed when the binary was built ([below](#development-mode-and-a-protected-install)). |
-| `vault` | `locked`, `unlocked`, `not initialized (run iron-vault init)`, `initialization unfinished (run iron-vault init again)`, `import unfinished (run iron-vault import again)`, `reset unfinished (run iron-vault reset again)` | Whether a vault exists and is open. `unlocked` means Checking or Ready; Unavailable shows `locked`, because a failed check closes the vault. |
+| `vault` | `locked`, `unlocked`, `not initialized (run iron-vault init)`, `initialization unfinished (run iron-vault init again)`, `import unfinished (run iron-vault import again)`, `reset unfinished (run iron-vault reset again)` | Whether a vault exists and is open. `unlocked` means Checking or Ready. Unavailable shows `locked`: a failed check closes the vault's records, though the service keeps the vault identity. |
 | `vault id` | a UUID, or `unknown` | The vault's ID. Unknown while no vault is open. |
 | `approval committed` | a number, `none`, or `unknown while the vault is locked` | The approval version of the active config. |
 | `approval highest reserved` | a number, or `unknown while the vault is locked` | The highest version ever reserved. Higher than the committed version after an approval that failed once it had reserved one. |
@@ -125,9 +125,10 @@ credential venice_chat: healthy
 | `credential <name>` | `healthy`, or `damaged (<damage>); unavailable routes: <routes>` | One line per credential, in name order. The damage is `missing`, `substituted` or `unreadable`. |
 | `credentials` | `none`, `unknown while the vault is locked` | Printed instead of the credential lines when there are none, or they are unknown. |
 | `route <name>` | `unavailable (pinned CA unavailable)` | One line per route that cannot serve for a reason of its own. |
+| `Listeners not open:` | then one line per listener, `  <name>: <what failed> (<reason>)` | Printed only when a listener failed to open; the reasons are listed [above](#what-each-state-means). |
 
 The vault ID, the approval versions and the credentials are sealed with the vault identity, so they are unknown in
-Starting, Locked and Unavailable. The CLI says so rather than guess.
+Starting, Locked and Unavailable, and `status` prints them as unknown.
 
 `recovery last checked` takes one of these forms:
 

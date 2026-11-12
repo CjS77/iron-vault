@@ -1,8 +1,7 @@
 # CLI
 
 Every `iron-vault` command and option, with what each one does. The sections after the introduction are generated
-from the same definitions the CLI parses, the way `iron-vault completions` is, so they say what
-`iron-vault COMMAND --help` says.
+from the definitions the CLI parses, as `iron-vault completions` is, so they match `iron-vault COMMAND --help`.
 
 ## Secrets are never arguments
 
@@ -21,7 +20,7 @@ one.
 ## Host unlock
 
 `iron-vault init --host-unlock` and `iron-vault import --host-unlock` also enrol the host unlock identity from the unlock
-handoff as a recipient of the new vault. The packaged and Container builds accept it; a `dev-mode` build rejects it as an unexpected
+handoff as a recipient of the new vault. The packaged and `container` builds accept it; a `dev-mode` build rejects it as an unexpected
 argument ([design](../../../design/docker-compose.md#enrollment)).
 
 ## The admin socket
@@ -40,7 +39,7 @@ the connection arrives as.
 ## `sudo` in a protected installation
 
 In a protected installation your login account is never an admin principal, so malware running as you cannot reach
-the admin socket. Only root may connect, not even the `iron-vault` service account, so a compromised service cannot lock the vault or
+the admin socket. Only root may connect, not the `iron-vault` service account either, so a compromised service cannot lock the vault or
 spend your passphrase attempts. You run every client command through `sudo`:
 
 ```sh
@@ -54,9 +53,10 @@ commands without `sudo`.
 
 ## Build features
 
-Every build has the same commands and options. The `dev-mode` and `container` Cargo features change the deployment
-profile, and with it the paths, the service account and which accounts may administer the service, but no command
-or option. `iron-vault --version` lists the features a binary was built with.
+Every build has the same commands and options, except that a `dev-mode` build has no `--host-unlock` on `init` and
+`import` ([Host unlock](#host-unlock)). The `dev-mode` and `container` Cargo features change the deployment profile,
+and with it the paths, the service account and which accounts may administer the service. `iron-vault --version` lists
+the features a binary was built with.
 
 `--help` (`-h` for a summary) works on every command and is not repeated below.
 
