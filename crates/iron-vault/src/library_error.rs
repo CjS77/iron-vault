@@ -1,8 +1,11 @@
-//! Library errors and their error kind labels (`design/audit-logging.md`, "Library errors"; specification §18).
+//! Library errors and their error kind labels ([Library errors][design], [spec §18][s18]).
 //!
 //! A library error's `Display` and `Debug` may hold a URL with its query, a header value or a path, and a query-slot
 //! credential puts the secret in the URL. A log records such an error only as `error_kind = %error.kind_label()`,
 //! chosen from its kind, predicates or type, so a log site never formats the error itself.
+//!
+//! [design]: ../../../design/audit-logging.md#library-errors
+//! [s18]: ../../../design/iron-vault-specification.md#18-logging
 
 use std::io;
 
@@ -13,7 +16,7 @@ use crate::upstream::transport_error::TransportError;
 
 /// An error from a dependency that a log records only by its error kind label.
 pub trait LibraryError {
-    /// The error's label, built without calling its `Display` or `Debug`.
+    /// Returns the error's label, built without calling its `Display` or `Debug`.
     fn kind_label(&self) -> ErrorKindLabel;
 }
 

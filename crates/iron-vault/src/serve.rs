@@ -1,7 +1,21 @@
-//! `iron-vault serve`: checks the trusted paths, takes the directory locks and sweeps their stale temp files, starts
-//! the service context with its provisional request listeners, Locked or, in the Protected and Container profiles, unlocked from the
-//! host's unlock handoff, and serves the admin socket until SIGTERM, SIGINT or a failed log write, then stops the
-//! service. SIGHUP reloads the config (§12).
+//! `iron-vault serve`: the service's entry point. [`run`] starts the service in this order:
+//!
+//! ```text
+//! 1. create the runtime directory, and in development the config and state directories, where missing
+//! 2. check the trusted paths                         refuse to start on an unsafe one (§4)
+//! 3. take the directory locks, sweep stale temp files
+//! 4. take the sockets systemd passed                 before the async runtime starts any thread
+//! 5. start the service context, Locked               with the provisional request listeners
+//! 6. unlock from the host unlock handoff             Protected and Container profiles only
+//! 7. evaluate the recovery reminder                  then once a day
+//! 8. bind the admin socket and serve it              SIGHUP reloads the config (§12)
+//! 9. stop the service                                on SIGTERM, SIGINT or a failed log write
+//! ```
+//!
+//! See [spec §4][s4] and [§12][s12].
+//!
+//! [s4]: ../../../design/iron-vault-specification.md#4-installation-and-ownership
+//! [s12]: ../../../design/iron-vault-specification.md#12-configuration-approval-and-reload
 
 use std::fs::DirBuilder;
 use std::io;
@@ -85,8 +99,8 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport,
     Ok(())
 }
 
-/// The sockets systemd passed, each held until a listener of its name adopts it, whether or not the unverified config
-/// names it. Variables that cannot be trusted to name each socket are logged at WARN and nothing is taken, so the
+/// Takes the sockets systemd passed, each held until a listener of its name adopts it, even one the unverified config
+/// does not name. Variables that cannot be trusted to name each socket are logged at WARN and nothing is taken, so the
 /// service still starts; the listeners are then bound where the profile allows it, or stay closed.
 fn take_passed_sockets() -> PassedSockets {
     PassedSockets::take(&ActivationEnv::from_process(), std::process::id()).unwrap_or_else(|error| {
@@ -116,8 +130,9 @@ fn create_config_dir(paths: &ServicePaths) -> anyhow::Result<()> {
 
 /// Creates a development install's state directory, and any missing parents, at `0700`. `$XDG_STATE_HOME` may not exist
 /// yet and the XDG specification allows `0700` for what is created. An existing directory is left as it is, so a wrong
-/// mode is refused by the trusted-path check rather than repaired. A packaged install's directory belongs to the
-/// package (§4), so the protected profile never creates it.
+/// mode is refused by the trusted-path check, not repaired. A packaged install's directory belongs to the package
+/// ([§4](../../../design/iron-vault-specification.md#4-installation-and-ownership)), so the protected profile never
+/// creates it.
 fn create_state_dir(paths: &ServicePaths) -> anyhow::Result<()> {
     if paths.profile != DeploymentProfile::Development {
         return Ok(());
@@ -129,8 +144,9 @@ fn create_state_dir(paths: &ServicePaths) -> anyhow::Result<()> {
         .with_context(|| format!("cannot create the state directory {}", paths.state_dir.display()))
 }
 
-/// Refuses to start when a path the service reads before it unlocks anything is untrusted (§4: "refuse an unsafe
-/// installation and explain which path failed"), and logs each path caution.
+/// Refuses to start when a path the service reads before it unlocks anything is untrusted
+/// ([§4](../../../design/iron-vault-specification.md#4-installation-and-ownership): "refuse an unsafe installation and
+/// explain which path failed"), and logs each path caution.
 fn check_trusted_paths(paths: &ServicePaths) -> anyhow::Result<()> {
     let report = TrustedPathReport::check(paths);
     trusted_path_report::log_cautions(&report);
@@ -158,8 +174,9 @@ fn stop_signal(log_failure: LogFailure) -> io::Result<impl Future<Output = ()>> 
     })
 }
 
-/// Reloads the service on each SIGHUP, never by watching files (implementation spec §2.2 Q-5). A SIGHUP arriving while a change holds the
-/// service queues behind it. The task ends with the runtime when serving stops.
+/// Reloads the service on each SIGHUP, never by watching files
+/// ([Q-5](../../../design/implementation-specification.md#22-product-decisions-and-resulting-behavior)). A SIGHUP
+/// arriving while a change holds the service queues behind it. The task ends with the runtime when serving stops.
 async fn reload_on_sighup(mut hangup: tokio::signal::unix::Signal, service: Arc<ServiceContext>) {
     while hangup.recv().await.is_some() {
         tracing::info!("reloading on SIGHUP");

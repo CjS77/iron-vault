@@ -1,4 +1,6 @@
-//! Generating caller tokens from the operating system's random source (spec §7).
+//! Generating caller tokens from the operating system's random source
+//! ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)). `iron-vault caller-token`
+//! prints one; the owner puts its hash in the config and gives the token to one caller.
 
 use iron_vault_policy::CallerToken;
 use rand_core::OsRng;
@@ -13,7 +15,7 @@ use thiserror::Error;
 #[error("the operating system's random source failed: {0}")]
 pub struct RandomSourceError(rand_core::Error);
 
-/// A new caller token from the operating system's random source.
+/// Generates a caller token from the operating system's random source.
 pub fn generate_caller_token() -> Result<CallerToken, RandomSourceError> {
     CallerToken::from_random(&mut OsRng).map_err(RandomSourceError)
 }

@@ -1,5 +1,5 @@
-//! The wall clock (glossary: *Wall clock*): the one place the service reads the current UTC time, so the recovery
-//! schedule is tested by setting the time instead of waiting for it.
+//! The wall clock ([glossary: *Wall clock*](../../../design/glossary.md#terms)): the one place the service reads the
+//! current UTC time, so the recovery schedule is tested by setting the time instead of waiting for it.
 
 use std::fmt::Debug;
 use std::time::SystemTime;
@@ -8,7 +8,7 @@ use iron_vault_store::{UtcSecond, UtcSecondError};
 
 /// A source of the current UTC time.
 pub trait WallClock: Debug + Send + Sync {
-    /// The current time to whole seconds, or an error when the clock reads outside 1970 to 9999.
+    /// Returns the current time to whole seconds, or an error when the clock reads outside 1970 to 9999.
     fn now(&self) -> Result<UtcSecond, UtcSecondError>;
 }
 
@@ -29,7 +29,7 @@ pub struct TestClock(std::sync::atomic::AtomicU64);
 
 #[cfg(any(test, feature = "test-support"))]
 impl TestClock {
-    /// A clock reading `unix_seconds`.
+    /// Creates a clock reading `unix_seconds`.
     pub fn at(unix_seconds: u64) -> Self {
         Self(std::sync::atomic::AtomicU64::new(unix_seconds))
     }
