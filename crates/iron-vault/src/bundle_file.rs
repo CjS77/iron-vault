@@ -93,10 +93,12 @@ impl<'a, F: StoreFs> PartialBundle<'a, F> {
     }
 
     /// Keeps the whole bundle: fsyncs it, links it to the bundle's name, which fails if that name appeared meanwhile,
-    /// removes the partial name and fsyncs the directory, so the bundle's name survives a power cut.
+    /// removes the partial name and fsyncs the directory, so the bundle's name survives a power cut. The directory is
+    /// fsynced even when the unlink fails, since the link it makes durable is already there.
     ///
-    /// An error means no bundle has the bundle's name. `Ok(Some(_))` means the bundle is kept and durable as far as its
-    /// link, but tidying up failed: the caller warns rather than failing the export.
+    /// An error means no bundle has the bundle's name. After `Ok(_)` the bundle has its name, and the directory has
+    /// been fsynced since the link unless the returned warning is that fsync's own error. `Ok(Some(_))` carries the
+    /// first tidy-up error, the unlink's before the fsync's: the caller warns rather than failing the export.
     pub fn keep(&mut self) -> Result<Option<io::Error>, BundleFileError> {
         let path = &self.path;
         self.fs.sync_file(&self.file).map_err(|source| BundleFileError::Sync {
@@ -109,7 +111,8 @@ impl<'a, F: StoreFs> PartialBundle<'a, F> {
         })?;
         let removed = self.fs.remove_file(path);
         self.removed = removed.is_ok();
-        Ok(removed.and_then(|()| self.fs.sync_dir(&self.dir)).err())
+        let synced = self.fs.sync_dir(&self.dir);
+        Ok(removed.and(synced).err())
     }
 
     /// The partial file's path.
@@ -140,5 +143,29 @@ impl<F: StoreFs> Drop for PartialBundle<'_, F> {
         if !self.removed {
             let _ = self.fs.remove_file(&self.path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iron_vault_store::fault_fs::{FaultFs, FsCall, FsOp};
+
+    #[test]
+    fn a_failed_unlink_still_syncs_the_bundle_directory() {
+        let dir = Path::new("/iron-vault-absent-k367");
+        let bundle = dir.join("vault.bundle");
+        let fs = FaultFs::new();
+        let mut partial = PartialBundle::create(&fs, &bundle).unwrap();
+        partial.write_all(b"bundle").unwrap();
+        fs.fail_first(FsOp::RemoveFile, io::ErrorKind::PermissionDenied);
+
+        let warning = partial.keep().unwrap();
+
+        assert_eq!(warning.map(|e| e.kind()), Some(io::ErrorKind::PermissionDenied));
+        assert!(fs.trace().contains(&FsCall::SyncDir(dir.to_path_buf())), "{:?}", fs.trace());
+        drop(partial);
+        fs.crash();
+        assert_eq!(fs.contents(&bundle).as_deref(), Some(&b"bundle"[..]));
     }
 }

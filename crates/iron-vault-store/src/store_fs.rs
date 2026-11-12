@@ -34,8 +34,7 @@ pub trait StoreFs {
     /// [`StoreFs::rename`], it never replaces a file someone else put there.
     ///
     /// No store write uses it, so a double that never meets a caller of it may leave it out and fail closed.
-    fn hard_link(&self, from: &Path, to: &Path) -> io::Result<()> {
-        let _ = (from, to);
+    fn hard_link(&self, _from: &Path, _to: &Path) -> io::Result<()> {
         Err(io::Error::new(io::ErrorKind::Unsupported, "hard links are not supported here"))
     }
 

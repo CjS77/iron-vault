@@ -61,10 +61,8 @@ impl Steps {
     /// Holds the calls since the last check that succeeded to the durable-write rules, and starts the next step.
     fn checked(&self, what: &str) {
         let (calls, end) = self.fs.with(|fs| (fs.succeeded_since(self.mark.get()), fs.trace().len()));
-        assert!(
-            std::panic::catch_unwind(|| assert_trace_properties(&calls)).is_ok(),
-            "{what} broke a durable-write rule"
-        );
+        eprintln!("checking the durable-write rules on {what}");
+        assert_trace_properties(&calls);
         self.mark.set(end);
     }
 }
