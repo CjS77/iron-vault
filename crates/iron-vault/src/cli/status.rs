@@ -43,6 +43,7 @@ fn listener_failure_lines(failures: &[ListenerFailure]) -> Vec<String> {
         .collect()
 }
 
+/// The `service:` line, and a `reason:` line when the service is Unavailable.
 fn service_lines(state: ServiceState) -> Vec<String> {
     match state {
         ServiceState::Starting => vec!["service: starting".to_owned()],
@@ -54,10 +55,12 @@ fn service_lines(state: ServiceState) -> Vec<String> {
     }
 }
 
+/// The reason `status` shows for a failure: the same text a `503` body carries.
 fn reason_text(reason: FailureReason) -> &'static str {
     UnavailableReason::from_failure(reason).as_str()
 }
 
+/// The `profile:` line. For the development profile it also warns of no isolation from malware running as `user`.
 fn profile_line(profile: DeploymentProfile, user: impl FnOnce() -> String) -> String {
     match profile {
         DeploymentProfile::Protected => "profile: protected".to_owned(),
@@ -66,6 +69,7 @@ fn profile_line(profile: DeploymentProfile, user: impl FnOnce() -> String) -> St
     }
 }
 
+/// The vault's state, ID, committed approval version and highest reserved approval version, one line each.
 fn vault_lines(vault: &VaultStatus) -> [String; 4] {
     match vault {
         VaultStatus::Locked => [
@@ -134,6 +138,7 @@ fn date(time: UtcSecond) -> String {
     time.to_string().chars().take(10).collect()
 }
 
+/// `today`, `1 day ago` or `<n> days ago`.
 fn days_ago(days: u64) -> String {
     match days {
         0 => "today".to_owned(),
@@ -142,6 +147,8 @@ fn days_ago(days: u64) -> String {
     }
 }
 
+/// One line per credential, `credentials: none` when there is none, or one line saying they are unknown while the vault
+/// is not open.
 fn credential_lines(vault: &VaultStatus) -> Vec<String> {
     match vault {
         VaultStatus::Locked
@@ -168,10 +175,12 @@ fn route_fault_lines(vault: &VaultStatus) -> Vec<String> {
     }
 }
 
+/// One route fault's line: the route and why it is unavailable.
 fn route_fault_line(route: &RouteFault) -> String {
     format!("route {}: unavailable ({})", route.name, route.kind)
 }
 
+/// One credential's line: its standing, and for a damaged one the routes it leaves unavailable.
 fn credential_line(credential: &CredentialStanding) -> String {
     let name = &credential.name;
     match credential.standing {

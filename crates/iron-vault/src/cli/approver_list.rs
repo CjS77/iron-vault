@@ -15,6 +15,7 @@ pub fn render(entries: &[ApproverEntry]) -> String {
     entries.iter().map(|entry| format!("{}\n", line(entry))).collect()
 }
 
+/// One approver's line, without its newline.
 fn line(entry: &ApproverEntry) -> String {
     let label: String = entry.label.as_str().chars().filter(|c| !c.is_control()).collect();
     format!(

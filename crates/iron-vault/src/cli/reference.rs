@@ -41,6 +41,7 @@ fn documented_commands() -> Vec<String> {
     names
 }
 
+/// Appends the full name of `cmd` and of each documented subcommand under it, depth first.
 fn collect_names(cmd: &clap::Command, names: &mut Vec<String>) {
     names.push(full_name(cmd));
     cmd.get_subcommands()
@@ -48,16 +49,19 @@ fn collect_names(cmd: &clap::Command, names: &mut Vec<String>) {
         .for_each(|sub| collect_names(sub, names));
 }
 
-/// Whether the page documents `sub`: every subcommand except the `help` one clap adds, since `--help` is described once,
-/// in the introduction.
+/// Returns `true` if and only if the page documents `sub`: it is neither hidden nor the `help` subcommand clap adds,
+/// since `--help` is described once, in the introduction.
 fn documented_subcommand(sub: &clap::Command) -> bool {
     sub.get_name() != "help" && !sub.is_hide_set()
 }
 
+/// The command as the owner types it, such as `iron-vault config approve`, once the command is built.
 fn full_name(cmd: &clap::Command) -> String {
     cmd.get_bin_name().unwrap_or(cmd.get_name()).to_owned()
 }
 
+/// Writes the section for `cmd`, then one for each documented subcommand. `top` marks the `iron-vault` command itself,
+/// which also lists the global options and the text clap shows after the help.
 fn write_command(out: &mut String, cmd: &mut clap::Command, top: bool) {
     let usage = cmd.render_usage().to_string();
     let synopsis = usage.strip_prefix("Usage: ").unwrap_or(&usage);
@@ -90,7 +94,8 @@ fn write_arguments(out: &mut String, cmd: &clap::Command, top: bool) {
     args.iter().for_each(|arg| write_argument(out, arg, top));
 }
 
-/// Whether `arg` is one of the command's own arguments, rather than clap's `--help` or `--version`.
+/// Returns `true` if and only if `arg` is one of the command's own visible arguments, not clap's `--help` or
+/// `--version`.
 fn documented(arg: &Arg) -> bool {
     !arg.is_hide_set()
         && !matches!(
@@ -99,6 +104,8 @@ fn documented(arg: &Arg) -> bool {
         )
 }
 
+/// Writes one argument as a list item, with its facts (required, repeatable, global, default) and possible values
+/// nested under it.
 fn write_argument(out: &mut String, arg: &Arg, top: bool) {
     let help = arg.get_long_help().or(arg.get_help()).map(ToString::to_string).unwrap_or_default();
     let _ = writeln!(out, "- `{}`: {}", argument_form(arg), sentence(&help));
@@ -127,14 +134,17 @@ fn argument_form(arg: &Arg) -> String {
     }
 }
 
+/// Returns `true` if and only if `arg` takes a value, as opposed to a flag.
 fn takes_value(arg: &Arg) -> bool {
     matches!(arg.get_action(), ArgAction::Set | ArgAction::Append)
 }
 
+/// Returns `true` if and only if `arg` may be given more than once.
 fn repeatable(arg: &Arg) -> bool {
     matches!(arg.get_action(), ArgAction::Append)
 }
 
+/// The `default:` fact for an argument that takes a value and has a default.
 fn default_value(arg: &Arg) -> Option<String> {
     let defaults = arg.get_default_values();
     // A flag's implicit `false` is not a default worth stating.
@@ -147,6 +157,7 @@ fn default_value(arg: &Arg) -> Option<String> {
     })
 }
 
+/// Writes the visible values `arg` accepts, each with its help, when clap knows a fixed set.
 fn write_possible_values(out: &mut String, arg: &Arg) {
     let values: Vec<PossibleValue> = arg.get_possible_values().into_iter().filter(|value| !value.is_hide_set()).collect();
     if values.is_empty() {

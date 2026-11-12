@@ -15,6 +15,7 @@ pub fn render(credentials: Option<&[CredentialStanding]>) -> String {
     }
 }
 
+/// One credential's line, without its newline.
 fn line(credential: &CredentialStanding) -> String {
     let (kind, hosts) = credential.summary.as_ref().map_or_else(
         || ("unknown".to_owned(), "unknown".to_owned()),
@@ -23,11 +24,13 @@ fn line(credential: &CredentialStanding) -> String {
     format!("{}  {kind}  {hosts}  {}", credential.name, standing_text(credential.standing))
 }
 
+/// The record's permitted origins as `host:port`, joined by commas.
 fn hosts(summary: &RecordSummary) -> String {
     let origins = summary.origins.iter().map(|(host, port)| format!("{host}:{}", port.get()));
     origins.collect::<Vec<_>>().join(",")
 }
 
+/// `healthy`, or `damaged (<damage>)`.
 fn standing_text(standing: Standing) -> String {
     match standing {
         Standing::Healthy => "healthy".to_owned(),

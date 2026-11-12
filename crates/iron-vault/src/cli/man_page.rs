@@ -38,6 +38,7 @@ fn pages_of(cmd: &clap::Command) -> Vec<(String, String)> {
         .collect()
 }
 
+/// One page's roff source, without its VERSION section.
 fn render(man: &Man) -> String {
     let mut out = Vec::new();
     man.render(&mut out).unwrap();

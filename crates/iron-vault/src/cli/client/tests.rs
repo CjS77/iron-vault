@@ -22,7 +22,7 @@ const MARKER: &str = "MARKER-secret-5d1c9e";
 /// What the handler got for one prompt: the owner input's bytes, or the `Debug` form of the exchange error.
 type Answer = Result<Vec<u8>, String>;
 
-/// The test-only command, registered for `ping`: it prompts in turn for each value, records what it got, and stops at
+/// The test-only command, registered for `ping`: it prompts for each value in order, records what it got, and stops at
 /// the first prompt that fails, so its command is cancelled.
 struct Prompts {
     prompts: Vec<Prompt>,

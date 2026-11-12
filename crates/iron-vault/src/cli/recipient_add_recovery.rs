@@ -1,5 +1,5 @@
-//! `iron-vault recipient add --recovery` (`design/recipients.md`, "`recipient add --recovery`"): the CLI's side of
-//! rotating the offline recovery key.
+//! `iron-vault recipient add --recovery`: the CLI's side of rotating the offline recovery key
+//! ([recipients: `recipient add --recovery`](../../../../design/recipients.md#recipient-add---recovery)).
 //!
 //! Like `init`, it shows the new key on the controlling terminal only, so it checks for one before sending the request, and
 //! it tells the owner what to do with the key if the command ends without a service answer.

@@ -1,6 +1,6 @@
-//! The config copy `import` leaves beside the bundle (`design/migration-bundle.md`, "The config copy"): the bundle's
-//! `config.toml` entry, which `config approve` reads in the CLI because the CLI cannot always read the service's config
-//! directory.
+//! The config copy `import` leaves beside the bundle: the bundle's `config.toml` entry, which `config approve` reads in
+//! the CLI because the CLI cannot always read the service's config directory
+//! ([migration bundle: the config copy](../../../../../design/migration-bundle.md#the-config-copy)).
 //!
 //! The file is created before the request, so a name already taken shows before any prompt, and it is removed on every
 //! ending but a kept one. A copy that is not the committed config is never left for the owner to approve.

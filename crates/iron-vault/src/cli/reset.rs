@@ -1,9 +1,10 @@
-//! `iron-vault reset` (`design/admin-protocol.md`, "reset"): the CLI's side of discarding the vault.
+//! `iron-vault reset`: the CLI's side of discarding the vault
+//! ([admin protocol: `reset`](../../../../design/admin-protocol.md#reset-1)).
 //!
-//! The confirmation must be typed at a terminal, so the command checks for one before it connects: a pipe, a file, a
-//! heredoc or a cron job is refused with exit code 3 and the service never hears of it. The service cannot see where an
-//! answer came from, so this check is the CLI's rule. With stdin a terminal the console reads the confirmation from
-//! `/dev/tty`.
+//! The confirmation must be typed at a terminal ([reset: typed at a terminal](../../../../design/reset.md#typed-at-a-terminal)),
+//! so the command checks for one before it connects: a pipe, a file, a heredoc or a cron job is refused with exit code 3
+//! and the service never hears of it. The service cannot see where an answer came from, so this check is the CLI's
+//! rule. With stdin a terminal the console reads the confirmation from `/dev/tty`.
 
 use std::fs::File;
 use std::io::{self, IsTerminal};

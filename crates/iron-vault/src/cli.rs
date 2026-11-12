@@ -1,13 +1,29 @@
-//! The command line: one parser for running the service (`serve`) and for the thin CLI's commands (spec §5).
+//! The command line: one [`Cli`] parser for running the service (`serve`) and for the thin client commands
+//! ([spec §5](../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns)).
 //!
-//! The CLI only sends commands to the service over the admin socket and shows the answers. It never opens vault files,
-//! calls a TPM or edits policy (§4): the service owns every operation, and judges whoever connects, including over
-//! a socket forwarded with `--admin-socket`.
+//! A client command sends one admin request to the service over the admin socket and shows the answer. It never opens
+//! vault files, calls a TPM or edits policy
+//! ([spec §4](../../../design/iron-vault-specification.md#4-installation-and-ownership)): the service owns every
+//! operation, and judges whoever connects, including over a socket forwarded with `--admin-socket`.
+//!
+//! ```text
+//! argv ─→ Cli::try_from_args ─→ cli::<command> ─→ client ── admin request ────────────────→ service
+//!              │                                    │     ←─ prompt, notice, reveal ───────
+//!              └─ usage error: exit 2               │     ── owner input ─────────────────→
+//!                                                   │     ←─ admin response ───────────────
+//!                                                   ▼
+//!                                stdout, stderr and an Exit: 0, 1, 3 or 4
+//! ```
+//!
+//! `main` matches the parsed [`Command`] and calls the function of the same name here, such as [`add`] for `add`. That
+//! function hands the request to `client`, which answers each prompt from the owner console: the terminal, or stdin when
+//! it is piped. [`EXIT_CODES`] lists what each exit status means.
 //!
 //! **No argument ever takes a secret value.** Arguments end up in shell history, process listings and diagnostics,
-//! where a prompted value must never appear (§5). A command that needs a secret has the service prompt for it over
-//! the admin protocol, and the CLI reads it from the terminal or stdin. Diagnostics never echo a request's arguments
-//! either.
+//! where a prompted value must never appear
+//! ([spec §5](../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). A command that
+//! needs a secret has the service prompt for it over the admin protocol, and the CLI reads it from the terminal or
+//! stdin. Diagnostics never echo a request's arguments either.
 
 // The client's terminal handling uses rustix and tokio, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
@@ -348,8 +364,8 @@ pub enum ApproverCommand {
     },
 }
 
-/// An approver ID as the 16 bytes the admin protocol carries. Whether it is a version 4 UUID that names a pinned approver
-/// is the service's decision.
+/// Parses an approver ID into the 16 bytes the admin protocol carries. Any UUID passes here: the service decides if it is
+/// a version 4 UUID that names a pinned approver.
 fn parse_approver_id(text: &str) -> Result<[u8; 16], String> {
     uuid::Uuid::parse_str(text)
         .map(|id| *id.as_bytes())
@@ -731,6 +747,7 @@ pub fn lock(_socket: Option<&Path>) -> ExitCode {
     unsupported_platform()
 }
 
+/// Says on stderr that client commands do not run on this platform, and exits 3.
 #[cfg(not(target_os = "linux"))]
 fn unsupported_platform() -> ExitCode {
     eprintln!("iron-vault: client commands are not supported on this platform yet");

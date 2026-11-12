@@ -1,5 +1,22 @@
-//! The owner console: where the CLI collects owner input for the service's prompts, and shows its notices and reveals
-//! (`design/admin-protocol.md`, "Owner input").
+//! The owner console: collects owner input for the service's prompts, and shows the owner its notices and reveals
+//! ([admin protocol: owner input](../../../../design/admin-protocol.md#owner-input)).
+//!
+//! The client opens the console at the first prompt, notice or reveal, in one of two modes:
+//!
+//! ```text
+//!                 stdin is a terminal               stdin is a pipe or a file
+//!                 (Terminal on /dev/tty)            (Piped on stdin)
+//! prompt label    /dev/tty                          stderr, only when stderr is a terminal
+//! owner input     a line from /dev/tty,             the next line of stdin
+//!                 echo off for a secret
+//! switch          a line ending in Ctrl-Y           never offered
+//! notice          /dev/tty                          stderr
+//! reveal          /dev/tty, then a QR code          /dev/tty, then a QR code; refused without one
+//! ```
+//!
+//! So `pass show fx | sudo iron-vault add fx --origin api.fx.example` reads the secret from the pipe, while a recovery
+//! key that `init` reveals still appears only on the terminal. Opening the console also starts the signal watcher: if a
+//! signal ends the command, it restores the terminal and tells the owner what to do with a recovery key already shown.
 //!
 //! Each value goes from the input straight into a clearing buffer, and from there into one owner-input frame. A revealed
 //! value goes from its clearing buffer straight to the terminal's descriptor. Neither passes through `String`,
@@ -21,8 +38,9 @@ use zeroize::Zeroizing;
 /// The longest line a value may arrive in: the longest value, then `\r\n`.
 const LINE_CAPACITY: usize = MAX_BODY_LEN + 2;
 
-/// Ctrl-Y, which ends a terminal line asking to switch to the next approver (`design/approval-signers.md`, "Switching").
-/// Linux gives it no other meaning in canonical mode, since it has no `VDSUSP`.
+/// Ctrl-Y, which ends a terminal line asking to switch to the next approver
+/// ([approval signers: switching](../../../../design/approval-signers.md#switching)). Linux gives it no other meaning in
+/// canonical mode, since it has no `VDSUSP`.
 pub(super) const SWITCH_KEY: u8 = 0x19;
 
 /// The shortest terminal line, line ending included, that Linux may have cut short. In canonical mode the terminal keeps
@@ -83,8 +101,8 @@ pub trait OwnerConsole {
     /// Shows a notice's text, after the text of the notice before it.
     fn notice(&mut self, text: &str) -> Result<(), InputError>;
 
-    /// Shows a revealed value, then `\n`, then the value as a QR code, on the controlling terminal and nowhere else. A value with a byte outside
-    /// printable ASCII is refused and nothing of it is shown.
+    /// Shows a revealed value, then `\n`, then the value as a QR code, on the controlling terminal and nowhere else. A
+    /// value with a byte outside printable ASCII is refused and nothing of it is shown.
     fn reveal(&mut self, secret: &RevealedSecret) -> Result<(), InputError>;
 }
 
@@ -139,6 +157,7 @@ pub fn ensure_terminal() -> io::Result<()> {
 pub struct ProcessConsole(Option<Box<dyn OwnerConsole>>);
 
 impl ProcessConsole {
+    /// The open console, opening it on first use.
     fn console(&mut self) -> Result<&mut Box<dyn OwnerConsole>, InputError> {
         let console = match self.0.take() {
             Some(console) => console,
@@ -375,7 +394,7 @@ fn write_reveal(tty: &mut impl Write, value: &[u8]) -> Result<(), InputError> {
 /// too long for any QR code gets a one-line note instead, because the text above it is already shown.
 ///
 /// The drawing holds the value, so it is overwritten before it is dropped. The library's own module buffers are not
-/// cleared (`design/secret-handling.md`).
+/// cleared ([secret handling: inventory](../../../../design/secret-handling.md#inventory)).
 fn write_qr(tty: &mut impl Write, value: &[u8]) -> io::Result<()> {
     let Ok(code) = QrCode::with_error_correction_level(value, EcLevel::M) else {
         return tty.write_all(b"(too long for a QR code)\n");

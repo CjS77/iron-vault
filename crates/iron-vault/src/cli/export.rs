@@ -1,8 +1,9 @@
-//! `iron-vault export <bundle>` (`design/migration-bundle.md`, "Transfer"): the CLI's side of writing a migration bundle.
+//! `iron-vault export <bundle>`: the CLI's side of writing a migration bundle
+//! ([migration bundle: transfer](../../../../design/migration-bundle.md#transfer)).
 //!
 //! The bundle path stays in the CLI, which writes the file as the owner. The bundle grows in a partial file beside it,
 //! created before the request so a permission problem shows before any prompt, and appears under the name the owner
-//! asked for only once the service's result vouches for every byte. A cut bundle therefore never has the bundle's name.
+//! asked for only once the service's result vouches for every byte. A cut bundle never has the bundle's name.
 
 use std::path::Path;
 

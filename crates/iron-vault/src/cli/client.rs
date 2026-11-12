@@ -1,5 +1,27 @@
-//! The admin socket client: one exchange per connection (`design/admin-protocol.md`) over a blocking Unix stream, and
-//! the owner-facing report of how it went.
+//! The admin socket client: runs one exchange per connection over a blocking Unix stream, and tells the owner how it went
+//! ([admin protocol: CLI client](../../../../design/admin-protocol.md#cli-client)).
+//!
+//! Every client command calls [`run`], [`run_on`] or [`answered`], which connect to the admin socket and hand the
+//! exchange to `converse`:
+//!
+//! ```text
+//! send the request, then the bundle (import only)
+//!   │
+//!   ▼
+//! read a frame ─┬─→ prompt         ─→ owner console; send owner input or a switch ─┐
+//!   ▲           ├─→ notice, reveal ─→ owner console ───────────────────────────────┤
+//!   │           ├─→ bundle data    ─→ write to the sink (export only) ─────────────┤
+//!   │           └─→ admin response ─→ return it                                    │
+//!   └──────────────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! A success response goes to the command, which prints its result and exits 0. An error response is printed as
+//! `iron-vault: the service answered error <code> (<name>): <message>`, with a hint for the codes the owner can act on,
+//! and exits 1.
+//!
+//! A frame that cannot be read, or one of a kind the CLI does not expect, ends the command with exit 3. A failed write
+//! counts only when no frame follows: a service that refuses a request answers and closes without reading the rest, so
+//! its answer may be waiting behind a broken pipe.
 
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -32,7 +54,9 @@ use super::console::{InputError, OwnerConsole, ProcessConsole};
 /// or a progress frame.
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// In a protected install only root is an admin principal (§5), so the owner reaches the admin socket through `sudo`.
+/// In a protected install only root is an admin principal
+/// ([spec §5](../../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns)), so the owner
+/// reaches the admin socket through `sudo`.
 const SUDO_HINT: &str = "In a protected install only root may use the admin socket: run the command with sudo.";
 
 /// Why no admin response came back. Messages name the socket path and protocol numbers, never request arguments.
@@ -403,6 +427,8 @@ fn approved(result: &ApprovalResult) -> String {
     )
 }
 
+/// Reports [`ClientError::Unexpected`] on stderr and exits 3: the service answered with a frame that does not fit the
+/// request.
 pub(super) fn unexpected() -> Exit {
     fail(Exit::Unreachable, &ClientError::Unexpected.to_string())
 }
@@ -435,8 +461,9 @@ pub fn exchange_bundle(
     converse(&mut stream, request, console, bundle)
 }
 
-/// The migration bundle side of one exchange (`design/migration-bundle.md`, "Transfer"). The bundle is ciphertext and
-/// public metadata, so the CLI holds it in no clearing buffer.
+/// The migration bundle side of one exchange
+/// ([migration bundle: transfer](../../../../design/migration-bundle.md#transfer)). The bundle is ciphertext and public
+/// metadata, so the CLI holds it in no clearing buffer.
 pub enum Bundle<'a> {
     /// The exchange moves no bundle, so a bundle data frame is out of turn.
     None,
@@ -456,7 +483,7 @@ pub enum Bundle<'a> {
 pub struct Received {
     /// The bundle bytes written to the sink, for the caller to check against the result's byte count.
     pub bytes: u64,
-    /// Whether the empty bundle data frame arrived, so the bundle is whole.
+    /// `true` if and only if the empty bundle data frame arrived, so the bundle is whole.
     pub ended: bool,
 }
 
@@ -519,6 +546,7 @@ fn send_bundle(stream: &mut impl Write, source: &mut dyn Read) -> Result<io::Res
     }
 }
 
+/// Sends `bytes` as one bundle data frame; empty `bytes` is the frame that ends the bundle.
 fn send_bundle_chunk(stream: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
     let mut frame = Vec::with_capacity(HEADER_LEN + bytes.len());
     protocol::encode_bundle_data(bytes, &mut frame).map_err(io::Error::other)?;
@@ -567,6 +595,7 @@ fn installation_socket() -> anyhow::Result<PathBuf> {
         .context("this deployment names no runtime directory for the admin socket")
 }
 
+/// Connects to the admin socket at `path`, naming the usual failures: no socket, nothing listening, or permission denied.
 fn connect(path: &Path) -> Result<UnixStream, ClientError> {
     UnixStream::connect(path).map_err(|source| match source.kind() {
         io::ErrorKind::NotFound => ClientError::NoSocket(path.to_path_buf()),
@@ -579,6 +608,7 @@ fn connect(path: &Path) -> Result<UnixStream, ClientError> {
     })
 }
 
+/// Sends `request` as one admin request frame.
 fn send_request(stream: &mut UnixStream, request: AdminRequest) -> io::Result<()> {
     let mut bytes = Vec::new();
     protocol::encode(&Frame::Request(request), &mut bytes).map_err(io::Error::other)?;
@@ -648,6 +678,7 @@ fn service_error(code: ErrorCode, message: &str) -> String {
     }
 }
 
+/// The deployment profile's name, as `ping` prints it.
 fn profile_name(profile: DeploymentProfile) -> &'static str {
     match profile {
         DeploymentProfile::Protected => "protected",
@@ -656,6 +687,7 @@ fn profile_name(profile: DeploymentProfile) -> &'static str {
     }
 }
 
+/// Prints `iron-vault: <message>` on stderr and returns `exit`.
 pub(super) fn fail(exit: Exit, message: &str) -> Exit {
     eprintln!("iron-vault: {message}");
     exit

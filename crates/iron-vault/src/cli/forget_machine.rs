@@ -1,4 +1,4 @@
-//! `iron-vault forget-machine` (`design/forget-machine.md`): the CLI's side of the retired-machine check.
+//! `iron-vault forget-machine`: the CLI's side of the retired-machine check ([forget machine](../../../../design/forget-machine.md)).
 //!
 //! The service reports two facts; everything else printed here is fixed text. The CLI spawns no process: the commands in
 //! the guidance are for the administrator to run on the retired machine, and this module only prints them.

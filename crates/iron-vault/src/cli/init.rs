@@ -1,10 +1,11 @@
-//! `iron-vault init` (`design/admin-protocol.md`, "init"): the CLI's side of creating the vault.
+//! `iron-vault init`: the CLI's side of creating the vault
+//! ([admin protocol: `init`](../../../../design/admin-protocol.md#init-1)).
 //!
 //! The recovery key is shown on the controlling terminal only, so the command checks for one before it sends the
 //! request: a CLI that could not show the key never has the service generate one. Once the key is shown, a command that
 //! ends without a service answer (a dropped or timed-out connection, or a signal) must still tell the owner what to do
-//! with it, because the service cannot answer a closed connection (design/vault-initialization.md, "Failing after the
-//! reveal").
+//! with it, because the service cannot answer a closed connection
+//! ([vault initialization: failing after the reveal](../../../../design/vault-initialization.md#failing-after-the-reveal)).
 
 use std::path::Path;
 
@@ -49,14 +50,21 @@ pub fn run(socket: Option<&Path>, host_unlock: bool) -> Exit {
     }
 }
 
-/// How far the exchange has got with the recovery key, as far as the CLI knows.
+/// How far the exchange has got with the recovery key, as far as the CLI knows. The confirming answer is `yes` for
+/// `init` and `import`, and the vault passphrase for `recipient add --recovery`.
+///
+/// ```text
+///          reveal               confirming answer
+/// Unseen ───────────→ Shown ─────────────────────→ Confirmed
+/// no advice           discard the key             keep the key; the outcome is unknown
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
     /// No recovery key has been shown.
     Unseen,
     /// The key was shown and `yes` has not been sent, so the service writes nothing.
     Shown,
-    /// `yes` was given after the key was shown, so the service may be writing the vault.
+    /// The confirming answer was given after the key was shown, so the service may be writing the vault.
     Confirmed,
 }
 
@@ -72,8 +80,8 @@ enum Shower {
     Rotation,
 }
 
-/// An owner console that passes everything through and remembers whether the recovery key was shown and confirmed, for
-/// the advice the owner needs if the command ends without a service answer.
+/// An owner console that passes everything through and remembers how far the owner got with the recovery key, for the
+/// advice the owner needs if the command ends without a service answer.
 pub struct RecoveryKeyWatch<C> {
     console: C,
     stage: Stage,

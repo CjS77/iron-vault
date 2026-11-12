@@ -1,5 +1,5 @@
-//! `iron-vault import <bundle>` (`design/migration-bundle.md`, "Transfer"): the CLI's side of making a
-//! vault from a migration bundle.
+//! `iron-vault import <bundle>`: the CLI's side of making a vault from a migration bundle
+//! ([migration bundle: transfer](../../../../design/migration-bundle.md#transfer)).
 //!
 //! The bundle path stays in the CLI, which opens the file as the owner and streams it after the request. Like `init`, the
 //! command shows the recovery key on the controlling terminal only, so it checks for one before it connects.
@@ -67,8 +67,8 @@ fn open_bundle(bundle: &Path) -> Result<File, String> {
     Ok(file)
 }
 
-/// Fills the config copy from the bundle. The import committed whatever happens here, so a copy that cannot be made is
-/// removed and reported as a warning, and the owner checks their own copy of the config against the printed digest.
+/// Fills the config copy from the bundle. The import has already committed, so a copy that cannot be made is removed and
+/// reported as a warning, and the owner checks their own copy of the config against the printed digest.
 fn kept_copy(copy: ConfigCopy, bundle: &Path, result: &ImportResult) -> Option<ConfigCopy> {
     copy.fill(bundle, &result.digest)
         .inspect_err(|reason| eprintln!("iron-vault: warning: the import committed, but no config copy was kept: {reason}"))

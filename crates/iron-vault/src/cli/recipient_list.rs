@@ -13,6 +13,7 @@ pub fn render(entries: &[RecipientEntry]) -> String {
     entries.iter().map(|entry| format!("{}\n", line(entry))).collect()
 }
 
+/// One recipient's line, without its newline.
 fn line(entry: &RecipientEntry) -> String {
     let label: String = entry.label().as_str().chars().filter(|c| !c.is_control()).collect();
     format!(

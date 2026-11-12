@@ -37,6 +37,7 @@ pub fn completions(shell: CompletionShell) -> Result<(), CompletionsError> {
     write_script(&mut io::stdout().lock(), shell)
 }
 
+/// Writes the completion script for `shell` to `out` and flushes it.
 pub(super) fn write_script(out: &mut impl Write, shell: CompletionShell) -> Result<(), CompletionsError> {
     out.write_all(&script(shell))?;
     Ok(out.flush()?)
