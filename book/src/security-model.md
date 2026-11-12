@@ -5,8 +5,7 @@ specification say what Iron Vault protects against and what it doesn't. This pag
 
 ## How the vault is locked
 
-Iron Vault encrypts with [`age`](https://age-encryption.org). You don't need to know any cryptography to follow
-this section.
+Iron Vault encrypts with [`age`](https://age-encryption.org). This section needs no knowledge of cryptography.
 
 ### One vault identity opens everything
 
@@ -17,9 +16,26 @@ memory. It never needs a key per credential.
 ### Several people or devices can unlock the vault identity
 
 The vault identity lives in one file, `identity.age`. Think of that file as a safe with one copy of the vault
-identity inside. Fixed to the outside of the safe are several small lockboxes, one for each **recipient**: this
-machine, your offline recovery key, and later a TPM or YubiKey. Every lockbox holds the same thing, the combination to
-the safe.
+identity inside. Fixed to the outside of the safe are several small lockboxes, one for each **recipient**: the
+operational identity that your vault passphrase opens, your offline recovery key, the host unlock identity sealed to
+the TPM if you [set one up](cookbook/tpm-unlock.md), and later a YubiKey. Every lockbox holds the same thing, the
+combination to the safe.
+
+```text
+identity.age
++---------------------------------------------------------------+
+|  lockbox: operational   lockbox: recovery   lockbox: host     |
+|  identity               key                 unlock (optional) |
+|      |                      |                    |            |
+|      +----------------------+--------------------+            |
+|                             | each holds the same combination |
+|                             v                                 |
+|  +---------------------------------------------------------+  |
+|  | safe: the vault identity                                |  |
+|  +---------------------------------------------------------+  |
+|  seal over all the lockboxes                                  |
++---------------------------------------------------------------+
+```
 
 - Each lockbox opens only with its own recipient's private key.
 - Any one recipient can open their lockbox, read the combination, open the safe and take out the vault identity.
@@ -57,7 +73,16 @@ makes one extra key pair, the **operational identity**:
 - its public half gets an ordinary lockbox on `identity.age`;
 - its private half is kept in a separate file, `operational.age`, locked only by your passphrase.
 
-Unlocking goes: passphrase → operational identity → vault identity.
+Unlocking goes: passphrase → operational identity → vault identity. The other recipients skip the first step:
+
+```mermaid
+flowchart LR
+    P[Vault passphrase] --> O[operational.age:<br/>operational identity]
+    O --> I
+    R[Offline recovery key] --> I
+    H[Host unlock identity,<br/>sealed to the TPM] --> I
+    I[identity.age:<br/>vault identity] --> C[Credential records]
+```
 
 ### Several approval signers
 
@@ -72,8 +97,8 @@ passphrase enrolls or removes an approver. The price is that losing every approv
 An approver can be a key held in the machine's TPM behind a PIN ([recipe](cookbook/tpm-approval.md)). The service never
 opens the TPM: a separate helper, running as its own account and reachable only by the service account, signs the three fixed
 payloads the service sends it, and only under the PIN you typed. The TPM limits guessing by itself, and the helper refuses to
-work on a TPM whose lockout interval is under 600 seconds, so a compromised service gets 16 guesses and then about one per ten
-minutes; the PIN is at least 6 characters for that reason. The TPM keeps no copy of the PIN, so a forgotten PIN is recovered
+work on a TPM whose lockout interval is under 600 seconds, so a compromised service gets at most 16 guesses and then at most one
+per ten minutes; the PIN is at least 6 characters for that reason. The TPM keeps no copy of the PIN, so a forgotten PIN is recovered
 through another approver, and a vault whose only approver is a lost TPM one is back to `reset`. This protects the approval from
 a stolen vault passphrase or a service that took over a running process. It does not protect against someone who controls the
 host: root, or any member of the `tss` group, can weaken the TPM's lockout settings, and the helper then refuses to sign.

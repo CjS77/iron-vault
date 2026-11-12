@@ -6,6 +6,19 @@ Point an application's base URL at Iron Vault and give it a placeholder instead 
 authenticates the caller, checks its route, adds the credential, and forwards the request over verified TLS. The
 application holds at most a local caller token that grants specific routes; it never needs the provider secret.
 
+```mermaid
+sequenceDiagram
+    participant App as Application (caller)
+    participant IV as Iron Vault
+    participant API as Provider API (upstream)
+    App->>IV: request to /route/..., with a caller token or none
+    Note over IV: authenticate the caller<br/>check the route's method, path and rate limit<br/>add the credential to the route's slot
+    IV->>API: request with the credential, over verified TLS
+    API-->>IV: response
+    Note over IV: scrub the credential from the response
+    IV-->>App: response
+```
+
 ## Who it is for
 
 - AI agents and MCP servers that call APIs such as Brave, Venice or an FX service, without real keys in their
@@ -20,14 +33,14 @@ workflow. Setting `HTTPS_PROXY` alone does not inject credentials.
 ## What it promises, and what it doesn't
 
 Iron Vault aims to stop a caller from reading a stored provider credential, sending it to another origin, or using a
-route its identity is not granted. It refuses config changes that were not approved, and refuses an old config paired
+route it is not granted. It refuses config changes that were not approved, and refuses an old config paired
 with its old approval.
 
 It does not stop misuse of a route a caller is granted. Malware that can read a caller's token, or that runs as an
 account the service recognises, can use that caller's routes. Method and path restrictions and rate limits bound that
 access. Response scrubbing reduces accidental disclosure when an upstream echoes a secret, but cannot recognise every
-transformed form of it. Root and other host administrators are trusted. The [security model](security-model.md) says
-more.
+transformed form of it. Root and other host administrators are trusted. The [security model](security-model.md)
+explains how the vault is locked.
 
 ## Status
 
@@ -38,7 +51,8 @@ release check on a real machine yet, so don't rely on it to protect real secrets
 
 ## How this manual is organised
 
-- **[Installation](installation/development-mode.md):** development mode, and the protected Linux install.
+- **[Installation](installation/development-mode.md):** development mode, the protected Linux install, a shared Linux
+  workstation, and Docker Compose.
 - **[Cookbook](cookbook/getting-started.md):** short recipes, each ending with something that works.
 - **[Reference](reference/cli.md):** every command, config key, error, service state, audit event and file.
 - **[Glossary](glossary.md):** the terms this manual and the code share, one name per concept.
