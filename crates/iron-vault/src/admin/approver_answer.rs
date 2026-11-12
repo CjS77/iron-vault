@@ -1,4 +1,5 @@
-//! The answers `approver add` and `approver remove` share: the error response for each refusal an approver command can end with.
+//! The answers `approver add` and `approver remove` share: the error response for each refusal an approver command can
+//! end with.
 
 use iron_vault_store::MayHaveCommitted;
 
@@ -7,7 +8,7 @@ use super::unlock::state_name;
 use crate::service_context::ApproverRefusal;
 use crate::service_state::ServiceState;
 
-/// The error answer for an approver command (`command`) that ended without changing the approvers.
+/// Returns the error answer for an approver command (`command`) that ended without changing the approvers.
 pub(super) fn refused(command: &str, refusal: ApproverRefusal) -> AdminResponse {
     match refusal {
         ApproverRefusal::Busy => error(ErrorCode::Busy, "another operation is running; try again shortly".to_owned()),
@@ -27,7 +28,8 @@ pub(super) fn refused(command: &str, refusal: ApproverRefusal) -> AdminResponse 
     }
 }
 
-/// Says whether the change may have committed, so the owner knows what to check.
+/// Returns the failure message for `cause`, adding how to check whether the change committed if and only if it may
+/// have.
 fn failed_message(committed: MayHaveCommitted, cause: &str) -> String {
     match committed {
         MayHaveCommitted::No => cause.to_owned(),

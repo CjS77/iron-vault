@@ -1,8 +1,24 @@
-//! The migration authorization step of an admin exchange (specification §16, §19; design/migration-authorization.md,
-//! "Admin exchange", steps 5 to 7): issue the challenge, ask for a source-owner method's secret (the vault passphrase
-//! first, then each `tpm` approver's TPM approval PIN) and check it. `export` and `recipient add` both run it and both
-//! answer a refusal through [`no_authorization`], so the two cannot drift apart, as `owner_presence` keeps `replace` and
-//! `rm` together.
+//! The migration authorization step of an admin exchange (spec [§16][s16], [§19][s19];
+//! [migration authorization: Admin exchange](../../../../design/migration-authorization.md#admin-exchange), steps 5 to 7): issue the
+//! challenge, ask for a source-owner method's secret (the vault passphrase first, then each `tpm` approver's TPM
+//! approval PIN) and check it. `export` and `recipient add` both run it and both answer a refusal through
+//! [`no_authorization`], so the two cannot drift apart, as `owner_presence` keeps the owner presence commands
+//! together.
+//!
+//! ```text
+//! step  who                 what                                                     refusals
+//! 1     the command         state allows it, arguments follow their rules            wrong-state, the command's own
+//! 2     the command         take the service-wide lock: a MigrationSession           busy
+//! 3     the command         its own checks
+//! 4     the command         its summary, naming the method asked first
+//! 5     this module         issue the migration challenge                            busy, migration-unavailable
+//! 6     this module         one switchable secret prompt over the askable methods    migration-rate-limited,
+//!                                                                                    migration-unavailable
+//! 7     this module         check the answer with the method answered                migration-denied, tpm-locked-out
+//! 8     the command         its own prompts: export's export passphrase twice
+//! 9     the command         same state and check generation; consume the proof       wrong-state, migration-denied
+//! 10    the command         the export or the rewrap
+//! ```
 //!
 //! **The service-wide lock is held from step 2 until the response, and the type enforces it.** The attempt limit and the
 //! single pending slot rely on it: without it two exchanges could guess in parallel before the first failure is
@@ -10,6 +26,9 @@
 //! called without the lock, as a `VaultChangePlan` keeps `replace` and `rm` under it. The session also supplies the
 //! `lock_requested` that ends a prompt when a `lock` waits, and retires any pending challenge when it drops, however the
 //! exchange ends.
+//!
+//! [s16]: ../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration
+//! [s19]: ../../../../design/iron-vault-specification.md#19-v0-user-acceptance
 
 use iron_vault_store::StoreFs;
 
@@ -31,7 +50,7 @@ use crate::service_state::ServiceState;
 #[derive(Debug, PartialEq, Eq)]
 pub struct NoAuthorization(pub MigrationRefusal);
 
-/// What the exchange's outcome is: the authorization, a refusal, or a prompt that got no owner input.
+/// The exchange's outcome: the authorization, a refusal, or a prompt that got no owner input.
 type Outcome = Result<Result<MigrationAuthorization, NoAuthorization>, ExchangeError>;
 
 /// The method an exchange names before anyone answers when it can ask none.
@@ -40,8 +59,8 @@ const NO_METHOD: MethodName = MethodName {
     approver: None,
 };
 
-/// The methods step 6 of the exchange in `session` asks, built once before its summary: the summary's `authorize with:`
-/// line and the prompt then name the same methods. They are built under the session's service-wide lock, so they check
+/// Builds the methods step 6 of the exchange in `session` asks, once, before its summary: the summary's
+/// `authorize with:` line and the prompt then name the same methods. They are built under the session's service-wide lock, so they check
 /// against the vault identity held now, and before the challenge, so nothing can fail between issuing it and its closing
 /// record.
 pub async fn askable_methods<F: StoreFs + Send + Sync + 'static>(
@@ -79,7 +98,8 @@ pub async fn require_migration_authorization<F: StoreFs + Send + Sync + 'static>
     outcome
 }
 
-/// What the summary's `authorize with:` line names: the method of `methods` asked first.
+/// Names the method of `methods` asked first, for the summary's `authorize with:` line: for example
+/// `the vault passphrase` or `the TPM approval PIN for "laptop tpm"`.
 pub fn authorize_with(methods: &AskableMethods) -> String {
     match methods.asked().first() {
         Some(AskableMethod::TpmPin(method)) => {
@@ -89,7 +109,8 @@ pub fn authorize_with(methods: &AskableMethods) -> String {
     }
 }
 
-/// Steps 6 and 7: the prompt over `methods`, then the answered method's check. Returns the method answered, if any.
+/// Runs steps 6 and 7: the prompt over `methods`, then the answered method's check. Returns the method answered, if
+/// any.
 async fn prompt_and_prove<F: StoreFs + Send + Sync + 'static>(
     exchange: &mut Exchange,
     session: &MigrationSession<'_, F>,
@@ -130,7 +151,7 @@ async fn prompt_and_prove<F: StoreFs + Send + Sync + 'static>(
     (None, Ok(Err(NoAuthorization(methods.none_left()))))
 }
 
-/// The secret prompt's label for `method`.
+/// Returns the secret prompt's label for `method`.
 fn prompt_label(method: &AskableMethod) -> String {
     match method {
         AskableMethod::VaultPassphrase(_) => PASSPHRASE_PROMPT.to_owned(),
@@ -138,9 +159,9 @@ fn prompt_label(method: &AskableMethod) -> String {
     }
 }
 
-/// A refusal after the challenge was issued. The exchange holds the service-wide lock, so only a `lock` can change the
-/// state, and it waits for that lock; any other state change (a stop) means the check could not be completed, which the
-/// design's closing labels call `unavailable`. `wrong-state` is only for the refusals before a challenge exists.
+/// Maps a refusal after the challenge was issued. The exchange holds the service-wide lock, so only a `lock` can change
+/// the state, and it waits for that lock; any other state change (a stop) means the check could not be completed, which
+/// the design's closing labels call `unavailable`. `wrong-state` is only for the refusals before a challenge exists.
 fn after_challenge(refusal: MigrationRefusal) -> MigrationRefusal {
     match refusal {
         MigrationRefusal::WrongState(state) if state != ServiceState::Locked => MigrationRefusal::Unavailable,
@@ -148,7 +169,8 @@ fn after_challenge(refusal: MigrationRefusal) -> MigrationRefusal {
     }
 }
 
-/// The closing audit record of a challenge: how its exchange ended at the attempt limit, the prompt or the check.
+/// Emits the closing audit record of a challenge: how its exchange ended at the attempt limit, the prompt or the
+/// check.
 fn record_ending(operation: &MigrationOperation, method: MethodName, outcome: &Outcome) {
     let refusal = match outcome {
         Ok(Ok(_)) => return Authorized { operation, method }.emit(),
@@ -163,10 +185,11 @@ fn record_ending(operation: &MigrationOperation, method: MethodName, outcome: &O
     .emit();
 }
 
-/// The answer when migration authorization for `command` was not given, so nothing was exported or rewrapped. Every
-/// refusal passes through here, so this is the one place that maps them to `migration-denied`, `migration-unavailable`
-/// `migration-rate-limited` and `tpm-locked-out` (design/migration-authorization.md, "Error codes"). The messages are
-/// fixed phrases and never hold owner input; the rate-limited and locked-out ones add the seconds to wait.
+/// Returns the answer when migration authorization for `command` was not given, so nothing was exported or rewrapped.
+/// Every refusal passes through here, so this is the one place that maps them to `migration-denied`,
+/// `migration-unavailable`, `migration-rate-limited` and `tpm-locked-out`
+/// ([migration authorization: Error codes](../../../../design/migration-authorization.md#error-codes)). The messages are fixed phrases
+/// and never hold owner input; the rate-limited and locked-out ones add the seconds to wait.
 pub fn no_authorization(command: &str, none: NoAuthorization) -> AdminResponse {
     let (code, message) = match none.0 {
         MigrationRefusal::Denied(owner) => (ErrorCode::MigrationDenied, format!("{}; {NOTHING_DONE}", denial(owner))),
@@ -217,8 +240,8 @@ pub fn no_authorization(command: &str, none: NoAuthorization) -> AdminResponse {
 /// What every refusal ends with: the command did nothing.
 const NOTHING_DONE: &str = "nothing was exported or rewrapped";
 
-/// Why an owner refusal is a denial. The passphrase phrases differ so that the owner can tell a mistyped passphrase from
-/// the passphrase of another vault.
+/// Says why an owner refusal is a denial. The passphrase phrases differ so that the owner can tell a mistyped
+/// passphrase from the passphrase of another vault.
 fn denial(refusal: OwnerRefusal) -> &'static str {
     match refusal {
         OwnerRefusal::WrongSecret => "the vault passphrase was wrong",

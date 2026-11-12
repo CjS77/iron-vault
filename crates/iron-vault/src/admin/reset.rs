@@ -1,4 +1,5 @@
-//! `reset`: discards the vault and the config after a confirmation typed at a terminal (`design/reset.md`, "The exchange").
+//! `reset`: discards the vault and the config after a confirmation typed at a terminal
+//! ([reset: The exchange](../../../../design/reset.md#the-exchange)).
 //!
 //! The service writes the summary and compares the confirmation; the CLI only refuses to send the request without a
 //! terminal. No owner factor is asked: reset is for the owner who has lost them, and the admin principal could delete the
@@ -66,7 +67,7 @@ fn confirmation_label(plan: &ResetPlan) -> String {
     format!("Type {} to discard {what}", plan.confirmation())
 }
 
-/// The summary the owner reads before the confirmation: what goes, what stays, and what to keep.
+/// Returns the summary the owner reads before the confirmation: what goes, what stays, and what to keep.
 fn summary(plan: &ResetPlan) -> String {
     let lines = [
         format!("discard {}", discarding(plan)),
@@ -195,7 +196,8 @@ fn refused(refusal: ResetRefusal) -> AdminResponse {
     }
 }
 
-/// `reset-failed`, naming the step and the file, and whether the vault is intact or the next reset resumes.
+/// Returns `reset-failed`, naming the step and the file, and saying whether the vault is intact or the next reset
+/// resumes.
 fn failed(failure: &DiscardError) -> AdminResponse {
     let advice = match failure_step(&failure.cause) {
         iron_vault_store::ResetStep::Begin => "the vault is intact",

@@ -1,5 +1,6 @@
-//! `approver list`: every pinned approver in approver order (specification §14; `design/approval-signers.md`,
-//! "`approver list`").
+//! `approver list`: every pinned approver in approver order
+//! ([spec §14](../../../../design/iron-vault-specification.md#14-recipients-startup-and-memory);
+//! [approval signers: `approver list`](../../../../design/approval-signers.md#approver-list)).
 //!
 //! It needs Ready and the service-wide lock. It shows approver IDs, kinds, labels and times only, so the admin principal
 //! check is all the authority it needs.
@@ -48,7 +49,7 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for ApproverList<F> {
     }
 }
 
-/// The error answer for a refused `approver list`.
+/// Returns the error answer for a refused `approver list`.
 fn refused(refusal: ApproverListRefusal) -> AdminResponse {
     let (code, message) = match refusal {
         ApproverListRefusal::Busy => (ErrorCode::Busy, "another operation is running; try again shortly".to_owned()),

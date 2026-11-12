@@ -1,9 +1,9 @@
 //! `approver remove`: unpins an approval signer after owner presence from any pinned approver, the removed one included
-//! (`design/approval-signers.md`, "`approver remove <approver ID>`").
+//! ([approval signers: `approver remove <approver ID>`](../../../../design/approval-signers.md#approver-remove-approver-id)).
 //!
-//! [`ServiceContext::plan_approver_removal`] refuses an ID no pinned approver has, the last approver and the approver that
-//! signed the active approval before any prompt, so no proof removes either of the last two: removing the active signer
-//! would stop the active `config.toml.sig` verifying and take every route down at the next config check.
+//! [`ServiceContext::plan_approver_removal`] refuses an ID no pinned approver has, the last approver and the approver
+//! that signed the active approval before any prompt, so no proof removes either of the last two: removing the active
+//! signer would stop the active `config.toml.sig` verifying and take every route down at the next config check.
 
 use std::sync::Arc;
 
@@ -39,7 +39,7 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for ApproverRemove<F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ApproverRemove<F> {
-    /// Steps 1 to 7. A prompt that gets no owner input drops the plan, which releases the service-wide lock, before
+    /// Runs steps 1 to 7. A prompt that gets no owner input drops the plan, which releases the service-wide lock, before
     /// anything is written.
     async fn run(&self, request: AdminRequest, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
         let AdminRequest::ApproverRemove { approver } = request else {
@@ -70,7 +70,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverRemove<F> {
         }
     }
 
-    /// Step 1: the service is Ready and the argument is a version 4 UUID.
+    /// Runs step 1: checks that the service is Ready and the argument is a version 4 UUID.
     async fn checked(&self, bytes: [u8; 16]) -> Result<ApproverId, AdminResponse> {
         let state = self.service.state().await;
         if !state.admin_allows(AdminOperation::VaultChange) {
@@ -80,7 +80,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverRemove<F> {
     }
 }
 
-/// The summary the owner reads before owner presence.
+/// Returns the summary the owner reads before owner presence.
 fn summary<F: StoreFs + Send + Sync + 'static>(plan: &ApproverChangePlan<'_, F>, approver: &PinnedApprover) -> String {
     format!(
         "remove an approval signer\n  vault: {}\n  approver: {}\n  kind: {}\n  label: {}\n  enrolled: {}\n  \
@@ -95,7 +95,7 @@ fn summary<F: StoreFs + Send + Sync + 'static>(plan: &ApproverChangePlan<'_, F>,
     )
 }
 
-/// The notice after the removal committed, with a further line when the key file could not be removed.
+/// Returns the notice after the removal committed, with a further line when the key file could not be removed.
 fn completion(id: ApproverId, approvers: usize, key_file: &KeyFileOutcome) -> String {
     let left = match key_file {
         KeyFileOutcome::Removed => "",

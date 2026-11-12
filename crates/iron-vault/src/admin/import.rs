@@ -1,10 +1,23 @@
-//! `import`: makes a vault from a migration bundle that `export` wrote on another machine (specification §16 steps 3 to
-//! 6; `design/migration-bundle.md`, "Admin exchanges" > "Import").
+//! `import`: makes a vault from a migration bundle that `export` wrote on another machine
+//! ([spec §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration) steps 3 to 6;
+//! [migration bundle: Admin exchanges, Import](../../../../design/migration-bundle.md#import-1)).
 //!
 //! The bundle follows the request as bundle data frames and is decoded as it arrives. The service, not the CLI, prompts
 //! for the export passphrase and the new vault passphrase, generates the destination's keys and shows the recovery key
 //! once, so nothing secret crosses the socket but what the owner types. Nothing is written until the owner confirms the
 //! recovery key, and the vault routes nothing afterwards until the owner approves a config.
+//!
+//! ```text
+//! 1  Locked, memory locked, directories free, import slot, handoff     wrong-state, memory-unprotected, busy, ...
+//! 2  bundle data frames to the empty one, decoded as they arrive       bundle-invalid
+//! 3  export passphrase; open the exported identity envelope            import-denied
+//! 4  verify the bundle with the vault identity                         bundle-invalid
+//! 5  summary, from the verified files only
+//! 6  new vault passphrase, twice                                       passphrase-rejected
+//! 7  new keys; reveal the recovery key; "Type yes ..."                 declined
+//! 8  service-wide lock, the checks again, the write order              busy, wrong-state, import-failed
+//! 9  success: the import result; the service stays Locked
+//! ```
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -62,7 +75,7 @@ struct Checked {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Import<F> {
-    /// The nine steps of the exchange.
+    /// Runs the nine steps of the exchange.
     async fn run(&self, exchange: &mut Exchange, host_unlock: bool) -> Result<AdminResponse, ExchangeError> {
         let checked = match self.check(host_unlock).await {
             Ok(checked) => checked,
@@ -93,9 +106,9 @@ impl<F: StoreFs + Send + Sync + 'static> Import<F> {
         Ok(self.write(exchange, bundle, (keys, passphrase)).await)
     }
 
-    /// Step 1, before any prompt: Locked, locked memory in a protected install, an initialization state import may
-    /// write over, the import slot and, with `host_unlock`, the unlock handoff. The handoff is read last, so a service
-    /// whose memory is not locked never opens it.
+    /// Runs step 1, before any prompt: checks for Locked, locked memory in a protected install and an initialization
+    /// state import may write over, takes the import slot and, with `host_unlock`, reads the unlock handoff. The
+    /// handoff is read last, so a service whose memory is not locked never opens it.
     async fn check(&self, host_unlock: bool) -> Result<Checked, InitRefusal> {
         let state = self.service.state().await;
         if !state.admin_allows(AdminOperation::Initialize) {
@@ -115,7 +128,7 @@ impl<F: StoreFs + Send + Sync + 'static> Import<F> {
         })
     }
 
-    /// Steps 3 and 4: the export passphrase, then the bundle opened and verified with it.
+    /// Runs steps 3 and 4: asks for the export passphrase, then opens and verifies the bundle with it.
     async fn open(&self, exchange: &mut Exchange, decoded: DecodedBundle) -> Result<Result<VerifiedBundle, AdminResponse>, ExchangeError> {
         let input = exchange.prompt(&secret_prompt("Export passphrase")).await?;
         let Some(passphrase) = export_passphrase(&input) else {
@@ -133,8 +146,8 @@ impl<F: StoreFs + Send + Sync + 'static> Import<F> {
         })
     }
 
-    /// Step 8, then 9: the write order with its progress notices, and the result. A notice that cannot be written does not
-    /// stop the write order, which runs on to its commit point.
+    /// Runs step 8, then 9: the write order with its progress notices, and the result. A notice that cannot be written
+    /// does not stop the write order, which runs on to its commit point.
     async fn write(&self, exchange: &mut Exchange, bundle: VerifiedBundle, secrets: (ImportKeys, Passphrase)) -> AdminResponse {
         let (sender, mut notices) = mpsc::unbounded_channel();
         let import = self.service.import(bundle, secrets, Progress::new(sender));
@@ -156,7 +169,7 @@ impl<F: StoreFs + Send + Sync + 'static> Import<F> {
     }
 }
 
-/// Step 2: reads bundle data frames to the empty one and decodes them as they arrive, so a bundle that breaks a rule is
+/// Runs step 2: reads bundle data frames to the empty one and decodes them as they arrive, so a bundle that breaks a rule is
 /// refused at that frame. A missed deadline is the exchange's error, which closes it without a response.
 async fn receive(exchange: &mut Exchange) -> Result<Result<DecodedBundle, AdminResponse>, ExchangeError> {
     let mut decoder = BundleDecoder::new();
@@ -171,19 +184,19 @@ async fn receive(exchange: &mut Exchange) -> Result<Result<DecodedBundle, AdminR
     }
 }
 
-/// Step 6: the new vault passphrase, entered twice and held to the passphrase rules.
+/// Runs step 6: asks for the new vault passphrase twice and holds it to the passphrase rules.
 async fn vault_passphrase(exchange: &mut Exchange) -> Result<Result<Passphrase, String>, ExchangeError> {
     let entered = chosen(exchange, VAULT_PROMPTS, WhichPassphrase::Vault).await?;
     Ok(entered.and_then(|text| Passphrase::new(text).map_err(|e| e.to_string())))
 }
 
-/// The typed export passphrase; `None` when it is not text, which no export passphrase is.
+/// Reads the typed export passphrase. Returns `None` when it is not text, which no export passphrase is.
 fn export_passphrase(input: &OwnerInput) -> Option<ExportPassphrase> {
     let text = std::str::from_utf8(input.expose_secret()).ok()?;
     ExportPassphrase::new(SecretString::from(text)).ok()
 }
 
-/// The notice for an Unfinished state: what is there, and that confirming the new recovery key discards it.
+/// Returns the notice for an Unfinished state: what is there, and that confirming the new recovery key discards it.
 fn unfinished_notice(kind: UnfinishedKind) -> String {
     let (what, writer, config) = match kind {
         UnfinishedKind::Initialization => ("initialization", "an init is", ""),
@@ -197,7 +210,7 @@ fn unfinished_notice(kind: UnfinishedKind) -> String {
     )
 }
 
-/// The summary the owner reads before choosing a passphrase, built from the verified files only.
+/// Returns the summary the owner reads before choosing a passphrase, built from the verified files only.
 fn summary_text(bundle: &VerifiedBundle, host_unlock: bool) -> String {
     let approvers = bundle
         .approvers()
@@ -236,7 +249,8 @@ fn result(vault: &ImportedVault) -> ImportResult {
     }
 }
 
-/// `bundle-invalid` naming the `rule` of the encoding or the `check` with the vault identity, never a byte of the bundle.
+/// Returns `bundle-invalid` naming the `rule` of the encoding or the `check` with the vault identity, never a byte of
+/// the bundle.
 fn invalid(kind: &str, name: &'static str) -> AdminResponse {
     ImportRefused::BundleInvalid { detail: name }.emit();
     error(
@@ -245,8 +259,8 @@ fn invalid(kind: &str, name: &'static str) -> AdminResponse {
     )
 }
 
-/// `import-denied`: the passphrase does not open the bundle. There is no attempt limit, since whoever holds the bundle can
-/// guess at it offline.
+/// Returns `import-denied`: the passphrase does not open the bundle. There is no attempt limit, since whoever holds the
+/// bundle can guess at it offline.
 fn denied() -> AdminResponse {
     ImportRefused::WrongPassphrase.emit();
     error(
@@ -255,7 +269,7 @@ fn denied() -> AdminResponse {
     )
 }
 
-/// `import-failed`, naming the step. Only when the commit point's unlink landed and its directory fsync failed is the
+/// Returns `import-failed`, naming the step. Only when the commit point's unlink landed and its directory fsync failed is the
 /// outcome unknown; any other failure leaves the vault Unfinished, which a re-run discards.
 pub(super) fn failed(failure: &ImportError) -> AdminResponse {
     let advice = match failure.cause() {
@@ -265,8 +279,8 @@ pub(super) fn failed(failure: &ImportError) -> AdminResponse {
     error(ErrorCode::ImportFailed, format!("{failure}; {advice}"))
 }
 
-/// Turns the store's progress into notices for the owner: one before each step, and within a step that counts records, one
-/// whenever [`NOTICE_INTERVAL`] has passed. It runs on the blocking pool, so it only queues text for the exchange.
+/// Turns the store's progress into notices for the owner: one before each step, and within a step that counts records,
+/// one whenever [`NOTICE_INTERVAL`] has passed. It runs on the blocking pool, so it only queues text for the exchange.
 struct Progress {
     sender: mpsc::UnboundedSender<String>,
     last: Instant,

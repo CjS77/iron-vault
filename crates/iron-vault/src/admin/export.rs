@@ -1,11 +1,26 @@
 //! `export`: releases the vault as a migration bundle sealed to an export passphrase, only after fresh source-owner
-//! authorization (specification §16; `design/migration-bundle.md`, "Export"; `design/migration-authorization.md`, "Admin
-//! exchange").
+//! authorization ([spec §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration);
+//! [migration bundle: Export](../../../../design/migration-bundle.md#export-1);
+//! [migration authorization: Admin exchange](../../../../design/migration-authorization.md#admin-exchange)).
 //!
 //! An admin connection or an unlocked vault is not enough: the bundle carries every credential, so the exchange holds
 //! the service-wide lock from the session through the response, checks the snapshot before any prompt, and asks for the
-//! vault passphrase. Only the authorization that answer proves starts the stream. The bundle reaches the CLI as bundle
-//! data frames; it is ciphertext and public metadata, so no plaintext secret leaves the service.
+//! vault passphrase or a `tpm` approver's TPM approval PIN. Only the authorization that answer proves starts the
+//! stream. The bundle reaches the CLI as bundle data frames; it is ciphertext and public metadata, so no plaintext
+//! secret leaves the service.
+//!
+//! ```text
+//! 1     Ready, holding the vault identity                   wrong-state
+//! 2     take the service-wide lock                          busy
+//! 3     snapshot checks                                     export-failed, approver-set-invalid
+//! 4     summary, naming the method asked first
+//! 5-7   migration authorization                             migration-denied, migration-unavailable,
+//!                                                           migration-rate-limited, tpm-locked-out
+//! 8     export passphrase, twice                            passphrase-rejected, migration-unavailable
+//! 9     same state and check generation; consume the proof  wrong-state, migration-denied
+//! 10    snapshot read again, streamed as bundle data        export-failed
+//! 11    success: vault ID, record count, byte count
+//! ```
 
 use std::sync::Arc;
 
@@ -29,7 +44,7 @@ use crate::service_state::ServiceState;
 
 const COMMAND: &str = "export";
 
-/// What every `export-failed` ends with.
+/// The phrase every `export-failed` message ends with.
 const NO_BUNDLE: &str = "no bundle was completed";
 
 /// The notice before the export passphrase prompts.
@@ -54,7 +69,7 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for Export<F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Export<F> {
-    /// The eleven steps of the exchange. Every early return drops the session, which releases the service-wide lock and
+    /// Runs the eleven steps of the exchange. Every early return drops the session, which releases the service-wide lock and
     /// retires any pending challenge.
     async fn run(&self, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
         let session = match self.service.begin_migration().await {
@@ -81,7 +96,8 @@ impl<F: StoreFs + Send + Sync + 'static> Export<F> {
         self.stream(exchange, &session, authorization, passphrase).await
     }
 
-    /// Steps 9 to 11: consume the authorization, relay the bundle, then end it with the empty frame and the result.
+    /// Runs steps 9 to 11: consumes the authorization, relays the bundle, then ends it with the empty frame and the
+    /// result.
     async fn stream(
         &self,
         exchange: &mut Exchange,
@@ -116,7 +132,7 @@ impl<F: StoreFs + Send + Sync + 'static> Export<F> {
     }
 }
 
-/// Step 8: the export passphrase, typed twice and checked by the passphrase rules once both are in. A `lock` at either
+/// Runs step 8: asks for the export passphrase twice and checks it by the passphrase rules once both are in. A `lock` at either
 /// prompt ends the exchange with `migration-unavailable`, and the unused authorization drops with it.
 async fn export_passphrase<F: StoreFs + Send + Sync + 'static>(
     exchange: &mut Exchange,
@@ -190,7 +206,7 @@ fn transfer_ended(ended: RelayEnded) -> Result<AdminResponse, ExchangeError> {
     answer
 }
 
-/// The stream's task ended without a result.
+/// Answers a stream whose task ended without a result.
 fn task_ended() -> AdminResponse {
     ExportFailed {
         step: SnapshotStep::Snapshot,
@@ -201,7 +217,7 @@ fn task_ended() -> AdminResponse {
     export_failed("export snapshot step: the export did not finish".to_owned())
 }
 
-/// Step 11: `migration.exported`, then the result the CLI checks its byte count against.
+/// Runs step 11: emits `migration.exported`, then returns the result the CLI checks its byte count against.
 fn completed(exported: &ExportedBundle) -> AdminResponse {
     let summary = &exported.summary;
     Exported { summary }.emit();
@@ -212,7 +228,7 @@ fn completed(exported: &ExportedBundle) -> AdminResponse {
     }
 }
 
-/// The summary the owner confirms by typing the secret of the method named `authorize`.
+/// Returns the summary the owner confirms by typing the secret of the method named `authorize`.
 fn summary_text(summary: &SnapshotSummary, authorize: &str) -> String {
     format!(
         "export the vault\n  vault: {}\n  credentials: {}\n  approver keys: {}\n  authorize with: {authorize}\n  \
@@ -221,7 +237,7 @@ fn summary_text(summary: &SnapshotSummary, authorize: &str) -> String {
     )
 }
 
-/// Step 3's failure: the snapshot check, recorded by the service, names the step and the file.
+/// Answers step 3's failure: the snapshot check, recorded by the service, names the step and the file.
 fn check_failed(failure: ExportError) -> AdminResponse {
     match failure {
         ExportError::WrongState(state) => wrong_state(state),
@@ -236,8 +252,8 @@ fn check_failed(failure: ExportError) -> AdminResponse {
     }
 }
 
-/// A refusal at step 2 or step 9. Before any prompt a state other than Ready is `wrong-state`; `no_authorization` reads a
-/// Locked state as a `lock` that cancelled the vault passphrase prompt.
+/// Answers a refusal at step 2 or step 9. Before any prompt a state other than Ready is `wrong-state`;
+/// `no_authorization` reads a Locked state as a `lock` that cancelled the authorization prompt.
 fn refused(refusal: MigrationRefusal) -> AdminResponse {
     match refusal {
         MigrationRefusal::WrongState(state) => wrong_state(state),

@@ -1,8 +1,9 @@
-//! `forget-machine`: checks that a retired machine's recipient key is gone from the vault (specification §16;
-//! `design/forget-machine.md`).
+//! `forget-machine`: checks that a retired machine's recipient key is gone from the vault
+//! ([spec §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration);
+//! [forget-machine](../../../../design/forget-machine.md)).
 //!
-//! It is read-only and runs no process. The service answers with the facts; the CLI prints the decommission guidance, which
-//! the administrator carries out.
+//! It is read-only and runs no process. The service answers with the facts; the CLI prints the decommission guidance,
+//! which the administrator carries out.
 
 use std::sync::Arc;
 
@@ -51,7 +52,7 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for ForgetMachine<F> {
     }
 }
 
-/// The audit event for what the check found.
+/// Returns the audit event for what the check found.
 fn audit<'a>(key: &'a RecipientKey, check: &'a ForgetCheck) -> ForgetChecked<'a> {
     let outcome = match check {
         ForgetCheck::Enrolled(entry) => ForgetOutcome::StillEnrolled(entry),
@@ -63,8 +64,8 @@ fn audit<'a>(key: &'a RecipientKey, check: &'a ForgetCheck) -> ForgetChecked<'a>
     ForgetChecked { recipient: key, outcome }
 }
 
-/// A key still enrolled is an error whose message is the next step; otherwise the facts for the guidance. The message names the
-/// role only: the admin protocol never echoes owner input.
+/// Answers the check. A key still enrolled is an error whose message is the next step; otherwise the answer is the facts
+/// for the guidance. The message names the role only: the admin protocol never echoes owner input.
 fn answer(check: ForgetCheck) -> AdminResponse {
     match check {
         ForgetCheck::Enrolled(entry) => error(

@@ -1,10 +1,21 @@
 //! `approver add`: enrolls a new approval signer after owner presence from a pinned approver
-//! (`design/approval-signers.md`, "`approver add`").
+//! ([approval signers: `approver add`](../../../../design/approval-signers.md#approver-add)).
 //!
-//! Only a pinned approver's proof authorizes it: the vault passphrase, migration authorization or a recovery key would let
-//! a stolen unlock secret enroll a signer of its own and then approve any config. Owner presence comes before the new
-//! signer's secret, so the owner never chooses a passphrase for a change that is then refused. The new approval passphrase
-//! is not compared with the vault passphrase, since that comparison would be an unlimited guessing oracle.
+//! Only a pinned approver's proof authorizes it: the vault passphrase, migration authorization or a recovery key would
+//! let a stolen unlock secret enroll a signer of its own and then approve any config. Owner presence comes before the
+//! new signer's secret, so the owner never chooses a passphrase for a change that is then refused. The new approval
+//! passphrase is not compared with the vault passphrase, since that comparison would be an unlimited guessing oracle.
+//!
+//! ```text
+//! 1  Ready, label rule, kind offered here              wrong-state, approver-invalid, approver-kind-unavailable
+//! 2  take the service-wide lock                        busy
+//! 3  read the approval state back; fewer than 16       vault-write-failed, approver-set-invalid
+//! 4  summary, as notices
+//! 5  owner presence: the approver prompt               approval-denied, approval-unavailable, tpm-locked-out
+//! 6  the new secret, twice: passphrase or TPM PIN      passphrase-rejected
+//! 7  still Ready at the recorded check generation      wrong-state
+//! 8  the approver change, then the completion notice   vault-write-failed, approver-kind-unavailable
+//! ```
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -43,7 +54,7 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for ApproverAdd<F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ApproverAdd<F> {
-    /// Steps 1 to 8. A prompt that gets no owner input drops the plan, which releases the service-wide lock, before
+    /// Runs steps 1 to 8. A prompt that gets no owner input drops the plan, which releases the service-wide lock, before
     /// anything is written.
     async fn run(&self, request: AdminRequest, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
         let AdminRequest::ApproverAdd { kind, label } = request else {
@@ -75,8 +86,8 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverAdd<F> {
         })
     }
 
-    /// Step 1: the service is Ready, the label follows its rule and this install offers the kind. `software` is always
-    /// offered; `tpm` only where [`ServiceContext::tpm_helper_socket`] finds the helper; `hardware` not yet.
+    /// Runs step 1: checks that the service is Ready, the label follows its rule and this install offers the kind.
+    /// `software` is always offered; `tpm` only where [`ServiceContext::tpm_helper_socket`] finds the helper; `hardware` not yet.
     async fn checked(&self, kind: RequestedSignerKind, label: &str) -> Result<(ApproverLabel, NewSigner), AdminResponse> {
         let state = self.service.state().await;
         if !state.admin_allows(AdminOperation::VaultChange) {
@@ -108,7 +119,8 @@ enum NewSigner {
     Tpm { socket: PathBuf },
 }
 
-/// Step 6 for the signer's kind, then steps 7 and 8: asks for the new secret and runs the approver change that enrolls.
+/// Runs step 6 for the signer's kind, then steps 7 and 8: asks for the new secret and runs the approver change that
+/// enrolls.
 async fn enroll<F: StoreFs + Send + Sync + 'static>(
     exchange: &mut Exchange,
     plan: ApproverChangePlan<'_, F>,
@@ -129,8 +141,8 @@ async fn enroll<F: StoreFs + Send + Sync + 'static>(
     Ok(enrolled.map_err(|refusal| refused(COMMAND, refusal)))
 }
 
-/// Step 6 for `tpm`: the new TPM approval PIN, entered twice and checked by the PIN rules. A `lock` at either prompt ends
-/// the command, as for `software`.
+/// Runs step 6 for `tpm`: asks for the new TPM approval PIN twice and checks it by the PIN rules. A `lock` at either
+/// prompt ends the command, as for `software`.
 async fn new_pin<F: StoreFs + Send + Sync + 'static>(
     exchange: &mut Exchange,
     plan: &ApproverChangePlan<'_, F>,
@@ -150,8 +162,9 @@ async fn new_pin<F: StoreFs + Send + Sync + 'static>(
     }))
 }
 
-/// Step 6 for `software`: the new approval passphrase, entered twice and checked by the passphrase rules. A `lock` at
-/// either prompt ends the command with `wrong-state`, as it would at step 7. Both inputs are cleared when they drop here.
+/// Runs step 6 for `software`: asks for the new approval passphrase twice and checks it by the passphrase rules. A
+/// `lock` at either prompt ends the command with `wrong-state`, as it would at step 7. Both inputs are cleared when
+/// they drop here.
 async fn new_passphrase<F: StoreFs + Send + Sync + 'static>(
     exchange: &mut Exchange,
     plan: &ApproverChangePlan<'_, F>,
@@ -172,7 +185,8 @@ async fn new_passphrase<F: StoreFs + Send + Sync + 'static>(
     }))
 }
 
-/// One secret prompt of step 6, ended by a `lock` waiting for the service-wide lock the plan holds (`None`).
+/// Sends one secret prompt of step 6. Returns `None` when a `lock` waiting for the service-wide lock the plan holds
+/// ends it.
 async fn secret_prompt<F: StoreFs + Send + Sync + 'static>(
     exchange: &mut Exchange,
     plan: &ApproverChangePlan<'_, F>,
@@ -186,7 +200,7 @@ async fn secret_prompt<F: StoreFs + Send + Sync + 'static>(
     exchange.prompt_unless(&prompt, plan.lock_requested()).await
 }
 
-/// The summary the owner reads before owner presence.
+/// Returns the summary the owner reads before owner presence.
 fn summary<F: StoreFs + Send + Sync + 'static>(plan: &ApproverChangePlan<'_, F>, label: &ApproverLabel, signer: &NewSigner) -> String {
     let (kind, next) = match signer {
         NewSigner::Software => ("software", SOFTWARE_NEXT),
@@ -208,12 +222,13 @@ const TPM_NEXT: &str = "next: choose its TPM approval PIN, at least 6 characters
      the key works only on this machine's TPM and will not move with a migration bundle\n  \
      a forgotten PIN is recovered only through another approver, so keep a software approver";
 
-/// `label` as the owner sees it, escaped as the approver prompt escapes a pinned approver's label, since the owner chose it.
+/// Returns `label` as the owner sees it, escaped as the approver prompt escapes a pinned approver's label, since the
+/// owner chose it.
 fn shown_label(label: &ApproverLabel) -> String {
     iron_vault_policy::escaped(label.as_str())
 }
 
-/// The notice after the enrollment committed.
+/// Returns the notice after the enrollment committed.
 fn completion(approver: &PinnedApprover, approvers: usize) -> String {
     format!(
         "enrolled approver {} ({}); the vault has {approvers} approvers.\n",

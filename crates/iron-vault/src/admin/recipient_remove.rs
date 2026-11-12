@@ -1,10 +1,13 @@
 //! `recipient remove`: removes an enrolled recipient from the identity envelope and the inventory after owner presence
-//! (specification §14, §16; `design/recipients.md`, "`recipient remove <age1…>`").
+//! (spec [§14][s14], [§16][s16]; [recipients: `recipient remove <age1…>`](../../../../design/recipients.md#recipient-remove-age1)).
 //!
 //! The service-wide lock, the inventory check and the independence rule all come from
 //! [`ServiceContext::plan_recipient_removal`], so a key that is not enrolled, or whose removal would leave fewer than two
-//! independent ways in, is refused before any prompt. The lock is held through the summary, the approval passphrase prompt
-//! and the write. Removal reaches only future envelopes (§16), and the completion notice says so.
+//! independent ways in, is refused before any prompt. The lock is held through the summary, the approver prompt and
+//! the write. Removal reaches only future envelopes ([§16][s16]), and the completion notice says so.
+//!
+//! [s14]: ../../../../design/iron-vault-specification.md#14-recipients-startup-and-memory
+//! [s16]: ../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -78,7 +81,7 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientRemove<F> {
     }
 }
 
-/// The summary the owner reads before typing the approval passphrase.
+/// Returns the summary the owner reads before answering the approver prompt.
 fn summary<F: StoreFs + Send + Sync + 'static>(removal: &RecipientRemoval<'_, F>) -> String {
     let (entry, remaining) = (removal.removed(), removal.remaining());
     let (vault, key, role, enrolled) = (remaining.vault_id(), entry.key(), entry.role().name(), entry.enrolled_at());
@@ -91,7 +94,7 @@ fn summary<F: StoreFs + Send + Sync + 'static>(removal: &RecipientRemoval<'_, F>
     )
 }
 
-/// `3 (operational 1, recovery 1, added 1)`: the recipient count and its split by role, in role order.
+/// Formats the recipient count and its split by role, in role order: `3 (operational 1, recovery 1, added 1)`.
 fn counts(inventory: &RecipientInventory) -> String {
     let by_role = inventory
         .entries()
@@ -106,7 +109,7 @@ fn counts(inventory: &RecipientInventory) -> String {
     format!("{} ({})", inventory.entries().len(), split.join(", "))
 }
 
-/// The notice after a committed removal: the fixed sentences first, then what the removed role needs next.
+/// Returns the notice after a committed removal: the fixed sentences first, then what the removed role needs next.
 fn completion(done: &RemovedRecipient) -> String {
     let lines = [
         Some(format!(
@@ -138,7 +141,8 @@ fn refused(refusal: RemovalRefusal) -> AdminResponse {
     }
 }
 
-/// Says whether the change may have committed, so the owner knows what to check.
+/// Returns the failure message for `cause`, ending in "nothing was changed" if and only if the change did not commit,
+/// and otherwise in how to check whether it did.
 fn failed_message(committed: ChangeCommitted, cause: &str) -> String {
     match committed {
         ChangeCommitted::No => format!("{cause}; nothing was changed"),

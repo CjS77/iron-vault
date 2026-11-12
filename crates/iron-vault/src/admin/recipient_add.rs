@@ -1,10 +1,14 @@
-//! `recipient add`: enrols a recipient key the owner supplies, after migration authorization (specification §16, §19,
-//! §16; `design/recipients.md`, "`recipient add <age1…>`"; `design/migration-authorization.md`, "Admin exchange").
+//! `recipient add`: enrols a recipient key the owner supplies, after migration authorization (spec [§16][s16],
+//! [§19][s19]; [recipients: `recipient add <age1…>`](../../../../design/recipients.md#recipient-add-age1);
+//! [migration authorization: Admin exchange](../../../../design/migration-authorization.md#admin-exchange)).
 //!
-//! The new key opens the vault identity, so this is the alternate migration path: an unlocked vault or an admin connection
-//! is not enough. The exchange holds the service-wide lock from the session through the response, shows its summary, and
-//! asks for the vault passphrase; only the authorization that answer proves reaches the rewrap, which consumes it
-//! against the key in the plan.
+//! The new key opens the vault identity, so this is the alternate migration path: an unlocked vault or an admin
+//! connection is not enough. The exchange holds the service-wide lock from the session through the response, shows its
+//! summary, and asks for the vault passphrase or a `tpm` approver's TPM approval PIN; only the authorization that answer
+//! proves reaches the rewrap, which consumes it against the key in the plan.
+//!
+//! [s16]: ../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration
+//! [s19]: ../../../../design/iron-vault-specification.md#19-v0-user-acceptance
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -27,7 +31,8 @@ use crate::service_context::{AddRefusal, Enrolled, PlanRefusal, RecipientAddPlan
 
 const COMMAND: &str = "recipient add";
 
-/// The last line of the completion notice after a new recovery key (design/recipients.md, "The completion notice").
+/// The last line of the completion notice after a new recovery key
+/// ([recipients: The completion notice](../../../../design/recipients.md#the-completion-notice)).
 const ROTATE_REMINDER: &str =
     "\nCheck the new key with iron-vault recovery check, then remove the old recovery key with iron-vault recipient remove.";
 
@@ -49,8 +54,8 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for RecipientAdd<F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
-    /// The ten steps of the admin exchange. Every early return drops the session, which releases the service-wide lock and
-    /// retires any pending challenge.
+    /// Runs the ten steps of the admin exchange. Every early return drops the session, which releases the service-wide
+    /// lock and retires any pending challenge.
     async fn run(&self, request: AdminRequest, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
         match request {
             AdminRequest::RecipientAdd { recipient, label } => self.add_key(&recipient, &label, RecipientRole::Added, exchange).await,
@@ -62,8 +67,8 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
         }
     }
 
-    /// `recipient add <age1…>`: the key the owner supplied, enrolled with `role`: `added`, or `host-unlock` for
-    /// `--host-unlock`. Both are authorized alike, by the vault passphrase.
+    /// Runs `recipient add <age1…>`: enrols the key the owner supplied with `role`, `added`, or `host-unlock` for
+    /// `--host-unlock`. Both are authorized alike, by migration authorization.
     async fn add_key(
         &self,
         recipient: &str,
@@ -103,9 +108,9 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
         }
     }
 
-    /// `recipient add --recovery`: the service generates the key, shows it once before the challenge is issued (a challenge
-    /// lives 2 minutes and saving a key can take longer), and enrols it only after the owner confirms and authorizes. From
-    /// the reveal on, every ending says what to do with the key shown.
+    /// Runs `recipient add --recovery`: generates the key, shows it once before the challenge is issued (a challenge
+    /// lives 2 minutes and saving a key can take longer), and enrols it only after the owner confirms and authorizes.
+    /// From the reveal on, every ending says what to do with the key shown.
     async fn add_recovery(&self, label: &str, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
         let label = match RecipientLabel::new(label) {
             Ok(label) => label,
@@ -144,7 +149,7 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
     }
 }
 
-/// Step 1's argument rules. The message names the rule, never the argument.
+/// Parses the arguments by step 1's rules. The message names the rule, never the argument.
 fn parse_arguments(recipient: &str, label: &str) -> Result<(RecipientKey, RecipientLabel), String> {
     let key = recipient
         .parse()
@@ -153,8 +158,8 @@ fn parse_arguments(recipient: &str, label: &str) -> Result<(RecipientKey, Recipi
     Ok((key, label))
 }
 
-/// The summary the owner confirms by typing the secret of the method named `authorize`: what the migration challenge
-/// binds, what the vault has afterwards, and what the factor is.
+/// Returns the summary the owner confirms by typing the secret of the method named `authorize`: what the migration
+/// challenge binds, what the vault has afterwards, and what the factor is.
 fn summary(plan: &RecipientAddPlan, authorize: &str) -> String {
     let (entry, after) = (plan.entry(), plan.after());
     let (title, next) = match entry.role() {
@@ -178,7 +183,7 @@ fn summary(plan: &RecipientAddPlan, authorize: &str) -> String {
     )
 }
 
-/// `3 (operational 1, recovery 1, added 1)`: the count and its split by role, in role order.
+/// Formats the recipient count and its split by role, in role order: `3 (operational 1, recovery 1, added 1)`.
 fn role_counts(inventory: &RecipientInventory) -> String {
     let by_role = inventory.entries().fold(BTreeMap::new(), |mut counts, entry| {
         *counts.entry(entry.role()).or_insert(0usize) += 1;
@@ -188,8 +193,8 @@ fn role_counts(inventory: &RecipientInventory) -> String {
     format!("{} ({})", inventory.entries().len(), split.join(", "))
 }
 
-/// The completion notice: the new key and recipient count, the old-copies sentences, and the rotate reminder after a new
-/// recovery key. It ends in a newline like every other notice.
+/// Returns the completion notice: the new key and recipient count, the old-copies sentences, and the rotate reminder
+/// after a new recovery key. It ends in a newline like every other notice.
 fn completion(key: &RecipientKey, role: RecipientRole, recipients: usize, unfinished: bool) -> String {
     let pending = if unfinished {
         "\nThe recipient inventory is finished at the next recipient command."
@@ -203,8 +208,8 @@ fn completion(key: &RecipientKey, role: RecipientRole, recipients: usize, unfini
     )
 }
 
-/// Step 10's success: the completion notice, then the new key and the recipient count. A new recovery key adds the
-/// reminder to check it and retire the old one.
+/// Sends step 10's success: the completion notice, then the new key and the recipient count. A new recovery key adds
+/// the reminder to check it and retire the old one.
 async fn completed(
     exchange: &mut Exchange,
     key: &RecipientKey,
@@ -219,8 +224,8 @@ async fn completed(
     })
 }
 
-/// Step 2's refusals. A service that is not Ready is `wrong-state` here, before any prompt; `no_authorization` reads a
-/// Locked state as a `lock` that cancelled a prompt.
+/// Answers step 2's refusals. A service that is not Ready is `wrong-state` here, before any prompt; `no_authorization`
+/// reads a Locked state as a `lock` that cancelled a prompt.
 fn not_begun(refusal: MigrationRefusal) -> AdminResponse {
     match refusal {
         MigrationRefusal::WrongState(state) => inventory_refused(COMMAND, RecipientRefusal::WrongState(state)),
@@ -239,10 +244,10 @@ fn plan_refused(refusal: PlanRefusal) -> AdminResponse {
     }
 }
 
-/// What an uncommitted-or-not `recipient add <age1…>` tells the owner when the write may have committed.
+/// What `recipient add <age1…>` tells the owner when the write may have committed.
 const UNKNOWN_KEY: &str = "the change may have committed: run `iron-vault recipient list` to see whether the key is enrolled";
 
-/// The response for a failed step 9 or 10; `unknown` is the advice for an outcome that may have committed.
+/// Returns the response for a failed step 9 or 10; `unknown` is the advice for an outcome that may have committed.
 fn add_refused(refusal: AddRefusal, unknown: &str) -> AdminResponse {
     match refusal {
         AddRefusal::WrongState(state) => inventory_refused(COMMAND, RecipientRefusal::WrongState(state)),
@@ -265,8 +270,8 @@ fn key_dead(response: AdminResponse) -> AdminResponse {
     with_advice(response, DEAD_RECOVERY_KEY)
 }
 
-/// A failed step 9 or 10 after the reveal: the key is dead unless the rewrap may have committed, in which case the one
-/// piece of advice names the key to look for.
+/// Returns the response for a failed step 9 or 10 after the reveal: the key is dead unless the rewrap may have
+/// committed, in which case the one piece of advice names the key to look for.
 fn revealed_key_advice(key: &RecipientKey, refusal: AddRefusal) -> AdminResponse {
     let may_have_committed = match &refusal {
         AddRefusal::Interrupted => true,
