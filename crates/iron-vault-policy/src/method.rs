@@ -1,4 +1,4 @@
-//! HTTP methods that a route may allow.
+//! The HTTP methods a route may allow in its `methods` list (spec §6, §8).
 //!
 //! The set is a closed allowlist: `CONNECT` would turn the proxy into a tunnel (spec §8 step 2) and `TRACE`
 //! reflects request headers, including injected credentials, back to the caller. Neither can ever be granted.

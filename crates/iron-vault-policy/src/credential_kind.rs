@@ -1,4 +1,4 @@
-//! The name of a credential record's kind, as policy needs it to check a route's slot (spec §6, future spec §2.2).
+//! Names a credential record's kind, so activation can check that a route's slot suits it (spec §6, future spec §2.2).
 //!
 //! The kinds themselves live in `iron-vault-kinds`; this crate only names them so activation can refuse a route whose
 //! slot its credential's kind cannot fill.
@@ -15,8 +15,8 @@ pub enum CredentialKind {
 }
 
 impl CredentialKind {
-    /// Whether a credential of this kind can fill `slot`: a static key fills a header or query slot, and a Basic
-    /// credential only a Basic slot, since anywhere else its token would travel without its scheme.
+    /// Returns whether a credential of this kind can fill `slot`. A static key fills a header or query slot. A Basic
+    /// credential fills only a Basic slot, since anywhere else its token would travel without its `Basic` scheme.
     ///
     /// The match is exhaustive on purpose, with every kind and slot named: a new kind (an HMAC or signing secret, say)
     /// must not fall into a plain header or query slot by default, so it does not compile until it has its own rule.

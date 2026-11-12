@@ -1,4 +1,7 @@
-//! The fixed text around a credential written into a header slot.
+//! Slot formats: the fixed text around a credential written into a header slot (spec §9).
+//!
+//! For example, `slot = { header = "Authorization", format = "Bearer {}" }` with the key `sk-123` writes
+//! `Authorization: Bearer sk-123`.
 
 use std::fmt;
 use std::str::FromStr;
@@ -59,7 +62,7 @@ impl SlotFormat {
         &self.suffix
     }
 
-    /// `Basic {}`, the format a Basic slot writes; built directly because a constant cannot fail to parse.
+    /// Returns `Basic {}`, the format a Basic slot writes. It skips parsing because a constant cannot fail to parse.
     pub(crate) fn basic() -> Self {
         Self {
             prefix: "Basic ".to_owned(),

@@ -1,4 +1,7 @@
-//! The request-path prefix that selects a route (spec §6, §9).
+//! Route prefixes: the leading request-path segments that select a route (spec §6, §9).
+//!
+//! A request for `/fx/latest` from a caller granted the route with prefix `/fx` selects that route. The rest, `/latest`,
+//! is matched against the route's `paths` and appended to the upstream's base path.
 
 use std::fmt;
 use std::str::FromStr;

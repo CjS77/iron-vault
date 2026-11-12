@@ -1,4 +1,4 @@
-//! Upstream TCP ports.
+//! Upstream TCP ports, as the config, credential records and the final outgoing-request check compare them.
 
 use std::fmt;
 use std::num::NonZeroU16;
@@ -44,8 +44,8 @@ impl TryFrom<u16> for Port {
     }
 }
 
-/// Only canonical decimal text is accepted: `0443` or `+443` would be read as 443 by a URL parser, and a port that
-/// does not look like the number it means is an odd form worth refusing.
+/// Accepts only canonical decimal text. A URL parser would read `0443` or `+443` as 443, and a port that does not look
+/// like the number it means is an odd form worth refusing.
 impl FromStr for Port {
     type Err = PortError;
 

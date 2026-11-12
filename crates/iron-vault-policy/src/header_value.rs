@@ -1,4 +1,7 @@
-//! HTTP header field values as received from callers or written for upstreams (specification §9).
+//! HTTP header field values, as received from callers and as written for upstreams (spec §9).
+//!
+//! Every header the service forwards passes through [`HeaderValue`], so the rules that stop header splitting and
+//! request smuggling are checked in one place.
 
 use std::fmt;
 
@@ -52,7 +55,7 @@ impl HeaderValue {
     }
 }
 
-/// The error for the first byte that may not appear in a field value.
+/// Finds the first byte that may not appear in a field value and returns the error that names it.
 fn forbidden_byte(bytes: &[u8]) -> Option<HeaderValueError> {
     bytes.iter().find_map(|b| match b {
         b'\r' => Some(HeaderValueError::CarriageReturn),

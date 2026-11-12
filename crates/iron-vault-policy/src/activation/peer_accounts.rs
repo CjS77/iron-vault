@@ -1,4 +1,5 @@
-//! Resolving each peer caller's `user` to the uid the kernel will report for it (spec §7).
+//! Resolves each peer caller's `user` to the uid the kernel will report for it (spec §7). Activation runs this once,
+//! so identifying a peer caller at request time is a uid comparison.
 
 use std::collections::BTreeMap;
 
@@ -14,8 +15,8 @@ const ROOT_UID: u32 = 0;
 /// A peer caller whose account resolved to an acceptable uid.
 type Resolved<'a> = (&'a CallerName, &'a ListenerName, u32);
 
-/// Every peer caller's uid, or every reason one cannot be used: unknown, privileged and overflow accounts in caller name order,
-/// then uids shared on one listener in listener and uid order.
+/// Resolves every peer caller's uid, or returns every reason one cannot be used: unknown, privileged and overflow
+/// accounts in caller name order, then uids shared on one listener in listener and uid order.
 pub(super) fn resolve(
     config: &ValidatedConfig,
     accounts: &impl AccountDirectory,
@@ -36,7 +37,8 @@ pub(super) fn resolve(
     }
 }
 
-/// The uid of `caller`'s account `user`, unless the account is missing, privileged or the overflow uid.
+/// Looks up the uid of `caller`'s account `user`, refusing a missing account, root, the service account and the overflow
+/// uid.
 fn resolve_caller(caller: &CallerName, user: &AccountName, accounts: &impl AccountDirectory) -> Result<u32, ActivationError> {
     let uid = accounts.uid(user).ok_or_else(|| ActivationError::UnknownAccount {
         caller: caller.clone(),
@@ -50,7 +52,7 @@ fn resolve_caller(caller: &CallerName, user: &AccountName, accounts: &impl Accou
     }
 }
 
-/// One error per uid that more than one caller on a listener resolved to.
+/// Returns one error per uid that more than one caller on a listener resolved to.
 ///
 /// Validation already refuses two callers naming the same account; this catches different names for one uid, such as
 /// `passwd` aliases, which only the host can reveal.

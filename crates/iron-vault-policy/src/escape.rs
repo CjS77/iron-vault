@@ -1,7 +1,8 @@
 //! RFC 3986 character classes and the percent-escape walker shared by every path parser in this crate.
 //!
 //! Upstream base paths and caller request paths must end up in one representation, so both are built by the same
-//! walker; each parser supplies only its own decision for each escaped byte.
+//! walker; each parser supplies only its own decision for each escaped byte. For a caller request path, `%7E` decodes
+//! to `~`, `%c3%a9` (é) stays escaped as `%C3%A9`, and `%2F`, an escaped `/`, rejects the segment.
 
 use std::fmt::Write as _;
 
@@ -22,7 +23,7 @@ pub(crate) fn is_path_char(c: char) -> bool {
     is_unreserved(c) || is_sub_delim(c) || matches!(c, ':' | '@' | '%')
 }
 
-/// Two ASCII hex digits; `u8::from_str_radix` alone would also accept a leading `+`.
+/// Decodes exactly two ASCII hex digits. `u8::from_str_radix` alone would also accept a leading `+`.
 pub(crate) fn decode_hex_pair(hex: &str) -> Option<u8> {
     hex.bytes()
         .all(|b| b.is_ascii_hexdigit())

@@ -1,4 +1,20 @@
-//! The final outgoing-request check: the last decision before a credential leaves the service (spec §6, §9, implementation spec §1).
+//! Checks an outgoing request one last time before its credential leaves the service (spec §6, §9, implementation spec
+//! §1). The service's request handler calls [`final_check`] after assembly; the transport sends only the
+//! [`CheckedRequest`] it returns.
+//!
+//! The rules run in this order, and the first that fails names the [`FinalCheckError`]:
+//!
+//! ```text
+//! OutgoingRequest
+//!   │ scheme https, no user-info, no fragment ────────────────── Scheme / UserInfo / Fragment
+//!   │ host and port are the upstream's, and the record permits them ── Host / Port / Origin
+//!   │ path is the authorized upstream path, under the base path ── Path
+//!   │ method is the authorized method ─────────────────────────── Method
+//!   │ no reserved header or pseudo-header ─────────────────────── ReservedHeader
+//!   │ slot written once, holding the slot value, value nowhere else ── Slot / SlotValue / CredentialOutsideSlot
+//!   ▼
+//! CheckedRequest
+//! ```
 //!
 //! Every fact is read back from the assembled request's own URL and headers, never taken from the inputs that built
 //! it, so a defect in URL construction or slot filling is caught here rather than repeated. The route's upstream is
@@ -144,7 +160,7 @@ impl CheckedRequest {
         &self.host
     }
 
-    /// The method, URL and headers, moved out so the transport hands them to its HTTP library without copying them.
+    /// Moves out the method, URL and headers so the transport hands them to its HTTP library without copying them.
     ///
     /// The URL may hold a filled query slot and `url::Url` cannot be wiped, so moving it rather than cloning it leaves
     /// the HTTP library's own copies as the only ones. Taking the parts consumes the checked request, so they are
@@ -170,14 +186,14 @@ fn require(holds: bool, error: FinalCheckError) -> Result<(), FinalCheckError> {
     holds.then_some(()).ok_or(error)
 }
 
-/// `https`, no caller-controlled authority in user-info, and no fragment.
+/// Checks the URL's form: `https`, no caller-controlled authority in user-info, and no fragment.
 fn check_form(url: &Url) -> Result<(), FinalCheckError> {
     require(url.scheme() == "https", FinalCheckError::Scheme)?;
     require(url.username().is_empty() && url.password().is_none(), FinalCheckError::UserInfo)?;
     require(url.fragment().is_none(), FinalCheckError::Fragment)
 }
 
-/// The URL's host and port must equal the upstream's, and the pair must be one the record permits; returns the host.
+/// Checks that the URL's host and port equal the upstream's and that the record permits the pair; returns the host.
 ///
 /// The URL's host is compared exactly with the upstream's canonical [`Host`], which is the form the URL was built
 /// with, so no second conversion can make a different spelling match.
@@ -194,7 +210,7 @@ fn check_origin(url: &Url, upstream: &UpstreamUrl, permitted: &BTreeSet<(Host, P
     Ok(origin.0)
 }
 
-/// The path must start with this upstream's base segments and be exactly the authorized upstream path. The base check
+/// Checks that the path starts with this upstream's base segments and is exactly the authorized upstream path. The base check
 /// stands on its own, so a plan authorized on another route cannot pass by matching itself.
 fn check_path(url: &Url, authorized: &AuthorizedRequest, upstream: &UpstreamUrl) -> Result<(), FinalCheckError> {
     let in_base = url
@@ -203,13 +219,14 @@ fn check_path(url: &Url, authorized: &AuthorizedRequest, upstream: &UpstreamUrl)
     require(in_base && has_authorized_path(url, authorized), FinalCheckError::Path)
 }
 
-/// The transport sets the authority itself, so no reserved header may remain, and no pseudo-header may slip past it.
+/// Refuses any reserved header or pseudo-header: the transport sets the authority itself, so none may slip past it.
 fn check_headers(headers: &OutgoingHeaders) -> Result<(), FinalCheckError> {
     let controlled = headers.iter().any(|(name, _)| is_reserved(name) || name.as_str().starts_with(':'));
     require(!controlled, FinalCheckError::ReservedHeader)
 }
 
-/// The slot is written once and holds the rendered slot value, which appears nowhere else in the URL or headers.
+/// Checks that the slot is written once and holds the rendered slot value, which appears nowhere else in the URL or
+/// headers.
 ///
 /// The value is looked for as stored and in its one query encoding, the two forms a construction defect could write.
 fn check_slot(url: &Url, headers: &OutgoingHeaders, slot: &Slot, value: &SlotValue) -> Result<(), FinalCheckError> {
@@ -223,8 +240,8 @@ fn check_slot(url: &Url, headers: &OutgoingHeaders, slot: &Slot, value: &SlotVal
     }
 }
 
-/// Exactly one parameter decodes to the slot's name and its raw value is the encoded slot value; no other parameter,
-/// no part of the URL before the query and no header carries the value.
+/// Checks a query slot: exactly one parameter decodes to the slot's name and its raw value is the encoded slot value;
+/// no other parameter, no part of the URL before the query and no header carries the value.
 fn check_query_slot(
     url: &Url,
     headers: &OutgoingHeaders,
@@ -251,8 +268,8 @@ fn check_query_slot(
     require(!carries_any(outside, forms), FinalCheckError::CredentialOutsideSlot)
 }
 
-/// Exactly one header has the slot's name in any case and its bytes are the rendered slot value; no other header and
-/// no part of the URL carries the value.
+/// Checks a header slot: exactly one header has the slot's name in any case and its bytes are the rendered slot value;
+/// no other header and no part of the URL carries the value.
 fn check_header_slot(
     url: &Url,
     headers: &OutgoingHeaders,
@@ -271,7 +288,7 @@ fn check_header_slot(
     require(!carries_any(outside, forms), FinalCheckError::CredentialOutsideSlot)
 }
 
-/// Whether any of `places` contains any of `forms`; compares borrowed bytes, so no copy of the value is made.
+/// Returns whether any of `places` contains any of `forms`; compares borrowed bytes, so no copy of the value is made.
 fn carries_any<'a>(mut places: impl Iterator<Item = &'a [u8]>, forms: &[&[u8]]) -> bool {
     places.any(|place| {
         forms

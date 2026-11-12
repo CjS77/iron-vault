@@ -1,4 +1,7 @@
-//! The canonical form of an upstream host.
+//! Converts an upstream host to its one canonical form, so hosts compare byte for byte.
+//!
+//! For example, `API.Example.com.` becomes `api.example.com`, and `bücher.example` becomes
+//! `xn--bcher-kva.example`.
 //!
 //! Every host comparison in Iron Vault (credential record, route upstream, final outgoing-request check) uses the
 //! [`Host`] produced here, so a host is converted exactly once and compared byte for byte afterwards (§9).
@@ -121,7 +124,7 @@ fn check_ascii_characters(name: &str) -> Result<(), HostError> {
         .map_or(Ok(()), |c| Err(HostError::ForbiddenCharacter(c)))
 }
 
-/// IDNA output can still contain empty labels or characters that are not valid in DNS, so it is checked again.
+/// Checks the labels and length of IDNA output, which can still contain empty labels or characters not valid in DNS.
 fn check_domain(ascii: String) -> Result<Host, HostError> {
     if ascii.len() > MAX_NAME_LEN {
         return Err(HostError::TooLong);

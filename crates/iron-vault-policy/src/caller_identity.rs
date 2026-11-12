@@ -1,6 +1,14 @@
-//! Caller identification: which caller a request comes from, decided from the listener it arrived on and, on a peer
-//! listener, the connecting process's uid or, on a token listener, the caller token it presents (spec §7, §8 step
-//! 3, §15).
+//! Identifies which caller a request comes from, using the listener it arrived on and, on a peer listener, the
+//! connecting process's uid or, on a token listener, the caller token it presents (spec §7, §8 step 3, §15). The
+//! service's request handler calls [`identify_caller`] before anything else looks at the request.
+//!
+//! ```text
+//! listener kind        decided by                                   no match
+//! isolated-network     the listener alone: it has exactly one caller   –
+//! peer                 the connection's peer uid                    401
+//! token                the token in token_header, or                401
+//!                      Proxy-Authorization: Bearer <token>
+//! ```
 //!
 //! Validation leaves each listener with one mechanism. An `isolated-network` listener has exactly one caller, so the
 //! listener alone names it. A peer listener holds only peer callers, and activation resolves their accounts to distinct
@@ -73,7 +81,7 @@ pub fn identify_caller(
     }
 }
 
-/// The peer caller in `callers` whose account resolved to `peer_uid` when `policy` was activated.
+/// Finds the peer caller in `callers` whose account resolved to `peer_uid` when `policy` was activated.
 ///
 /// A uid is not secret, since any local account can list them all in `/etc/passwd`, so a plain comparison that stops
 /// at the first match is fine; unlike [`token_holder`], timing here reveals nothing worth hiding. Activation refuses two
@@ -86,7 +94,7 @@ fn peer_holder<'a>(policy: &ActivePolicy, callers: &[(&'a CallerName, &'a Caller
         .find(|name| policy.peer_uids().get(*name) == Some(&uid))
 }
 
-/// The caller token presented in the listener's token header, if exactly one well-formed one is.
+/// Reads the caller token from the listener's token header, if exactly one well-formed one is present.
 ///
 /// A `token_header` that names `Proxy-Authorization` is the default header, so it keeps the `Bearer` form.
 fn presented_token(listener: &ListenerConfig, headers: &[(HeaderName, HeaderValue)]) -> Option<CallerToken> {
@@ -98,7 +106,7 @@ fn presented_token(listener: &ListenerConfig, headers: &[(HeaderName, HeaderValu
     presented.and_then(|bytes| CallerToken::parse(bytes).ok())
 }
 
-/// The value of the one header whose lowercase name is `lowercase`; none when it is absent or repeated.
+/// Returns the value of the one header whose lowercase name is `lowercase`; none when it is absent or repeated.
 ///
 /// A repeated token header is refused rather than resolved, because a proxy and Iron Vault could pick different copies.
 fn sole_value<'a>(headers: &'a [(HeaderName, HeaderValue)], lowercase: &str) -> Option<&'a [u8]> {
@@ -112,13 +120,13 @@ fn sole_value<'a>(headers: &'a [(HeaderName, HeaderValue)], lowercase: &str) -> 
     }
 }
 
-/// The token in a `Bearer <token>` value, with the scheme in any case and exactly one space after it.
+/// Extracts the token from a `Bearer <token>` value, with the scheme in any case and exactly one space after it.
 fn bearer_token(value: &[u8]) -> Option<&[u8]> {
     let (scheme, token) = value.split_at_checked(BEARER.len())?;
     scheme.eq_ignore_ascii_case(BEARER).then_some(token)
 }
 
-/// The token caller whose hash `token` matches, comparing it against every token caller in `callers`.
+/// Finds the token caller whose hash `token` matches, comparing it against every token caller in `callers`.
 fn token_holder<'a>(callers: &[(&'a CallerName, &'a CallerConfig)], token: &CallerToken) -> Option<&'a CallerName> {
     let comparisons = callers.iter().filter_map(|(name, caller)| match caller.auth() {
         CallerAuth::Token(hash) => Some((*name, hash.matches(token))),
@@ -127,7 +135,7 @@ fn token_holder<'a>(callers: &[(&'a CallerName, &'a CallerConfig)], token: &Call
     sole_match(comparisons)
 }
 
-/// The one candidate whose comparison matched, or none when zero or several did.
+/// Returns the one candidate whose comparison matched, or none when zero or several did.
 ///
 /// Every comparison is consumed, with no early return, so the work done does not depend on which caller matched or
 /// whether any did; timing then reveals neither the matching caller's position nor a near miss. Several matches cannot

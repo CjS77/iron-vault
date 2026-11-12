@@ -1,4 +1,5 @@
-//! Location rewrite: what the caller sees of an upstream redirect's `Location` (spec §8, §11).
+//! Decides what the caller sees of an upstream redirect's `Location` (spec §8, §11). The service calls
+//! [`rewrite_location`] on every upstream response that carries one, before response scrubbing.
 //!
 //! The upstream client never follows a redirect, so the `Location` it returns is the caller's to follow. The value is
 //! resolved against the URL actually sent (RFC 3986 §5) and then:
@@ -12,6 +13,19 @@
 //!   way (`//host/x`, `http:/x`), it is a relative cross-origin redirect and is refused: the caller resolves those bytes
 //!   against the proxy listener's URL, possibly `http`, where they could land in another local route or fall back to
 //!   cleartext.
+//!
+//! For a route with prefix `/svc` and upstream `https://api.svc.example/v1`, after a request to
+//! `https://api.svc.example/v1/items/list?page=1`:
+//!
+//! ```text
+//! Location                          caller sees
+//! next                              /svc/items/next
+//! /v1/a?q=1                         /svc/a?q=1
+//! https://api.svc.example/v1/a      /svc/a
+//! /v2/a                             refused: OutOfBase
+//! https://other.example/v1/a        https://other.example/v1/a, unchanged
+//! //other.example/v1/a              refused: RelativeCrossOrigin
+//! ```
 //!
 //! An empty or fragment-only `Location` inherits the request's query, and a query slot's credential is in that query,
 //! so every parameter that decodes to the slot's name is removed from a rewritten value.
@@ -84,7 +98,7 @@ pub fn rewrite_location(route: &RouteConfig, request_url: &Url, location: &[u8])
     }
 }
 
-/// The rewritten value, `None` to pass the value through, or the refusal.
+/// Returns the rewritten value, `None` to pass the value through, or the refusal.
 fn decide(route: &RouteConfig, request_url: &Url, location: &[u8]) -> Result<Option<HeaderValue>, LocationRefusal> {
     let text = uri_characters(location)?;
     let resolved = request_url.join(text).map_err(|_| LocationRefusal::Malformed)?;
@@ -105,7 +119,7 @@ fn require(holds: bool, refusal: LocationRefusal) -> Result<(), LocationRefusal>
     holds.then_some(()).ok_or(refusal)
 }
 
-/// Visible ASCII other than `\`: a URI reference has no spaces, controls or raw non-ASCII bytes, which the `url` crate
+/// Accepts only visible ASCII other than `\`: a URI reference has no spaces, controls or raw non-ASCII bytes, which the `url` crate
 /// would strip or encode rather than refuse.
 ///
 /// `\` is refused anywhere in the text, not only in the path. RFC 3986 allows it nowhere, and the `url` crate reads it
@@ -120,7 +134,8 @@ fn uri_characters(bytes: &[u8]) -> Result<&str, LocationRefusal> {
         .ok_or(LocationRefusal::Malformed)
 }
 
-/// Scheme `https`, the upstream's host after the one canonical [`Host`] conversion, and its port (443 when omitted).
+/// Returns whether `url` has scheme `https`, the upstream's host after the one canonical [`Host`] conversion, and its
+/// port (443 when omitted).
 fn is_same_origin(url: &Url, upstream: &UpstreamUrl) -> bool {
     url.scheme() == "https"
         && url.host_str().and_then(|host| host.parse::<Host>().ok()).as_ref() == Some(upstream.host())
@@ -141,7 +156,7 @@ fn check_raw_path(text: &str) -> Result<(), LocationRefusal> {
         .map_err(|_| LocationRefusal::AmbiguousPath)
 }
 
-/// The path component of a URI reference (RFC 3986 §4.1): without query or fragment, scheme, or authority.
+/// Returns the path component of a URI reference (RFC 3986 §4.1): without query or fragment, scheme, or authority.
 fn raw_path(text: &str) -> &str {
     let before_query = text.split(['?', '#']).next().unwrap_or_default();
     let after_scheme = before_query
@@ -154,19 +169,19 @@ fn raw_path(text: &str) -> &str {
     }
 }
 
-/// `scheme://`: an absolute URL with an authority, which resolves to the same URL against every base.
+/// Returns whether `text` starts `scheme://`: an absolute URL with an authority, which resolves to the same URL against every base.
 fn has_scheme_and_authority(text: &str) -> bool {
     text.split_once(':')
         .is_some_and(|(scheme, rest)| is_scheme(scheme) && rest.starts_with("//"))
 }
 
-/// RFC 3986 `scheme`: a letter, then letters, digits, `+`, `-` or `.`.
+/// Returns whether `text` is an RFC 3986 `scheme`: a letter, then letters, digits, `+`, `-` or `.`.
 fn is_scheme(text: &str) -> bool {
     let mut chars = text.chars();
     chars.next().is_some_and(|c| c.is_ascii_alphabetic()) && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
 }
 
-/// The resolved path below the upstream base on whole segments, each normalized as a caller's path segment is.
+/// Takes the resolved path below the upstream base on whole segments, each normalized as a caller's path segment is.
 ///
 /// Segments are normalized before the base comparison, so `caf%c3%a9` meets a base written `caf%C3%A9`.
 fn remaining_path(resolved: &Url, upstream: &UpstreamUrl) -> Result<RemainingPath, LocationRefusal> {
@@ -188,7 +203,7 @@ fn remaining_path(resolved: &Url, upstream: &UpstreamUrl) -> Result<RemainingPat
     })
 }
 
-/// The query without any parameter whose decoded name is a query slot's, other parameters kept in order; untouched for
+/// Drops every parameter whose decoded name is a query slot's, other parameters kept in order; untouched for
 /// a header or Basic slot. `None` when nothing is left.
 fn kept_query(query: Option<&str>, slot: &Slot) -> Option<String> {
     let query = query?;
@@ -202,7 +217,7 @@ fn kept_query(query: Option<&str>, slot: &Slot) -> Option<String> {
     (!kept.is_empty()).then(|| kept.join("&"))
 }
 
-/// `<route prefix>/<remaining segments>`, the query and the fragment, set through the `url` API on the upstream URL and
+/// Builds `<route prefix>/<remaining segments>`, the query and the fragment, set through the `url` API on the upstream URL and
 /// read back, then taken from the path onwards.
 ///
 /// The segments are already percent-encoded, so they go through `Url::set_path`, which keeps existing escapes, as

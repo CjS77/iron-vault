@@ -1,4 +1,5 @@
-//! Charging requests against route and caller rate limits under concurrency (spec §8, §15, §19).
+//! Charges each authorized request against its route's and its caller's rate limits, safely under concurrency (spec §8,
+//! §15, §19).
 //!
 //! Each route has one [`TokenBucket`] shared by all its callers, and a caller may also have a stricter bucket on that
 //! route. A request passes only if both allow it, and it takes a token from both or from neither: otherwise a request
@@ -125,7 +126,7 @@ impl RateLimiter {
 }
 
 impl RouteBuckets {
-    /// Buckets for `route`: its shared bucket, and an entry for every caller granted it.
+    /// Creates the buckets for `route`: its shared bucket, and an entry for every caller granted it.
     fn new(config: &ValidatedConfig, name: &RouteName, route: &RouteConfig, now: Instant) -> Self {
         let callers = config
             .callers()
@@ -164,7 +165,8 @@ impl RouteBuckets {
     }
 }
 
-/// The refusal for the route's and the caller's waits, if either bucket is empty; a client must wait out the longer.
+/// Builds the refusal from the route's and the caller's waits, if either bucket is empty; a client must wait out the
+/// longer.
 fn refusal(route_wait: Option<RetryAfter>, caller_wait: Option<RetryAfter>) -> Option<RateLimited> {
     let limited = |retry_after, limit| Some(RateLimited { retry_after, limit });
     match (route_wait, caller_wait) {

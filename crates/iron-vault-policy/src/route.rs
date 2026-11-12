@@ -1,4 +1,5 @@
-//! A `[routes.<name>]` section: one upstream mapping with its credential, slot and restrictions (spec §6, §10).
+//! A `[routes.<name>]` section: one upstream with the credential sent to it, where the credential goes, and the
+//! restrictions on what callers may send (spec §6, §10).
 
 use std::collections::BTreeSet;
 
@@ -15,7 +16,7 @@ use crate::route_prefix::RoutePrefix;
 use crate::slot::Slot;
 use crate::upstream::UpstreamUrl;
 
-/// A validated route.
+/// One route's section, with the rules local to it checked.
 ///
 /// TOML form:
 ///

@@ -3,6 +3,20 @@
 //! [`authorize`] decides, once, which route an authenticated caller's request belongs to and whether the caller may use
 //! it with this method and path. Its result, an [`AuthorizedRequest`], is the immutable request plan that rate limiting,
 //! credential resolution and URL construction consume without deciding any of this again.
+//!
+//! The checks run in this order, so a caller learns no more than its grants allow:
+//!
+//! ```text
+//! path matches no route prefix ─────────────→ NotFound      404
+//! caller not granted the route ─────────────→ Forbidden     403  (NotGranted)
+//! route unavailable ────────────────────────→ Unavailable   503
+//! method not in the route's methods ────────→ Forbidden     403  (Method)
+//! path below the prefix matches no pattern ─→ Forbidden     403  (Path)
+//! otherwise ────────────────────────────────→ AuthorizedRequest
+//! ```
+//!
+//! For example, `GET /fx/latest` on a route with prefix `/fx`, upstream `https://api.fx.example/v1` and paths
+//! `["/latest"]` matches `/latest` and plans the upstream path `/v1/latest`.
 
 use thiserror::Error;
 
@@ -99,7 +113,7 @@ pub enum Refusal {
 /// Checks run in an order that discloses as little as possible: a caller learns that a route is unavailable only after
 /// its grant to that route is confirmed, so an ungranted caller gets `Forbidden` whether or not the route is available.
 /// Path patterns match the request segments after the route prefix, which is the path below the upstream base path
-/// and the path the provider documents; the base path is prepended by [`plan`] only after the match. The query is
+/// and the path the provider documents; the base path is prepended by `plan` only after the match. The query is
 /// carried through unchecked, because patterns never see it (§6).
 pub fn authorize(
     policy: &ActivePolicy,
@@ -127,7 +141,7 @@ pub fn authorize(
     }
 }
 
-/// The route whose prefix covers the leading complete segments of `path`, available or not.
+/// Finds the route whose prefix covers the leading complete segments of `path`, available or not.
 ///
 /// Whole-segment comparison is what keeps `/fx` from matching `/fx.evil.example` or `/fx@evil.example` (§9).
 /// Validation guarantees that no two prefixes overlap, so at most one route matches.
@@ -139,7 +153,7 @@ fn select_route<'a>(policy: &'a ActivePolicy, path: &NormalizedPath) -> Option<&
         .next()
 }
 
-/// Whether `caller` lists `route` among its grants; an unknown caller has none.
+/// Returns whether `caller` lists `route` among its grants; an unknown caller has none.
 fn is_granted(policy: &ActivePolicy, caller: &CallerName, route: &RouteName) -> bool {
     policy
         .config()
@@ -148,7 +162,7 @@ fn is_granted(policy: &ActivePolicy, caller: &CallerName, route: &RouteName) -> 
         .is_some_and(|config| config.routes().contains(route))
 }
 
-/// The request segments after the route prefix.
+/// Iterates over the request segments after the route prefix.
 ///
 /// Authorization matches path patterns against these and forwarding appends them to the upstream base path, so both
 /// must read the same segments (§6).

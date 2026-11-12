@@ -1,4 +1,4 @@
-//! HTTP header field names as configuration values.
+//! HTTP header field names, as a config names them: a header slot's header and a listener's `token_header`.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -49,7 +49,7 @@ impl HeaderName {
         &self.lowercase
     }
 
-    /// `Authorization`, the header a Basic slot writes; built directly because a constant cannot fail to parse.
+    /// Returns `Authorization`, the header a Basic slot writes. It skips parsing because a constant cannot fail to parse.
     pub(crate) fn authorization() -> Self {
         Self {
             spelling: "Authorization".to_owned(),
@@ -57,8 +57,8 @@ impl HeaderName {
         }
     }
 
-    /// `Accept-Encoding`, which the request pipeline sets on every outgoing request in place of the caller's; built
-    /// directly because a constant cannot fail to parse.
+    /// Returns `Accept-Encoding`, which the request pipeline sets on every outgoing request in place of the caller's.
+    /// It skips parsing because a constant cannot fail to parse.
     pub fn accept_encoding() -> Self {
         Self {
             spelling: "Accept-Encoding".to_owned(),
@@ -66,8 +66,8 @@ impl HeaderName {
         }
     }
 
-    /// `Proxy-Authorization`, the caller-token header of a listener that sets no `token_header`; built directly because
-    /// a constant cannot fail to parse.
+    /// Returns `Proxy-Authorization`, the caller-token header of a listener that sets no `token_header`. It skips
+    /// parsing because a constant cannot fail to parse.
     pub(crate) fn proxy_authorization() -> Self {
         Self {
             spelling: "Proxy-Authorization".to_owned(),
@@ -76,7 +76,7 @@ impl HeaderName {
     }
 }
 
-/// RFC 9110 §5.6.2 `tchar`.
+/// Returns whether `c` is an RFC 9110 §5.6.2 `tchar`, the characters a field name may hold.
 fn is_tchar(c: char) -> bool {
     c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c)
 }

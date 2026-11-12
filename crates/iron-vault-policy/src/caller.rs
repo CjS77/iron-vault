@@ -10,7 +10,7 @@ use crate::name::{ListenerName, RouteName};
 use crate::rate_limit::RateLimit;
 use crate::token_hash::TokenHash;
 
-/// A validated caller.
+/// One caller's section, with the rules local to it checked.
 ///
 /// TOML forms:
 ///
@@ -48,7 +48,7 @@ pub struct CallerConfig {
     rate_limits: BTreeMap<RouteName, RateLimit>,
 }
 
-/// How the service establishes that a connection is this caller (spec §7).
+/// Says how the service recognises that a connection comes from this caller (spec §7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallerAuth {
     /// The caller presents a token whose hash matches this one.
@@ -161,8 +161,10 @@ impl TryFrom<RawCaller> for CallerConfig {
     }
 }
 
-/// Pairs `auth` with the one key it needs: `token_hash` for token authentication, `user` for `peer`. A key that the
-/// `auth` value never checks is refused rather than ignored, so a typo in `auth` cannot silently drop it.
+/// Pairs `auth` with the one key it needs: `token_hash` for token authentication, `user` for `peer`.
+///
+/// A key that the `auth` value never checks is refused rather than ignored, so a typo in `auth` cannot silently drop
+/// it.
 fn caller_auth(kind: AuthKind, token_hash: Option<TokenHash>, user: Option<AccountName>) -> Result<CallerAuth, CallerError> {
     match kind {
         AuthKind::Token => {

@@ -1,4 +1,4 @@
-//! Validated configuration names for callers, routes, listeners, and credentials.
+//! Names for callers, routes, listeners and credentials, valid on construction.
 //!
 //! Names reach logs and audit events, so every name type shares one strict rule that leaves no room for log
 //! injection: 1 to [`MAX_NAME_LEN`] bytes of ASCII `[a-z0-9_-]`, starting with a lowercase letter (spec §18).

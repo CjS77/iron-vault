@@ -1,4 +1,4 @@
-//! The header list an upstream request carries (specification §9).
+//! The header list an upstream request carries (spec §9). [`sanitize()`] builds it from the caller's headers.
 //!
 //! [`OutgoingHeaders`] can never hold a reserved header, so `Host`, framing, forwarding, override and caller
 //! authentication headers cannot reach an upstream through it: the transport sets authority and framing itself.

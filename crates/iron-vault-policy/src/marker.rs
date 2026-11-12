@@ -24,9 +24,11 @@ pub enum MarkerError {
     Malformed,
 }
 
-/// Every marker in `text`, in order: the credential name it carries, or [`MarkerError::Malformed`].
+/// Finds every marker in `text`, in order, yielding the credential name each carries or [`MarkerError::Malformed`].
 ///
-/// Each `{iv:` starts a marker that runs to the next `}`; the text between is parsed with the [`CredentialName`] rules.
+/// For example, `Bearer {iv:fx_key}` yields `fx_key`, and `{iv:Bad}` or an unclosed `{iv:fx` yields an error.
+///
+/// Each `{iv:` starts a marker that runs to the next `}`, and the text between must follow the [`CredentialName`] rules.
 /// Matching is case-sensitive, as `{iv:` is the only marker syntax. A `{iv:` with no closing `}` ends the scan with
 /// one error, so a caller cannot hide a marker behind an unterminated one.
 pub fn markers(text: &str) -> impl Iterator<Item = Result<CredentialName, MarkerError>> + '_ {

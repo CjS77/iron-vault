@@ -6,9 +6,9 @@ use std::fmt;
 use serde::de::{self, Deserialize, Deserializer, Visitor};
 use thiserror::Error;
 
-/// Fewest days a reminder interval may be, so a misconfigured value cannot flood the log.
+/// The fewest days a reminder interval may be, so a misconfigured value cannot flood the log.
 const MIN_DAYS: u16 = 7;
-/// Most days a reminder interval may be, so a reminder cannot be pushed out of sight for years.
+/// The most days a reminder interval may be, so a reminder cannot be pushed out of sight for years.
 const MAX_DAYS: u16 = 365;
 /// The interval when the `[recovery]` table or its key is absent: every few months.
 const DEFAULT_DAYS: u16 = 90;
@@ -60,9 +60,10 @@ impl TryFrom<i64> for ReminderInterval {
     }
 }
 
-/// Reads any TOML value, so every type gets the fixed message instead of serde's generic type error: integers (including
-/// ones outside the `i64`/`u64` range), floats, booleans, strings, arrays, and tables or date-times (the toml
-/// deserializer presents a date-time as a map).
+/// Accepts any TOML value, so every wrong type gets the fixed message instead of serde's generic type error.
+///
+/// That covers integers (including ones outside the `i64`/`u64` range), floats, booleans, strings, arrays, and tables
+/// or date-times (the toml deserializer presents a date-time as a map).
 struct IntervalVisitor;
 
 impl<'de> Visitor<'de> for IntervalVisitor {

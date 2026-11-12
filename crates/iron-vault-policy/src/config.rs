@@ -1,4 +1,4 @@
-//! The configuration document: listeners, callers, routes and limits parsed from TOML bytes (spec §6).
+//! Parses the configuration document: listeners, callers, routes and limits, from TOML bytes (spec §6).
 //!
 //! Parsing takes bytes the caller already holds, so this crate stays free of I/O and approval can hash exactly the
 //! bytes that were parsed (spec §12). Only section-local rules are checked here; references between sections are
@@ -240,7 +240,7 @@ fn invalid(text: &str, err: &toml::de::Error) -> ConfigError {
     }
 }
 
-/// " at <location>", or nothing when the parser gave no position.
+/// Renders `" at <location>"`, or nothing when the parser gave no position.
 fn at(location: Option<&Location>) -> String {
     location.map(|l| format!(" at {l}")).unwrap_or_default()
 }

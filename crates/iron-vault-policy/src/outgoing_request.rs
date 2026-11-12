@@ -1,5 +1,13 @@
-//! The outgoing request: the authorized method, the upstream target and the outgoing headers with the route's slot
-//! filled exactly once (spec §8 step 7, §9).
+//! Assembles the outgoing request: the authorized method, the upstream target and the outgoing headers, with the
+//! route's slot filled exactly once (spec §8 step 7, §9).
+//!
+//! For example, on a route whose credential is `fx_key` and whose slot is `{ query = "access_key" }`:
+//!
+//! ```text
+//! caller sends    GET /fx/latest?access_key={iv:fx_key}&base=USD
+//! upstream gets   GET https://api.fx.example/latest?base=USD&access_key=<the stored key, query-encoded>
+//! caller sends    GET /fx/latest?access_key={iv:brave}   → refused, 400: the marker names another credential
+//! ```
 //!
 //! The slot is the only place a credential is written. Only the text the slot is about to replace is scanned for
 //! markers; the body, the path, other headers and other query parameters are never read, so a marker there stays
@@ -117,7 +125,7 @@ impl OutgoingRequest {
         &self.headers
     }
 
-    /// The method, URL and headers, for the final check to inspect and then own.
+    /// Splits the request into its method, URL and headers, for the final check to inspect and then own.
     pub(crate) fn into_parts(self) -> (Method, Url, OutgoingHeaders) {
         (self.method, self.target.into_url(), self.headers)
     }
@@ -156,7 +164,7 @@ fn fill_header(
     Ok(headers.insert(slot.name().clone(), rendered)?)
 }
 
-/// `prefix + value + suffix`, built in a buffer that is wiped on drop and sized so it never reallocates.
+/// Renders `prefix + value + suffix` in a buffer that is wiped on drop and sized so it never reallocates.
 ///
 /// The final check renders the expected slot value with this same function, so filling and checking cannot disagree.
 pub(crate) fn render_header(slot: &HeaderSlot, value: &SlotValue) -> Result<HeaderValue, AssembleError> {
@@ -187,12 +195,12 @@ fn fill_query(
     Ok(target.with_query(&query)?)
 }
 
-/// Whether `param`'s name, percent-decoded with `+` read as a space, is exactly the slot's name.
+/// Returns whether `param`'s name, percent-decoded with `+` read as a space, is exactly the slot's name.
 fn is_slot_param(param: &str, name: &QueryParamName) -> bool {
     decode_param(param).is_some_and(|(decoded, _)| decoded == name.as_str())
 }
 
-/// The kept parameters joined by `&`, then `name=<encoded value>`, in a buffer that is wiped on drop.
+/// Joins the kept parameters with `&`, then appends `name=<encoded value>`, in a buffer that is wiped on drop.
 fn filled_query(kept: &[&str], name: &QueryParamName, value: &SlotValue) -> Zeroizing<String> {
     let encoded = Zeroizing::new(encode_query_value(value.expose_secret()));
     let kept_len: usize = kept.iter().map(|param| param.len() + 1).sum();

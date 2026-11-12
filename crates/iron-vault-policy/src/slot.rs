@@ -1,4 +1,4 @@
-//! The one place a route may write its credential (spec §3, §9).
+//! Slots: where a route writes its credential, the one place in an outgoing request a credential may appear (spec §3, §9).
 //!
 //! Configuration spells a slot in one of four TOML shapes (spec §6):
 //!
@@ -101,7 +101,7 @@ pub enum SlotError {
 }
 
 impl HeaderSlot {
-    /// A header slot, refused when `name` is a reserved header (spec §9).
+    /// Builds a header slot, refusing a reserved header as `name` (spec §9).
     pub fn new(name: HeaderName, format: SlotFormat) -> Result<Self, SlotError> {
         if reserved_headers::is_reserved(&name) {
             return Err(SlotError::ReservedHeader(name));
@@ -119,7 +119,7 @@ impl HeaderSlot {
         &self.format
     }
 
-    /// The header slot a Basic slot amounts to: `Authorization` with the format `Basic {}`.
+    /// Returns the header slot a Basic slot amounts to: `Authorization` with the format `Basic {}`.
     pub(crate) fn basic() -> Self {
         Self {
             name: HeaderName::authorization(),

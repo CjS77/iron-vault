@@ -1,4 +1,7 @@
-//! Turning a caller's headers into [`OutgoingHeaders`] (specification §9).
+//! Turns a caller's headers into [`OutgoingHeaders`] (spec §9).
+//!
+//! For example, a caller that sends `Proxy-Authorization: Bearer ivt_…`, `X-Forwarded-For: 10.0.0.1` and
+//! `Accept: application/json` reaches the upstream with only `Accept: application/json`.
 //!
 //! Every caller header is untrusted. Forwarding and method-override headers would let an upstream apply a different
 //! route policy than Iron Vault checked (§9), a forwarded caller token would leak it, and conflicting framing
@@ -27,7 +30,7 @@ pub enum SanitizeError {
     ContentLengthWithTransferEncoding,
 }
 
-/// The caller's headers with framing checked and every header removed that must not reach the upstream.
+/// Checks the caller's framing, then removes every header that must not reach the upstream.
 ///
 /// Removed: headers named by a `Connection` header, every reserved header, and the listener's caller-token header
 /// `token_header` (pass the default `Proxy-Authorization` when the listener sets none). The remaining headers keep
@@ -64,7 +67,7 @@ fn check_framing(caller: &[(HeaderName, HeaderValue)]) -> Result<(), SanitizeErr
     }
 }
 
-/// Every value of the headers whose lowercase name is `lowercase`.
+/// Iterates over every value of the headers whose lowercase name is `lowercase`.
 fn values_of<'a>(caller: &'a [(HeaderName, HeaderValue)], lowercase: &'a str) -> impl Iterator<Item = &'a [u8]> {
     caller
         .iter()
@@ -72,7 +75,7 @@ fn values_of<'a>(caller: &'a [(HeaderName, HeaderValue)], lowercase: &'a str) ->
         .map(|(_, value)| value.as_bytes())
 }
 
-/// A `Content-Length` value as a number: ASCII digits only, so signs, lists and whitespace inside are rejected.
+/// Parses a `Content-Length` value: ASCII digits only, so signs, lists and whitespace inside are rejected.
 fn content_length(value: &[u8]) -> Result<u64, SanitizeError> {
     let digits = trim_ows(value);
     let all_digits = !digits.is_empty() && digits.iter().all(u8::is_ascii_digit);
@@ -82,7 +85,8 @@ fn content_length(value: &[u8]) -> Result<u64, SanitizeError> {
         .ok_or(SanitizeError::InvalidContentLength)
 }
 
-/// The names listed in every `Connection` header (RFC 9110 §7.6.1).
+/// Collects the names listed in every `Connection` header (RFC 9110 §7.6.1); those headers describe this connection
+/// only, so sanitizing removes them.
 ///
 /// A list member that is not a valid header name is skipped: no caller header can carry that name, so there is
 /// nothing for it to remove.
@@ -94,7 +98,7 @@ fn connection_names(caller: &[(HeaderName, HeaderValue)]) -> Vec<HeaderName> {
         .collect()
 }
 
-/// `bytes` without leading and trailing optional whitespace (spaces and tabs, RFC 9110 §5.6.3).
+/// Trims leading and trailing optional whitespace (spaces and tabs, RFC 9110 §5.6.3) from `bytes`.
 fn trim_ows(bytes: &[u8]) -> &[u8] {
     let is_ows = |b: &u8| *b == b' ' || *b == b'\t';
     let start = bytes.iter().position(|b| !is_ows(b)).unwrap_or(bytes.len());

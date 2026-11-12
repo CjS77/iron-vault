@@ -1,4 +1,5 @@
-//! One permitted origin as the owner writes it when enrolling a credential (spec §6).
+//! Parses one permitted origin as the owner writes it when enrolling a credential, as in
+//! `iron-vault add fx_key --origin api.fx.example` (spec §6).
 //!
 //! The scheme is always HTTPS, so it is implicit and never written: an origin is a host and an optional port. The CLI
 //! parses each `--origin` with [`parse_origin`] before connecting, and the service parses the requested origins of an
@@ -59,7 +60,7 @@ fn split_host_port(text: &str) -> Result<(&str, Option<&str>), OriginError> {
     }
 }
 
-/// The host rule broken, without the label or character that broke it.
+/// Names the host rule broken, without the label or character that broke it.
 fn host_rule(error: &HostError) -> String {
     match error {
         HostError::ForbiddenCharacter(_) => "it contains a character that is not allowed in a host name".to_owned(),

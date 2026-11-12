@@ -1,4 +1,5 @@
-//! Headers that carry caller authentication or control transport, routing or method semantics (spec §9).
+//! Reserved headers: those that carry caller authentication or control transport, routing or method semantics
+//! (spec §9).
 //!
 //! This is the single denylist for two uses: a header slot may never name one of these headers, and the outgoing
 //! request has them removed before forwarding. Keeping both uses on one list means a header cannot be stripped from
@@ -64,7 +65,7 @@ pub const CALLER_TOKEN_HEADERS: &[&str] = &["proxy-authorization", "x-iron-vault
 /// Reserved header-name prefixes, lowercase; any header starting with one is reserved.
 pub const RESERVED_PREFIXES: &[&str] = &["x-forwarded-"];
 
-/// Whether `name` is a caller-authentication or transport-control header.
+/// Returns whether `name` is a reserved header: one on either list or starting with a reserved prefix.
 pub fn is_reserved(name: &HeaderName) -> bool {
     let lowercase = name.lowercase();
     HOP_BY_HOP_HEADERS.contains(&lowercase)

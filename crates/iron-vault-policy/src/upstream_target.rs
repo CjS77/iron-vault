@@ -1,4 +1,7 @@
-//! The upstream target: the URL an authorized request is sent to (spec §8 step 7, §9).
+//! Builds the upstream target: the URL an authorized request is sent to (spec §8 step 7, §9).
+//!
+//! For example, the caller's `GET /fx/latest?base=USD` on a route with prefix `/fx` and upstream
+//! `https://api.fx.example/v1` becomes `https://api.fx.example/v1/latest?base=USD`.
 //!
 //! The URL is built through the `url` API from the configured [`UpstreamUrl`] and an [`AuthorizedRequest`], never by
 //! accepting caller text as a URL, so a caller cannot supply a scheme, an authority or a path the authorizer did not
@@ -69,7 +72,7 @@ impl UpstreamTarget {
         self.url.query()
     }
 
-    /// The same target with its query replaced by `query`, read back to confirm the URL holds exactly that text.
+    /// Replaces the target's query with `query`, then reads the URL back to confirm it holds exactly that text.
     ///
     /// Crate-private so that only slot filling, which keeps every caller parameter but the slot's, rewrites a query.
     pub(crate) fn with_query(mut self, query: &str) -> Result<Self, UpstreamTargetError> {
@@ -77,7 +80,7 @@ impl UpstreamTarget {
         (self.url.query() == Some(query)).then_some(self).ok_or(UpstreamTargetError::Query)
     }
 
-    /// The URL, for the final check to own once the request is assembled.
+    /// Gives up the URL, for the final check to own once the request is assembled.
     pub(crate) fn into_url(self) -> Url {
         self.url
     }
@@ -98,12 +101,13 @@ impl fmt::Debug for UpstreamTarget {
     }
 }
 
-/// The authorized upstream path, for `Url::set_path`.
+/// Renders the authorized upstream path for `Url::set_path`.
 fn authorized_path(request: &AuthorizedRequest) -> String {
     segments_path(request.upstream_segments(), request.has_trailing_slash())
 }
 
-/// `/`, the percent-encoded segments joined by `/`, and the trailing slash when there is one.
+/// Renders a path for `Url::set_path`: `/`, the percent-encoded segments joined by `/`, and the trailing slash when
+/// there is one.
 ///
 /// Crate-visible so that every path this crate builds through `Url::set_path` is read back by [`has_path`] the same way.
 pub(crate) fn segments_path<S: AsRef<str>>(segments: &[S], trailing_slash: bool) -> String {
@@ -125,12 +129,13 @@ fn check_path(url: &Url, request: &AuthorizedRequest) -> Result<(), UpstreamTarg
     has_authorized_path(url, request).then_some(()).ok_or(UpstreamTargetError::Path)
 }
 
-/// Whether `url` reports exactly the authorized upstream path.
+/// Returns whether `url` reports exactly the authorized upstream path.
 pub(crate) fn has_authorized_path(url: &Url, request: &AuthorizedRequest) -> bool {
     has_path(url, request.upstream_segments(), request.has_trailing_slash())
 }
 
-/// Whether `url` reports exactly `segments`, then an empty one for a trailing slash; the root path is one empty segment.
+/// Returns whether `url` reports exactly `segments`, then an empty one for a trailing slash; the root path is one empty
+/// segment.
 pub(crate) fn has_path<S: AsRef<str>>(url: &Url, segments: &[S], trailing_slash: bool) -> bool {
     let expected = segments.iter().map(AsRef::as_ref);
     let empty = (segments.is_empty() || trailing_slash).then_some("");

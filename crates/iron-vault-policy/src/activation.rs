@@ -1,4 +1,5 @@
-//! Activation: checking a validated config against facts only the running service knows (spec §6, §7, §12).
+//! Checks a validated config against facts only the running service knows (spec §6, §7, §12). The service activates
+//! every config it checks or approves, and serves requests only under the [`ActivePolicy`] that results.
 //!
 //! The configuration cannot know which credential records exist, which hosts they permit, or which uid each peer account
 //! has. The service supplies those facts as a [`CredentialCatalog`] and an [`AccountDirectory`]; activation then either
@@ -171,7 +172,7 @@ impl ActivePolicy {
         &self.config
     }
 
-    /// The interval between recovery reminders in the approved config: 90 days when the config has no `[recovery] reminder_days`.
+    /// The interval between recovery reminders: the config's `[recovery] reminder_days`, or 90 days when it has none.
     pub fn recovery_reminder(&self) -> ReminderInterval {
         self.config.effective_recovery_reminder()
     }
@@ -189,12 +190,12 @@ impl ActivePolicy {
         &self.unavailable
     }
 
-    /// Whether `route` is unavailable for `cause`, whatever other cause it also has.
+    /// Returns whether `route` is unavailable for `cause`, whatever other cause it also has.
     pub fn is_unavailable_for(&self, route: &RouteName, cause: UnavailableCause) -> bool {
         self.unavailable.get(route).is_some_and(|causes| causes.contains(&cause))
     }
 
-    /// This policy with each of `routes` also unavailable because its pinned CA could not be loaded.
+    /// Marks each of `routes` unavailable because its pinned CA could not be loaded.
     ///
     /// Only the service can load a CA file, so it marks these after activation, before the policy serves anything. A
     /// name the config does not hold is ignored. It can only take routes away, never make one available.
@@ -211,7 +212,7 @@ impl ActivePolicy {
         self
     }
 
-    /// Whether `route` exists and may serve requests.
+    /// Returns whether `route` exists and may serve requests.
     pub fn is_available(&self, route: &RouteName) -> bool {
         self.route(route).is_some()
     }

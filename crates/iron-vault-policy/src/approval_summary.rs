@@ -1,4 +1,5 @@
-//! The service's own account of what an approval changes (spec §5, design/config-approval.md "Approval summary").
+//! Describes, in the service's own words, what an approval changes (spec §5, design/config-approval.md "Approval
+//! summary"). `config approve` shows this summary before it asks for the approval passphrase.
 //!
 //! [`summarize`] diffs the pending validated config against the active one. It is a pure function of the two configs, so
 //! the same inputs always give the same text: every collection is walked in `BTreeMap` or `BTreeSet` order. The
@@ -207,7 +208,7 @@ fn join<T: Display>(items: impl IntoIterator<Item = T>) -> String {
     }
 }
 
-/// Entries for every key in either map, in key order. `fields` lists a value's compared fields; `extra` adds a change
+/// Lists an entry for every key in either map, in key order. `fields` lists a value's compared fields; `extra` adds a change
 /// the fields cannot show, such as a replaced token.
 fn diff_maps<K: Ord + Display, V: PartialEq>(
     old: &BTreeMap<K, V>,
@@ -243,7 +244,7 @@ fn field_text(fields: &[Field]) -> String {
         .join(", ")
 }
 
-/// The fields that differ, old -> new, then any extra change; `None` when nothing differs.
+/// Lists the fields that differ, old -> new, then any extra change; `None` when nothing differs.
 fn changed_detail(before: &[Field], after: &[Field], extra: Option<String>) -> Option<String> {
     let changes: Vec<String> = before
         .iter()
@@ -272,7 +273,7 @@ fn caller_fields(caller: &CallerConfig) -> Vec<Field> {
     ]
 }
 
-/// "token changed" when both callers use tokens and the hashes differ; the hash itself is never shown.
+/// Reports "token changed" when both callers use tokens and the hashes differ; the hash itself is never shown.
 fn caller_extra(before: &CallerConfig, after: &CallerConfig) -> Option<String> {
     match (before.auth(), after.auth()) {
         (CallerAuth::Token(old), CallerAuth::Token(new)) if old != new => Some("token changed".to_owned()),

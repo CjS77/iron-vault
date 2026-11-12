@@ -1,4 +1,6 @@
-//! A route's owner-confirmation policy (spec §6, future spec §2.1).
+//! A route's owner-confirmation policy: whether each request needs fresh owner confirmation (spec §6).
+//!
+//! v0 has no confirmation provider, so reading a config refuses `confirm = "touch"`.
 
 use serde::Deserialize;
 use serde::de::{Deserializer, Error as _};
@@ -6,7 +8,7 @@ use serde::de::{Deserializer, Error as _};
 /// The refusal for `confirm = "touch"`, which v0 names but cannot honour (spec §6).
 const TOUCH_NOT_YET_AVAILABLE: &str = r#"confirm = "touch" is not yet available: v0 has no touch confirmation provider"#;
 
-/// Whether a request on a route needs fresh owner confirmation before its credential is used.
+/// Says whether a request on a route needs fresh owner confirmation before its credential is used.
 ///
 /// TOML form: `confirm = "none"`, which is also the value when `confirm` is omitted. `touch` is named but refused when
 /// the config is read: a later phase adds per-request touch on a hardware key (`book/src/cookbook/roadmap/yubikey.md`),

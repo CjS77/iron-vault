@@ -1,4 +1,7 @@
-//! The stored form of a caller token (spec §6, §7).
+//! Token hashes: the form in which a config stores a caller token (spec §6, §7).
+//!
+//! The owner runs `iron-vault caller-token`, keeps the token for the caller and puts only its hash in the config:
+//! `token_hash = "blake2b:<64 hex digits>"`. Caller identification hashes each presented token and compares.
 
 use std::fmt;
 use std::str::FromStr;
@@ -59,8 +62,8 @@ impl TokenHash {
         Self(Blake2b256::digest(token.text().as_bytes()).into())
     }
 
-    /// Whether `token` hashes to this digest, compared in constant time so that response timing does not reveal how
-    /// many leading bytes of a guess's digest were right (spec §7).
+    /// Returns whether `token` hashes to this digest. The comparison runs in constant time, so response timing does
+    /// not reveal how many leading bytes of a guess's digest were right (spec §7).
     pub fn matches(&self, token: &CallerToken) -> bool {
         self.0.as_slice().ct_eq(Self::of(token).0.as_slice()).into()
     }
@@ -71,7 +74,7 @@ impl TokenHash {
     }
 }
 
-/// The value of one lowercase hex digit, or `None` for anything else, including uppercase.
+/// Returns the value of one lowercase hex digit, or `None` for anything else, including uppercase.
 fn hex_value(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),

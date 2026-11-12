@@ -1,4 +1,5 @@
-//! Cross-reference checks that turn a parsed config into one the rest of the system can trust (spec §6–§9).
+//! Runs the cross-section checks that turn a parsed config into one the rest of the system can trust (spec §6–§9).
+//! Every config the service checks or approves passes through here before activation.
 //!
 //! Each section already passed its own rules when parsed; every check here needs two or more sections at once. All
 //! checks run and every failure is reported, in a fixed order, so an operator can fix a configuration in one pass and
@@ -240,7 +241,7 @@ impl ValidatedConfig {
     }
 }
 
-/// Every caller's listener and granted routes exist.
+/// Checks that every caller's listener and granted routes exist.
 fn check_references(config: &ParsedConfig) -> Vec<ValidationError> {
     config
         .callers()
@@ -265,7 +266,7 @@ fn caller_references(config: &ParsedConfig, name: &CallerName, caller: &CallerCo
     listener.into_iter().chain(routes).collect()
 }
 
-/// A TCP listener off loopback has TLS (spec §7).
+/// Checks that every TCP listener off loopback has TLS (spec §7).
 ///
 /// See [`ListenerConfig::plain_off_loopback`] for what counts as loopback.
 fn check_listener_tls(config: &ParsedConfig) -> Vec<ValidationError> {
@@ -281,7 +282,7 @@ fn check_listener_tls(config: &ParsedConfig) -> Vec<ValidationError> {
         .collect()
 }
 
-/// Per-caller limits are no looser than their route's limit, in rate or burst (spec §8).
+/// Checks that per-caller limits are no looser than their route's limit, in rate or burst (spec §8).
 ///
 /// A missing route is already reported by [`check_references`], so its limit is skipped here.
 fn check_caller_limits(config: &ParsedConfig) -> Vec<ValidationError> {
@@ -306,12 +307,12 @@ fn looser_limits(caller: &CallerName, route: &RouteName, limit: RateLimit, route
     rate.into_iter().chain(burst).collect()
 }
 
-/// Whether `a` refills faster than `b`, compared exactly by cross-multiplying; two `u32`s always fit in a `u64`.
+/// Returns whether `a` refills faster than `b`, compared exactly by cross-multiplying; two `u32`s always fit in a `u64`.
 fn higher_rate(a: RateLimit, b: RateLimit) -> bool {
     u64::from(a.requests().get()) * u64::from(b.per_seconds().get()) > u64::from(b.requests().get()) * u64::from(a.per_seconds().get())
 }
 
-/// Callers identified by their connection use the right kind of listener (spec §7).
+/// Checks that callers identified by their connection use the right kind of listener (spec §7).
 ///
 /// An `isolated-network` caller needs a TLS listener on a dedicated, non-loopback, non-wildcard address, bound to its
 /// own network, and must be the listener's only caller, since a second caller there would be indistinguishable. A
@@ -342,7 +343,7 @@ fn listener_auth(config: &ParsedConfig, name: &CallerName, caller: &CallerConfig
     }
 }
 
-/// Why `caller` is not the only caller on `listener`, if it is not.
+/// Explains why `caller` is not the only caller on `listener`, if it is not.
 fn sole_caller_fault(config: &ParsedConfig, caller: &CallerName, listener: &ListenerName) -> Option<ValidationError> {
     let others: Vec<_> = callers_on(config, listener)
         .map(|(other, _)| other)
@@ -357,7 +358,7 @@ fn sole_caller_fault(config: &ParsedConfig, caller: &CallerName, listener: &List
     })
 }
 
-/// Why `listener` cannot identify an `isolated-network` caller, if it cannot.
+/// Explains why `listener` cannot identify an `isolated-network` caller, if it cannot.
 fn isolated_network_fault(caller: &CallerName, name: &ListenerName, listener: &ListenerConfig) -> Option<ValidationError> {
     match listener.endpoint() {
         Endpoint::Tcp { address, tls: Some(_) } if !is_dedicated(address.ip()) => Some(ValidationError::UndedicatedAddress {
@@ -372,7 +373,7 @@ fn isolated_network_fault(caller: &CallerName, name: &ListenerName, listener: &L
     }
 }
 
-/// Why `listener` cannot identify a `peer` caller, if it cannot.
+/// Explains why `listener` cannot identify a `peer` caller, if it cannot.
 fn peer_fault(caller: &CallerName, name: &ListenerName, listener: &ListenerConfig) -> Option<ValidationError> {
     (!matches!(listener.endpoint(), Endpoint::UnixSocket(_))).then(|| wrong_kind(caller, "peer", name, "a unix_socket listener"))
 }
@@ -386,7 +387,7 @@ fn wrong_kind(caller: &CallerName, auth: &'static str, listener: &ListenerName, 
     }
 }
 
-/// Whether a bind on `ip` admits only the hosts of one network: it is neither loopback (every local process) nor
+/// Returns whether a bind on `ip` admits only the hosts of one network: it is neither loopback (every local process) nor
 /// unspecified (every interface).
 ///
 /// The address is canonicalized first, so `::ffff:127.0.0.1` counts as loopback here. The listener's TLS rule treats
@@ -396,7 +397,7 @@ fn is_dedicated(ip: IpAddr) -> bool {
     !ip.is_loopback() && !ip.is_unspecified()
 }
 
-/// A socket listener with any peer caller holds only peer callers, each naming its own account (spec §7).
+/// Checks that a socket listener with any peer caller holds only peer callers, each naming its own account (spec §7).
 ///
 /// Address listeners are skipped: a peer caller on one already fails with `WrongListenerKind`, and a second error
 /// about its neighbours would only contradict that.
@@ -421,7 +422,7 @@ fn peer_listener_faults(config: &ParsedConfig, listener: &ListenerName) -> Vec<V
     mixed.into_iter().chain(shared_accounts(listener, &peers)).collect()
 }
 
-/// One error per account that more than one of `peers` names, in account order.
+/// Returns one error per account that more than one of `peers` names, in account order.
 fn shared_accounts(listener: &ListenerName, peers: &[(&CallerName, &CallerConfig)]) -> Vec<ValidationError> {
     let by_user = peers
         .iter()
@@ -449,7 +450,7 @@ fn peer_account(caller: &CallerConfig) -> Option<&AccountName> {
     }
 }
 
-/// No two token callers on one listener share a token hash.
+/// Checks that no two token callers on one listener share a token hash.
 fn check_token_hashes(config: &ParsedConfig) -> Vec<ValidationError> {
     let groups = config
         .callers()
@@ -475,7 +476,7 @@ fn check_token_hashes(config: &ParsedConfig) -> Vec<ValidationError> {
         .collect()
 }
 
-/// No route prefix equals or is a segment prefix of another, across all routes (spec §6).
+/// Checks that no route prefix equals or is a segment prefix of another, across all routes (spec §6).
 ///
 /// Overlap is rejected outright rather than resolved by longest match, so which route serves a path never depends on
 /// a rule the operator has to remember.
@@ -499,7 +500,7 @@ fn overlaps(a: &RoutePrefix, b: &RoutePrefix) -> bool {
     a.segments().starts_with(b.segments()) || b.segments().starts_with(a.segments())
 }
 
-/// A listener's `token_header` is not the slot header of any route its callers can use (spec §9).
+/// Checks that a listener's `token_header` is not the slot header of any route its callers can use (spec §9).
 ///
 /// The service strips caller authentication before writing the slot, so a shared header would carry either the token
 /// or the credential, never both. The default `Proxy-Authorization` is reserved and can never be a slot.

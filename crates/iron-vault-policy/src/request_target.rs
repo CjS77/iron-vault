@@ -1,5 +1,5 @@
-//! Caller request targets: the one path representation used for both authorization and forwarding (specification
-//! §6, §8 steps 2 and 4, §9).
+//! Parses a caller's request target into the one path representation used for both authorization and forwarding
+//! (spec §6, §8 steps 2 and 4, §9). The service's request handler parses every target here first.
 //!
 //! Caller paths are hostile. Every check runs on the raw target before anything is decoded, so normalization can never
 //! erase evidence of traversal. A target is accepted only in origin form (`/path?query`); the path is split into
@@ -9,6 +9,13 @@
 //! - escapes of `.`, `/`, `\`, `%`, `?`, `#` and control characters are rejected;
 //! - every other escape is kept, with uppercase hex digits;
 //! - literal characters are kept as written.
+//!
+//! ```text
+//! /fx/%7Elatest?base=USD     → path /fx/~latest, query base=USD
+//! /fx/caf%c3%a9              → path /fx/caf%C3%A9
+//! /fx/%2e%2e/admin           → refused: EncodedDotOrSeparator
+//! /fx/../admin               → refused: DotSegment
+//! ```
 //!
 //! This is the same canonical form [`UpstreamUrl`](crate::UpstreamUrl) stores for its base segments (unreserved
 //! characters never escaped, other escapes uppercase), so the upstream base segments followed by the request segments

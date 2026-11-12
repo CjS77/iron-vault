@@ -1,7 +1,17 @@
-//! Path patterns: the route restriction that decides which upstream paths a route may reach (specification §6).
+//! Parses and matches path patterns, the route restriction that decides which upstream paths a route may reach (spec
+//! §6). Authorization matches them against the request path below the route prefix.
 //!
 //! A pattern is written as an absolute path whose segments are literals, `*` (exactly one segment) or `**` (zero or
-//! more complete segments). Patterns match the whole normalized request path below the upstream base path (the segments
+//! more complete segments). For example:
+//!
+//! ```text
+//! pattern            matches                                        does not match
+//! /latest            /latest                                        /latest/x
+//! /historical/**     /historical, /historical/2024, /historical/2024/01   /, /historicalx
+//! /items/*/price     /items/42/price                                /items/price, /items/4/2/price
+//! ```
+//!
+//! Patterns match the whole normalized request path below the upstream base path (the segments
 //! after the route prefix), never its query. Normalizing a request path into segments is
 //! [`NormalizedPath`](crate::NormalizedPath)'s job; matching here assumes segments in that form: validated, with
 //! unreserved characters decoded and every other escape kept as uppercase `%XX`.
@@ -75,7 +85,7 @@ enum Segment {
 }
 
 impl Segment {
-    /// Whether this segment consumes exactly the given request segment; `Any` is handled by the matcher.
+    /// Returns whether this segment consumes exactly the given request segment; `Any` is handled by the matcher.
     fn matches_one(&self, segment: &str) -> bool {
         match self {
             Self::Literal(text) => text == segment,
@@ -124,7 +134,7 @@ impl PathPattern {
         &self.text
     }
 
-    /// Whether the pattern matches the whole of a normalized request path, given as its segments without the leading
+    /// Returns whether the pattern matches the whole of a normalized request path, given as its segments without the leading
     /// slash, trailing slash or query. The root path is the empty slice.
     ///
     /// Uses greedy two-pointer matching that backtracks only to the most recent `**`, so the worst case is
@@ -157,7 +167,7 @@ impl PathPattern {
         pattern.get(p..).is_some_and(|tail| tail.iter().all(|seg| *seg == Segment::Any))
     }
 
-    /// The segments' text when every segment is a literal, or `None` when the pattern has a wildcard.
+    /// Returns the segments' text when every segment is a literal, or `None` when the pattern has a wildcard.
     ///
     /// Lets a route prefix share this type's literal-segment rules without accepting wildcards.
     pub(crate) fn literal_segments(&self) -> Option<Vec<String>> {
@@ -185,7 +195,7 @@ impl fmt::Display for PathPattern {
     }
 }
 
-/// Whether a character may appear in a pattern: `/`, `*`, or an RFC 3986 `pchar` other than `%`.
+/// Returns whether a character may appear in a pattern: `/`, `*`, or an RFC 3986 `pchar` other than `%`.
 ///
 /// Excluding `%` gives each literal exactly one spelling. A normalized segment ([`NormalizedPath`](crate::NormalizedPath))
 /// never escapes an unreserved character, but keeps an escaped sub-delimiter such as `%3B` encoded and distinct from a
@@ -240,7 +250,7 @@ impl PathPatterns {
         }
     }
 
-    /// Whether any pattern matches the normalized request path segments.
+    /// Returns whether any pattern matches the normalized request path segments.
     pub fn matches(&self, path: &[&str]) -> bool {
         self.0.iter().any(|pattern| pattern.matches(path))
     }

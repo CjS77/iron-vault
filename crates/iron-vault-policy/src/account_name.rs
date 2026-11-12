@@ -1,4 +1,8 @@
 //! The OS account a `peer` caller must connect as (spec §7).
+//!
+//! A caller on a peer listener is recognised by the uid of the connecting process. The config names the account, for
+//! example `user = "alice"`; activation looks up its uid on the host, and caller identification compares that uid with
+//! the one the kernel reports for each connection.
 
 use std::fmt;
 use std::str::FromStr;

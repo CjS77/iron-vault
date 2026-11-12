@@ -60,17 +60,16 @@ impl LogDestinationSetting {
         }
     }
 
-    /// Refuses a directory that is, or lies inside, one of the `reserved` directories (label, path).
+    /// Refuses a directory that is, or lies inside, one of the `reserved` directories, each given as (label, path).
     ///
-    /// The policy crate does not know where the state and config directories are, so the caller must pass them in.
-    /// Nothing calls this yet; the config check that applies the setting is meant to.
+    /// Log files in the state directory would be foreign files that make `unlock` refuse, and beside `config.toml` they
+    /// would sit in a directory whose contents the service does not own. The policy crate does not know where the
+    /// state and config directories are, so the service passes them in when it checks a config.
     ///
     /// The comparison is lexical: it compares path components only and resolves no symlink. The caller must pass
     /// canonicalised paths for the destination and for each reserved directory, because a symlink alias defeats a
     /// lexical check (on Fedora Atomic `/home` is a symlink to `/var/home`). `TrustedPathRule::LogDir` checks owner and
     /// mode only and does not cover this rule.
-    /// Log files in the state directory would be foreign files that make `unlock` refuse, and beside `config.toml`
-    /// they would sit in a directory the service does not own the contents of.
     pub fn check_outside(&self, reserved: &[(&'static str, &Path)]) -> Result<(), LogDestinationError> {
         let Some(dir) = self.directory() else { return Ok(()) };
         reserved

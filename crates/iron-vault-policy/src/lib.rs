@@ -1,8 +1,36 @@
-//! Caller identification and grants, routes, slots, markers, path and method rules, confirmation requirements, and the final
-//! outgoing-request decision.
+//! Policy: every decision about who may send which request where, and how the credential goes into it.
 //!
-//! This crate performs no I/O: every decision is a pure function of its inputs, so policy can be tested exhaustively
-//! and cannot be bypassed by an adapter.
+//! This crate is the policy bounded context. It parses and checks the configuration, identifies callers, selects and
+//! authorizes routes, charges rate limits, builds the upstream URL, fills the route's slot and makes the final
+//! outgoing-request check. The `iron-vault` service calls it at each step and does the I/O itself. This crate performs
+//! no I/O: every decision is a pure function of its inputs, so policy can be tested exhaustively and no adapter can
+//! bypass it.
+//!
+//! A configuration becomes the policy that requests are served under in three steps:
+//!
+//! ```text
+//! config.toml bytes ──ParsedConfig::from_toml──▶ ParsedConfig        each section's own rules (config)
+//!                   ──ValidatedConfig::try_from─▶ ValidatedConfig    rules across sections (validated)
+//!                   ──activate──────────────────▶ ActivePolicy       facts from the running service (activation):
+//!                                                                    credential records, capabilities, peer uids
+//! ```
+//!
+//! Each request then passes through these steps (spec §8). Between rate limiting and URL building, the store resolves
+//! the route's credential through its kind (`iron-vault-kinds`):
+//!
+//! ```text
+//! RequestTarget::parse        origin-form target, normalized path          (request_target)
+//! identify_caller             listener + peer uid or caller token → caller (caller_identity)
+//! authorize                   route, method and path restrictions          (authorization) ─▶ AuthorizedRequest
+//! RateLimiter::charge         route bucket and caller bucket, both or none (rate_limiter)
+//!      ── iron-vault-kinds resolves the credential into a SlotValue ──
+//! UpstreamTarget::build       URL built through the url API               (upstream_target)
+//! sanitize                    caller headers minus reserved headers        (outgoing_headers)
+//! OutgoingRequest::assemble   slot filled exactly once                     (outgoing_request)
+//! final_check                 read back the URL and headers before sending (final_check) ─▶ CheckedRequest
+//!      ── the service sends the request ──
+//! rewrite_location            what the caller sees of a redirect           (location_rewrite)
+//! ```
 
 pub mod account_name;
 pub mod activation;

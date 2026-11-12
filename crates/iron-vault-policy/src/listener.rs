@@ -1,4 +1,5 @@
-//! A `[listeners.<name>]` section: where callers reach the request interface (spec §6, §7).
+//! A `[listeners.<name>]` section: a Unix socket or TCP address where callers reach the request interface (spec §6,
+//! §7).
 
 use std::net::SocketAddr;
 
@@ -13,7 +14,7 @@ use crate::reserved_headers::{CALLER_TOKEN_HEADERS, is_reserved};
 /// The header callers authenticate with when a listener sets no `token_header`.
 pub const DEFAULT_TOKEN_HEADER: &str = "proxy-authorization";
 
-/// A validated listener.
+/// One listener's section, with the rules local to it checked.
 ///
 /// TOML forms:
 ///
@@ -28,12 +29,13 @@ pub const DEFAULT_TOKEN_HEADER: &str = "proxy-authorization";
 /// token_header = "X-Iron-Vault-Token"
 /// ```
 ///
-/// A TCP listener on a non-loopback address must have TLS (§7), but a `ListenerConfig` does not guarantee it: the rule
-/// needs the listener's name to be reported usefully, so [`ValidatedConfig`](crate::ValidatedConfig) enforces it at
-/// load and an unsafe configuration is never approved. The listeners from [`ParsedConfig::listeners`](crate::ParsedConfig)
-/// are unchecked, and whoever opens one must test [`plain_off_loopback`](Self::plain_off_loopback) first.
-/// Whether the callers on a listener may use `isolated-network` or `peer`
-/// authentication depends on every caller section, so [`ValidatedConfig`](crate::ValidatedConfig) checks it.
+/// A TCP listener on a non-loopback address must have TLS (§7), but a `ListenerConfig` does not guarantee it: the
+/// error must name the listener, so [`ValidatedConfig`](crate::ValidatedConfig) enforces the rule, and an unsafe
+/// configuration is never approved. The listeners from [`ParsedConfig::listeners`](crate::ParsedConfig) are
+/// unchecked, so code that opens one of those must test [`plain_off_loopback`](Self::plain_off_loopback) first.
+///
+/// Whether the callers on a listener may use `isolated-network` or `peer` authentication depends on every caller
+/// section, so [`ValidatedConfig`](crate::ValidatedConfig) checks that too.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawListener")]
 pub struct ListenerConfig {
@@ -116,8 +118,8 @@ impl ListenerConfig {
         &self.endpoint
     }
 
-    /// The address of a plain-HTTP TCP listener that is not on loopback, which would carry caller tokens in clear text
-    /// (spec §7). `None` for a Unix socket, a TLS listener, or a loopback address.
+    /// Returns the address of a plain-HTTP TCP listener that is not on loopback, which would carry caller tokens in
+    /// clear text (spec §7). Returns `None` for a Unix socket, a TLS listener, or a loopback address.
     ///
     /// Loopback is `127.0.0.0/8` or `::1`. An IPv4-mapped address such as `::ffff:127.0.0.1` is deliberately not loopback:
     /// whether a dual-stack socket on it stays on the host depends on platform settings this crate cannot see.

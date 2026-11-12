@@ -1,4 +1,7 @@
-//! Configured upstream URLs.
+//! Parses a route's `upstream` URL into its one canonical form (spec §9).
+//!
+//! For example, `https://API.fx.example:443/v1/` and `https://api.fx.example/v1` are the same upstream, and both
+//! display as the latter.
 //!
 //! A route's upstream is parsed here once. Validation runs on the raw text, because the `url` crate silently resolves
 //! dot segments, strips tabs and newlines, and treats `\` as `/` for `https`, which would erase exactly the evidence
@@ -152,6 +155,8 @@ fn canonical(host: &Host, port: Port, base_segments: &[String]) -> String {
     }
 }
 
+/// Checks that the `url` crate parses and serializes `canonical` unchanged, and returns the parse.
+///
 /// The raw-text checks should already exclude anything the `url` crate rewrites; this makes that a guarantee.
 fn check_url_fixed_point(canonical: &str) -> Result<Url, UpstreamUrlError> {
     match Url::parse(canonical) {
@@ -199,7 +204,8 @@ fn split_host_port(authority: &str) -> Result<(&str, Option<&str>), UpstreamUrlE
     }
 }
 
-/// `path` is empty or starts with `/`. One trailing slash is dropped; any other empty segment is an error.
+/// Splits a base path into checked segments. `path` is empty or starts with `/`. One trailing slash is dropped; any
+/// other empty segment is an error.
 fn parse_base_path(path: &str) -> Result<Vec<String>, UpstreamUrlError> {
     let trimmed = path.strip_prefix('/').unwrap_or(path);
     if trimmed.is_empty() {
@@ -219,7 +225,7 @@ fn parse_segment(segment: &str) -> Result<String, UpstreamUrlError> {
     }
 }
 
-/// Anything outside [`is_path_char`] would be percent-encoded by a URL serializer and so change meaning.
+/// Rejects characters outside [`is_path_char`], which a URL serializer would percent-encode, changing the path.
 fn check_path_characters(segment: &str) -> Result<(), UpstreamUrlError> {
     segment
         .chars()
@@ -240,6 +246,8 @@ fn normalize_escapes(segment: &str) -> Result<String, UpstreamUrlError> {
     })
 }
 
+/// Returns whether a base path may not hold `byte` as an escape.
+///
 /// Encoded unreserved characters (including `.`) have an unencoded equivalent, so encoding them only hides intent;
 /// encoded separators, `%` and controls are what double decoding turns into traversal.
 fn is_forbidden_escape(byte: u8) -> bool {

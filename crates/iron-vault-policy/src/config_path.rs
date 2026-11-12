@@ -1,4 +1,4 @@
-//! Absolute filesystem paths named in configuration, such as listener sockets and TLS material (spec §6, §7).
+//! Checks absolute filesystem paths named in configuration, such as listener sockets and TLS material (spec §6, §7).
 //!
 //! Only the text is checked here. Whether the file exists and who owns it is an I/O question for the binary.
 

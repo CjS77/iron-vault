@@ -1,4 +1,7 @@
-//! The caller token itself: its text format, generation from a cryptographic source, and parsing (spec §7).
+//! Caller tokens: the secret a caller presents on a token listener to prove which caller it is (spec §7).
+//!
+//! This module generates tokens, parses presented ones and fixes their text format. A token looks like
+//! `ivt_` followed by 43 base64url characters; the config holds only its hash ([`TokenHash`](crate::TokenHash)).
 
 use std::fmt;
 
@@ -77,7 +80,8 @@ impl CallerToken {
         Self::encode(&Zeroizing::new(bytes))
     }
 
-    /// Encodes bytes the caller already holds in a wiped buffer, so neither constructor copies them out of it.
+    /// Encodes `bytes` as a token. Both constructors hold their bytes in a wiped buffer and pass a borrow here, so
+    /// neither copies the bytes out of it.
     fn encode(bytes: &[u8; CALLER_TOKEN_BYTES]) -> Self {
         // Sized exactly, so neither encoding nor the conversion to a boxed `str` reallocates and strands a copy.
         let mut text = String::with_capacity(CALLER_TOKEN_LEN);
@@ -123,18 +127,18 @@ impl CallerToken {
         self.0.expose_secret()
     }
 
-    /// The token's full text, prefix included: the input to its hash.
+    /// Returns the token's full text, prefix included: the input to its hash.
     pub(crate) fn text(&self) -> &str {
         self.0.expose_secret()
     }
 }
 
-/// Whether `b` is in the URL-safe base64 alphabet (RFC 4648 §5).
+/// Returns whether `b` is in the URL-safe base64 alphabet (RFC 4648 §5).
 fn is_base64url(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
 }
 
-/// Whether `b` is a base64url character whose alphabet index is divisible by 4, so its low two bits are zero.
+/// Returns whether `b` is a base64url character whose alphabet index is divisible by 4, so its low two bits are zero.
 fn is_canonical_ending(b: u8) -> bool {
     b"AEIMQUYcgkosw048".contains(&b)
 }

@@ -1,9 +1,13 @@
-//! The token bucket that enforces a route's [`RateLimit`] (spec §8, §15).
+//! The token bucket that enforces a route's [`RateLimit`] (spec §8, §15). [`RateLimiter`](crate::RateLimiter) holds
+//! one per route and per stricter caller limit.
 //!
 //! The arithmetic is exact integer arithmetic so rounding can never grant an extra request. The level is counted in
 //! *units*, where one token is `per_seconds × 10⁹` units: one nanosecond then refills exactly `requests` units, so
 //! no fraction of a token is ever lost or invented. Time is passed in, which keeps the bucket pure and lets tests
 //! step a clock instead of sleeping.
+//!
+//! For example, `rate_limit = { requests = 60, per_seconds = 60, burst = 10 }` makes one token 60 × 10⁹ units. Each
+//! nanosecond adds 60 units, so a token takes one second to fill, and the bucket holds at most 10 tokens.
 
 use std::time::{Duration, Instant};
 
@@ -77,7 +81,7 @@ impl TokenBucket {
         self.level = self.level.saturating_sub(self.token_units);
     }
 
-    /// Whole tokens available at `now`, rounded down, without changing the bucket.
+    /// Returns the whole tokens available at `now`, rounded down, without changing the bucket.
     ///
     /// Intended for tests and the `status` report; enforcement goes through [`TokenBucket::try_take`].
     pub fn level_at(&self, now: Instant) -> u64 {
@@ -90,7 +94,7 @@ impl TokenBucket {
         self.updated = self.updated.max(now);
     }
 
-    /// The level the bucket would hold at `now`; time before the last update counts as zero.
+    /// Computes the level the bucket would hold at `now`; time before the last update counts as zero.
     fn level_after(&self, now: Instant) -> u128 {
         let elapsed = now.saturating_duration_since(self.updated).as_nanos();
         self.level.saturating_add(elapsed.saturating_mul(self.requests)).min(self.capacity)
@@ -108,7 +112,7 @@ pub struct RetryAfter {
 }
 
 impl RetryAfter {
-    /// The wait for `deficit` units to refill at `requests` units per nanosecond.
+    /// Computes the wait for `deficit` units to refill at `requests` units per nanosecond.
     fn for_deficit(deficit: u128, requests: u128) -> Self {
         let nanos = deficit.div_ceil(requests.max(1));
         let secs = nanos.div_ceil(NANOS_PER_SEC).max(1);
