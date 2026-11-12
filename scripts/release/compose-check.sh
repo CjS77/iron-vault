@@ -650,8 +650,20 @@ sudo_ping_is_accepted() {
     has_line 'container profile' "$out"
 }
 
+# The image's own `--version`, read back: an image named by --image skipped the Dockerfile's build-time check.
+image_lists_only_container() {
+    local out
+    out=$(docker run --rm --network none "$SERVICE_IMAGE" --version) || { echo "iron-vault --version failed in $SERVICE_IMAGE"; return 1; }
+    echo "$out"
+    version_lists_only_container "$out"
+}
+
+# Takes `--version` output; succeeds only when its feature list is exactly `container`.
+version_lists_only_container() { [[ $1 =~ ^iron-vault\ [^\ ]+\ \(features:\ container\)$ ]]; }
+
 run_live_checks() {
     local pid
+    check "the image's iron-vault --version lists exactly (features: container)" image_lists_only_container
     check "the stack comes up and answers on the admin socket" stack_comes_up
     # Nothing else can run without the stack; the FAIL above says why.
     [ "$STACK_UP" = 1 ] && [ -n "$(cid iron-vault)" ] || return 0

@@ -566,8 +566,9 @@ Two release checks run on a disposable host and are the evidence for this profil
   and has no host address, every container on a caller network has the static address the Compose file gives it, no
   container's `NetworkMode` names Iron Vault's container (from `docker inspect`, and from `docker compose config` on the
   reference file), no caller reaches another's listener, the service runs as the fixed uid with locked memory,
-  the admin socket refuses a non-root host account and accepts `sudo iron-vault ping`, and the named volumes have the
-  modes the image gave them.
+  the admin socket refuses a non-root host account and accepts `sudo iron-vault ping`, the named volumes have the
+  modes the image gave them, and the image's own `iron-vault --version` lists exactly `(features: container)`, which an
+  image passed with `--image` has not otherwise shown.
 - **The host unlock gate:** after provisioning and `init --host-unlock`, a restart and a reboot reach Ready with no
   `unlock`; the recovery key opens the same vault; `identity.age` has three X25519 stanzas; the handoff is on a ramfs
   that `findmnt` shows on the host; no `AGE-SECRET-KEY` appears in the image, the environment, the volumes, `/etc`,

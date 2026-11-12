@@ -251,7 +251,9 @@ Every shipped package is built without `dev-mode`: its `iron-vault --version` li
 | CI's release build lists neither `dev-mode` nor `container` | `.github/workflows/ci.yml` step "Release build has no development mode" | `cargo test` (in CI) |
 | The Compose image build refuses a binary that lists more than `container` | `packaging/compose/Dockerfile` | `root + VM` (built by `scripts/release/compose-check.sh`) |
 | Installed: `--version` lists no features | `scripts/release/linux-install-check.sh` item `version_lists_no_features` | `root + VM` |
-| The package checks shown to refuse a `dev-mode` binary; the Compose check re-reads the built image's `--version` | **gap**: K-370 | `cargo test` |
+| The Debian package's feature check refuses `--version` naming `dev-mode`, `container` or both, and passes only `(features: none)` | `scripts/build-deb-test.sh` | `cargo test` (in CI) |
+| The Compose check accepts only a `--version` listing exactly `container` | `scripts/release/compose-check-test.sh` | `cargo test` (in CI) |
+| The Compose check re-reads the built image's `--version` | `scripts/release/compose-check.sh` item `image_lists_only_container` | `root + VM` |
 | A recorded run of the install check | **gap**: K-372 | `root + VM` |
 
 ### Caller compatibility

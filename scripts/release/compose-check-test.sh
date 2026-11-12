@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests that compose-check.sh's preflight and compose-unlock-check.sh's preflight_unlock refuse a host without BuildKit before they
-# touch any host path. Every tool is a stub in a mktemp dir ahead of PATH, so it needs no Docker, root or VM and writes nowhere else.
+# touch any host path, and that compose-check.sh accepts only an image whose `--version` lists exactly `container`. Every tool is a
+# stub in a mktemp dir ahead of PATH, so it needs no Docker, root or VM and writes nowhere else.
 # The scripts only define functions when sourced, so each case sources one and calls its preflight function.
 set -uo pipefail
 
@@ -61,5 +62,15 @@ for case in "compose-check.sh preflight" "compose-unlock-check.sh preflight_unlo
     out=$(run "$script" "$fn" 0); rc=$?
     check "$fn: buildx present reaches the host checks" "$rc" "$rc" "$out" yes
     ! grep -q docker-buildx <<<"$out" || { echo "FAIL $fn: buildx present still complains of BuildKit: $out"; status=1; }
+done
+
+# The live check's reading of the image's `--version`: only a feature list of exactly `container` passes.
+# shellcheck source=/dev/null
+source "$dir/compose-check.sh"
+for features in container none dev-mode 'dev-mode, container' 'container, dev-mode' 'container, test-support'; do
+    want=fail; [ "$features" = container ] && want=pass
+    version_lists_only_container "iron-vault 0.3.0-alpha (features: $features)" && got=pass || got=fail
+    [ "$got" = "$want" ] && echo "ok   version_lists_only_container: $want for $features" \
+        || { echo "FAIL version_lists_only_container: expected $want for $features"; status=1; }
 done
 exit $status
