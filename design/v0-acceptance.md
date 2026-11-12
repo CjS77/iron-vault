@@ -55,7 +55,13 @@ for the file only.
 | Header overrides | `crates/iron-vault/tests/proxy/pipeline_egress.rs::override_rewrite_and_forwarding_headers_are_stripped_not_refused`, `crates/iron-vault-policy/tests/policy/destination.rs::caller_host_header_keeps_every_property` | `cargo test` |
 | Wrong markers | `crates/iron-vault/tests/proxy/pipeline_egress.rs::a_marker_naming_another_credential_in_the_slot_is_400`, `crates/iron-vault-policy/tests/policy/destination.rs::slot_filled_through_another_route_is_refused` | `cargo test` |
 | Mismatched final URL: the final check refuses it and raises an event | `crates/iron-vault-policy/src/final_check/tests.rs::a_host_other_than_the_upstreams_is_refused`, `crates/iron-vault-policy/src/final_check/tests.rs::a_path_other_than_the_authorized_one_is_refused`, `crates/iron-vault/src/pipeline/tests/refusal.rs::a_final_check_failure_raises_a_high_severity_event_without_secrets` | `cargo test` |
-| Generated hostile requests through the proxy, checked at the recording upstream | **gap**: K-362 | `cargo test` |
+| Generated hostile requests through the proxy, checked at the recording upstream: unauthenticated and ungranted callers, traversal and long paths, absolute- and authority-form targets, override headers, wrong markers and methods | `crates/iron-vault/tests/proxy/hostile_egress.rs::generated_hostile_requests_produce_no_credentialed_egress` | `cargo test` |
+
+A mismatched final URL has no egress-level test. The pipeline builds the outgoing URL structurally from the selected
+route's upstream and re-checks it, so no request through the public API produces one, and the proxy has no test hook to
+miswire a route. The "Mismatched final URL" row shows the case where a mismatch can be built: the final check refusing
+a request whose host or path differs from the authorized one, and the pipeline turning a final-check failure into a
+high-severity event that names no secret.
 
 ## 3. Trusted paths and the desktop user
 
