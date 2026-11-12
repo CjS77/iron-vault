@@ -204,4 +204,4 @@ The user manual is an mdBook in [`book/`](book/src/SUMMARY.md):
 
 Design documents and the [product specification](design/iron-vault-specification.md) are in `design/`. The
 [visual design](design/visual-design.md) covers the logo, typefaces and CSS, and [design reviews](design/reviews/README.md)
-are indexed in `design/reviews/`.
+are indexed in `design/reviews/`. The [v0 acceptance index](design/v0-acceptance.md) maps each release check to the tests that show it.

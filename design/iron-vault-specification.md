@@ -1143,6 +1143,9 @@ v0 release checks must demonstrate all of the following:
   its pending migration. A new export passphrase or an earlier unlock must never authorize export on its own.
 - Locked startup, invalid policy, TLS failures, unsafe listener configurations, and ownership failures produce explicit safe states.
 
+The [v0 acceptance index](v0-acceptance.md) names the test, release script item or evidence file that shows each check,
+and the checks that have none yet.
+
 ## Feature roadmap
 
 Planned features are described in [future specifications](future-specifications.md).
