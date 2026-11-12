@@ -189,9 +189,11 @@ async fn a_cli_that_trickles_frames_misses_the_transfer_deadline() {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     };
+    // A failed write means the service closed the socket at its deadline, and its outcome may not have reached the channel
+    // yet (or `select!` may poll the trickle first), so the outcome is awaited afterwards rather than raced.
     let ended = tokio::select! {
         ended = outcome(&mut received) => ended,
-        () = trickle => panic!("the service never ended the transfer"),
+        () = trickle => outcome(&mut received).await,
     };
     assert_eq!(ended, Err(format!("{:?}", ExchangeError::TransferTimedOut)));
     served.await.unwrap();
