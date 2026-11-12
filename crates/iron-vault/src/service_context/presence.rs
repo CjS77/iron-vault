@@ -1,5 +1,7 @@
-//! Opening a pinned approver's key with its approval passphrase or TPM approval PIN (specification §12, §6): the one check
-//! both `config approve` and owner presence (design/credential-commands.md, "Owner presence") make.
+//! Opens a pinned approver's key with its approval passphrase or TPM approval PIN
+//! ([specification §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),
+//! [§6](../../../../design/iron-vault-specification.md#6-credential-records-and-configuration)): the one check both
+//! `config approve` and [owner presence](../../../../design/credential-commands.md#owner-presence) make.
 //!
 //! `config approve` keeps the signer it opens to sign its payload. Owner presence drops it at once and keeps only an
 //! [`OwnerPresence`], so presence reserves no version, signs nothing and writes nothing.
@@ -72,7 +74,8 @@ impl ApprovalSigner for ApproverSigner {
     }
 }
 
-/// Proof that the owner typed the approval passphrase in this exchange, after the service described the change.
+/// Proof that the owner typed an approver's secret (approval passphrase or TPM approval PIN) in this exchange, after
+/// the service described the change.
 ///
 /// Only a successful key check constructs one, and a vault change consumes it, so it is never kept or reused. It is
 /// required by type: the write that needs owner presence cannot be called without it. It names the approver whose key
@@ -83,7 +86,7 @@ pub struct OwnerPresence {
 }
 
 impl OwnerPresence {
-    /// The pinned approver whose key the owner opened.
+    /// Returns the pinned approver whose key the owner opened.
     pub fn approver(&self) -> &PinnedApprover {
         &self.approver
     }
@@ -103,8 +106,8 @@ pub enum DenialKind {
 }
 
 impl DenialKind {
-    /// The refusal for an answer that cannot be a secret of a `kind` approver (empty, not UTF-8, or for a TPM approver
-    /// shorter than any enrolled PIN), which is answered as a wrong one.
+    /// Returns the refusal for an answer that cannot be a secret of a `kind` approver (empty, not UTF-8, or for a TPM
+    /// approver shorter than any enrolled PIN), which is answered as a wrong one.
     pub const fn wrong_answer(kind: SignerKind) -> Self {
         match kind {
             SignerKind::Software => Self::WrongPassphrase,
@@ -112,7 +115,8 @@ impl DenialKind {
         }
     }
 
-    /// The snake_case label audit events record (`design/audit-logging.md`).
+    /// Returns the snake_case label audit events record ([audit logging](../../../../design/audit-logging.md)), such as
+    /// `wrong_passphrase`.
     pub const fn label(self) -> &'static str {
         match self {
             Self::WrongPassphrase => "wrong_passphrase",
@@ -126,28 +130,29 @@ impl DenialKind {
 /// Why the approval passphrase or PIN check did not pass. No message holds anything the owner typed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PresenceRefusal {
-    /// The passphrase does not open the asked approver's key envelope, the key inside is not the asked approver's, or the TPM
-    /// refused the PIN.
+    /// The passphrase does not open the asked approver's key envelope, the key inside is not the asked approver's, or
+    /// the TPM refused the PIN.
     #[error("{}", denial_text(*.0))]
     Denied(DenialKind),
-    /// The answer cannot be the asked approver's secret (see [`DenialKind::wrong_answer`]), so it was refused as a wrong
-    /// one before the key or the TPM signing helper was asked.
+    /// The answer cannot be the asked approver's secret (see [`DenialKind::wrong_answer`]), so it was refused as a
+    /// wrong one before the key or the TPM signing helper was asked.
     #[error("{}", denial_text(*.0))]
     Unusable(DenialKind),
     /// The approver key could not be read, or the check did not finish.
     #[error("the approver key cannot be checked: {0}")]
     Unavailable(String),
-    /// The TPM is in dictionary-attack lockout, or the lockout reserve withheld the try. Nothing was reserved, signed or
-    /// changed.
+    /// The TPM is in dictionary-attack lockout, or the lockout reserve withheld the try. Nothing was reserved, signed
+    /// or changed.
     #[error("the TPM is locked out; try again in {wait_seconds} seconds; nothing was reserved, signed or changed")]
     TpmLockedOut {
-        /// The whole seconds to wait.
+        /// The number of whole seconds to wait.
         wait_seconds: u64,
     },
-    /// The TPM signing helper refused for a reason other than the PIN, or could not be reached; `message` names the status.
+    /// The TPM signing helper refused for a reason other than the PIN, or could not be reached; `message` names the
+    /// status.
     #[error("the TPM approver cannot be checked: {message}")]
     TpmUnavailable {
-        /// What the audit log's `tpm_status` records.
+        /// The status the audit log's `tpm_status` field records.
         status: TpmStatus,
         /// The helper's status in words.
         message: String,
@@ -155,8 +160,9 @@ pub enum PresenceRefusal {
 }
 
 impl PresenceRefusal {
-    /// What an audit event records about this refusal, when it is the kind the owner or an attacker causes: the check that
-    /// refused and, for an answer the TPM signing helper saw, its status. `None` for a check that could not run.
+    /// Returns what an audit event records about this refusal, when it is the kind the owner or an attacker causes: the
+    /// check that refused and, for an answer the TPM signing helper saw, its status. Returns `None` for a check that
+    /// could not run.
     pub fn audit(&self) -> Option<(DenialKind, Option<TpmStatus>)> {
         match self {
             Self::Denied(DenialKind::WrongPin) => Some((DenialKind::WrongPin, Some(TpmStatus::WrongPin))),
@@ -186,14 +192,14 @@ fn denial_text(kind: DenialKind) -> &'static str {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Opens `approver`'s own key with what the owner typed, on the blocking pool, since scrypt holds a thread for seconds
-    /// and the TPM signing helper answers over a socket. A software approver's key envelope, `approver-<approver ID>.age`,
-    /// opens with its passphrase; a TPM approver's key proves itself by signing a fresh presence payload under its PIN,
-    /// which needs `vault_id`. A wrong secret, or a key that is not `approver`'s, is [`PresenceRefusal::Denied`], and a
-    /// secret of the other kind is a check that could not run.
+    /// Opens `approver`'s own key with what the owner typed, on the blocking pool, since scrypt holds a thread for
+    /// seconds and the TPM signing helper answers over a socket. A software approver's key envelope,
+    /// `approver-<approver ID>.age`, opens with its passphrase; a TPM approver's key proves itself by signing a fresh
+    /// presence payload under its PIN, which needs `vault_id`. A wrong secret, or a key that is not `approver`'s, is
+    /// [`PresenceRefusal::Denied`], and a secret of the other kind is a check that could not run.
     ///
-    /// The task owns the secret and drops it when it ends. If this future is dropped first, the task still ends and drops
-    /// the signer it opened.
+    /// The task owns the secret and drops it when it ends. If this future is dropped first, the task still ends and
+    /// drops the signer it opened.
     pub(super) async fn open_approver(
         &self,
         secret: ApproverSecret,
@@ -255,15 +261,15 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             .unwrap_or_else(|_| Err(PresenceRefusal::Unavailable("the approver key check was interrupted".to_owned())))
     }
 
-    /// `approvers` in [approver order](approver_order), by the signer of the active approval the serving snapshot was built
-    /// from. The service is Unavailable, with no active approval, when it holds no snapshot.
+    /// Sorts `approvers` into [approver order](approver_order), by the signer of the active approval the serving
+    /// snapshot was built from. The service is Unavailable, with no active approval, when it holds no snapshot.
     pub(super) fn ordered_approvers(&self, approvers: &[PinnedApprover]) -> Vec<PinnedApprover> {
         approver_order(approvers, self.active_signer())
     }
 
-    /// [`ordered_approvers`](Self::ordered_approvers) without the approvers this install cannot ask: a TPM approver with no
-    /// readable key blob, or any while the helper socket is missing. A vault moved to another machine therefore starts its
-    /// prompt at an approver that can answer.
+    /// Returns [`ordered_approvers`](Self::ordered_approvers) without the approvers this install cannot ask: a TPM
+    /// approver with no readable key blob, or any while the helper socket is missing. A vault moved to another
+    /// machine therefore starts its prompt at an approver that can answer.
     pub(super) fn askable_approvers(&self, approvers: &[PinnedApprover]) -> Vec<PinnedApprover> {
         let mut ordered = self.ordered_approvers(approvers);
         ordered.retain(|approver| self.can_ask(approver));
@@ -279,7 +285,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         }
     }
 
-    /// The approver that signed the active approval, when the service is serving one.
+    /// Returns the approver that signed the active approval, or `None` when the service is serving none.
     pub(super) fn active_signer(&self) -> Option<ApproverId> {
         match self.holder.load() {
             Admission::Serve(snapshot) => snapshot.signer(),
@@ -287,8 +293,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         }
     }
 
-    /// Owner presence: [`open_approver`](Self::open_approver) as the `approver` the owner answered, dropping the signer at
-    /// once. A key that is not `approver`'s is refused, with no fall-through to another approver.
+    /// Proves owner presence: runs [`open_approver`](Self::open_approver) as the `approver` the owner answered,
+    /// dropping the signer at once. A key that is not `approver`'s is refused, with no fall-through to another
+    /// approver.
     pub(super) async fn prove_presence(&self, secret: ApproverSecret, approver: &PinnedApprover) -> Result<OwnerPresence, PresenceRefusal> {
         let vault_id = self.inner.lock().await.open.as_ref().map(|open| open.approval.vault_id());
         self.open_approver(secret, approver.clone(), vault_id).await.map(|signer| {
@@ -300,8 +307,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 }
 
-/// A wrong approval passphrase, or a key that is not the asked approver's, is the owner's refusal; anything else is
-/// the service's.
+/// Classifies a signing error: a wrong approval passphrase, or a key that is not the asked approver's, is the owner's
+/// refusal; anything else is the service's.
 fn denied_or_unavailable(error: SignError) -> PresenceRefusal {
     match error {
         SignError::WrongPassphrase => PresenceRefusal::Denied(DenialKind::WrongPassphrase),
