@@ -1,4 +1,4 @@
-//! Audit events about the admin socket (`design/audit-logging.md`, "Admin commands").
+//! Audit events about the admin socket ([audit logging: catalogue, "Admin commands"](../../../../design/audit-logging.md#catalogue)).
 
 use super::{AUDIT_TARGET, AuditEvent, EventName};
 use crate::admin::protocol::{AdminCommand, FrameError};

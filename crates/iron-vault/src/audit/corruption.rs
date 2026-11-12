@@ -1,4 +1,5 @@
-//! Audit events about a damaged vault, from the store's open report and errors (`design/audit-logging.md`, "Corruption").
+//! Audit events about a damaged vault, from the store's open report and errors
+//! ([audit logging: catalogue, "Corruption"](../../../../design/audit-logging.md#catalogue)).
 //!
 //! The store returns these as facts and logs nothing; the service opens every vault through [`open_vault`], which emits
 //! one event per fact. Each event carries `remediation`, a fixed phrase for the administrator.
@@ -11,14 +12,18 @@ use iron_vault_store::{
 
 use super::{AUDIT_TARGET, AuditEvent, EventName};
 
+/// The `remediation` for damaged shared state. Re-initializing would orphan the records, so it says not to.
 const SHARED_STATE_REMEDIATION: &str = "restore the state directory from a backup taken by this vault, or recover the vault; \
      do not delete or re-initialize the state directory, which would orphan every credential record";
 
+/// The `remediation` for a file the vault manifest does not list.
 const UNINDEXED_REMEDIATION: &str = "the vault manifest does not list this file, so it is ignored and the next vault write removes it; \
      if no write was interrupted, investigate who can write to the state directory";
 
+/// The `remediation` for a vault whose approval state is not recorded.
 const UNRECORDED_REMEDIATION: &str = "record the approval state with `record_approval_state`";
 
+/// The `remediation` for a state directory the service cannot list.
 const STATE_DIR_REMEDIATION: &str = "check that the state directory exists and that the service account can read it";
 
 /// `vault.record-damaged`: a listed record is damaged and was not loaded. `error_kind` is left out unless a read failed.
@@ -142,6 +147,7 @@ pub fn open_vault(
         .inspect_err(emit_open_error)
 }
 
+/// One event per fact in an open report: each damaged record, each unindexed file, and an unrecorded approval state.
 fn emit_open_report(report: &OpenReport) {
     report.damaged_records().iter().for_each(|record| RecordDamaged { record }.emit());
     report.unindexed().iter().for_each(|file| UnindexedFile { file }.emit());
@@ -150,6 +156,7 @@ fn emit_open_report(report: &OpenReport) {
     }
 }
 
+/// The event for an open error that is damage: damaged shared state, or a state directory that cannot be listed.
 fn emit_open_error(error: &VaultError) {
     match error {
         VaultError::SharedStateDamaged { file, damage } => SharedStateDamaged { file, damage }.emit(),
@@ -162,6 +169,7 @@ fn emit_open_error(error: &VaultError) {
     }
 }
 
+/// The shared state damage as its fixed `damage` label.
 const fn shared_state_damage_label(damage: &SharedStateDamage) -> &'static str {
     match damage {
         SharedStateDamage::MissingWithRecords => "missing_with_records",

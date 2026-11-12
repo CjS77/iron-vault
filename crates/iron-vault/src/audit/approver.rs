@@ -1,5 +1,5 @@
-//! The approver events (`design/approval-signers.md`, "Audit events"): an approver change's `approver.enrolled`,
-//! `approver.removed` and `approver.change-failed`, and step 3's `approver.orphan-removed`.
+//! The approver events: an approver change's `approver.enrolled`, `approver.removed` and `approver.change-failed`, and
+//! step 3's `approver.orphan-removed` ([approval signers: audit events](../../../../design/approval-signers.md#audit-events)).
 //!
 //! They hold fixed labels, and approver IDs and labels, which are public (a label is escaped): never a passphrase, a key
 //! or a file's bytes.

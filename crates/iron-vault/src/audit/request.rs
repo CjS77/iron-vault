@@ -1,11 +1,22 @@
 //! The request event, `request.completed`, and the `request.defect` audit event that accompanies a service defect
-//! (`design/audit-logging.md`, "Request event").
+//! ([audit logging: request event](../../../../design/audit-logging.md#request-event)).
 //!
 //! The request server owns the event. It makes a [`RequestRecord`] for each request it receives and gives the handler a
 //! [`RequestFacts`] handle to fill in what it learns: the caller, the route and why it refused. The record is the only
 //! thing that writes the event. It travels in the outermost response body and writes the event when that body ends or
 //! is dropped, or from its own `Drop` when no response was ever produced, so a request that ends in any way writes it
 //! exactly once.
+//!
+//! ```text
+//! request server: RequestRecord::new ──facts()──→ handler: RequestFacts
+//!       │                                         caller, route, refuse, scrub_matches; ignored once
+//!       │ answered(status)                        the request server replaces the handler's answer
+//!       ▼
+//! outermost response body: sent(bytes), then end(Clean or Cut), or Drop
+//!       │
+//!       ▼
+//! request.completed, and response.scrubbed when a scrub pattern matched
+//! ```
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -225,10 +236,11 @@ struct State {
     reason: Option<ReasonCode>,
     /// Scrub matches in the relayed response so far, once the handler built one; `None` when it relayed nothing.
     scrub_matches: Option<u64>,
-    /// Set when the request server replaces the handler's answer; the handler's later facts are ignored.
+    /// `true` if and only if the request server replaced the handler's answer; the handler's later facts are then ignored.
     sealed: bool,
 }
 
+/// What the record and every copy of its handle share.
 #[derive(Debug)]
 struct Shared {
     id: RequestId,
@@ -242,6 +254,7 @@ struct Shared {
 pub struct RequestFacts(Arc<Shared>);
 
 impl RequestFacts {
+    /// The facts so far, taken even from a poisoned lock, so the event is still written.
     fn state(&self) -> MutexGuard<'_, State> {
         self.0.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -291,8 +304,9 @@ impl RequestFacts {
         self.0.request_bytes.fetch_add(bytes, Ordering::Relaxed);
     }
 
-    /// Writes the high-severity `request.defect` event for a refusal only a service defect can cause (§9). The caller
-    /// records the request's `service_defect` reason as it does any other.
+    /// Writes the high-severity `request.defect` event for a refusal only a service defect can cause
+    /// ([spec §9](../../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)). The caller records the
+    /// request's `service_defect` reason as it does any other.
     pub fn report_defect(&self, defect: &'static str) {
         let state = self.state();
         RequestDefect {
@@ -335,6 +349,7 @@ pub struct RequestRecord {
     service_close: ServiceClose,
     status: Option<u16>,
     response_bytes: u64,
+    /// `true` if and only if the request event is written.
     written: bool,
 }
 
@@ -423,6 +438,7 @@ impl RequestRecord {
         }
     }
 
+    /// Milliseconds since the request server received the request.
     fn duration_ms(&self) -> u64 {
         u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
     }

@@ -1,7 +1,10 @@
-//! The migration events: the authorization events `migration.challenge-issued`, `migration.authorized` and
-//! `migration.authorization-refused` (`design/migration-authorization.md`, "Audit events"), and the bundle events
-//! `migration.exported`, `migration.export-failed`, `migration.import-refused`, `migration.import-discarded`,
-//! `migration.imported` and `migration.import-failed` (`design/migration-bundle.md`, "Audit events").
+//! The migration events:
+//!
+//! - the authorization events `migration.challenge-issued`, `migration.authorized` and `migration.authorization-refused`
+//!   ([migration authorization: audit events](../../../../design/migration-authorization.md#audit-events));
+//! - the bundle events `migration.exported`, `migration.export-failed`, `migration.import-refused`,
+//!   `migration.import-discarded`, `migration.imported` and `migration.import-failed`
+//!   ([migration bundle: audit events](../../../../design/migration-bundle.md#audit-events)).
 //!
 //! Each holds the operation, the method's label, fixed labels, counts, versions, a vault ID, file names and bundle entry
 //! names: never the owner's input, a passphrase, a key, a byte of a record, a challenge's nonce or a binding digest. The

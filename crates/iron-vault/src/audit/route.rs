@@ -1,4 +1,5 @@
-//! Audit events about routes and the responses they relay (`design/audit-logging.md`, "Routes and responses").
+//! Audit events about routes and the responses they relay
+//! ([audit logging: catalogue, "Routes and responses"](../../../../design/audit-logging.md#catalogue)).
 
 use iron_vault_policy::{CredentialName, RouteName};
 
@@ -26,8 +27,8 @@ impl AuditEvent for PinnedCaUnavailable<'_> {
     }
 }
 
-/// `response.scrubbed` (glossary: *Scrub event*): a scrub pattern matched in a relayed response. It counts matches and
-/// never records the matched bytes. The request record writes it beside the request event.
+/// `response.scrubbed` ([glossary: *Scrub event*](../../../../design/glossary.md#terms)): a scrub pattern matched in a relayed
+/// response. It counts matches and never records the matched bytes. The request record writes it beside the request event.
 #[derive(Debug, Clone, Copy)]
 pub struct ResponseScrubbed<'a> {
     /// The request whose response was scrubbed.

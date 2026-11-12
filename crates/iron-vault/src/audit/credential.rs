@@ -1,4 +1,5 @@
-//! Audit events about credentials and caller tokens (`design/audit-logging.md`, "Credentials and vault writes").
+//! Audit events about credentials and caller tokens
+//! ([audit logging: catalogue, "Credentials and vault writes"](../../../../design/audit-logging.md#catalogue)).
 
 use iron_vault_kinds::SecretField;
 use iron_vault_policy::{CredentialKind, CredentialName, Host, Port};
@@ -135,6 +136,7 @@ impl AuditEvent for ShortSecretWritten<'_> {
     }
 }
 
+/// The secret field as its fixed `secret_field` label.
 const fn secret_field_label(field: SecretField) -> &'static str {
     match field {
         SecretField::Key => "key",

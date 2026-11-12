@@ -1,5 +1,6 @@
 //! Audit events about an approval's reservation and commit, and about what a config check's recovery changed on disk
-//! (`design/audit-logging.md`, "Config approvals and checks"). The store returns each fact and does not log it.
+//! ([audit logging: catalogue, "Config approvals and checks"](../../../../design/audit-logging.md#catalogue)). The store
+//! returns each fact and does not log it.
 
 use iron_vault_store::{
     ApprovalError, ApprovalFailure, ApprovalProgress, ApprovalRecoveryError, ApprovalStateError, ApprovalStep, ApprovalVersion,
@@ -13,7 +14,7 @@ use super::{AUDIT_TARGET, AuditEvent, EventName, NamedApprover};
 /// a crash while the signer waits for the owner, follows it in the log.
 #[derive(Debug, Clone, Copy)]
 pub struct VersionReserved<'a> {
-    /// The reserved version, consumed whatever happens next.
+    /// The reserved version, consumed whether the approval then commits or fails.
     pub version: ApprovalVersion,
     /// The digest of the config the version was reserved for.
     pub digest: ConfigDigest,

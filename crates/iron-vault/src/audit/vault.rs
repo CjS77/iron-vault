@@ -1,5 +1,5 @@
 //! Audit events about the vault: its initialization, unlock refusals, lock drains and the facts of a write report
-//! (`design/audit-logging.md`, "Credentials and vault writes" and "Initialization").
+//! ([audit logging: catalogue, "Credentials and vault writes" and "Initialization"](../../../../design/audit-logging.md#catalogue)).
 
 // The events that name the service context's types build only where it does.
 #[cfg(target_os = "linux")]
@@ -82,7 +82,7 @@ impl AuditEvent for ForeignFile<'_> {
 pub struct LockIncomplete {
     /// Serving snapshots still held.
     pub snapshots_held: u64,
-    /// Whether the vault identity was still held.
+    /// `true` if and only if the vault identity was still held.
     pub identity_held: bool,
 }
 

@@ -1,5 +1,5 @@
-//! The three events of `reset` (`design/reset.md`, "Logging"). None carries a secret, a typed confirmation or a file's
-//! contents; foreign file names, which the service did not choose, are escaped.
+//! The three events of `reset` ([reset: logging](../../../../../design/reset.md#logging)). None carries a secret, a
+//! typed confirmation or a file's contents; foreign file names, which the service did not choose, are escaped.
 
 use iron_vault_store::{ErrorKindLabel, InitializationState, ResetStep, UnfinishedKind, VaultId};
 
@@ -12,13 +12,14 @@ use crate::service_state::ServiceState;
 pub struct ResetConfirmed {
     /// The vault ID when the state was Initialized.
     pub vault_id: Option<VaultId>,
-    /// Whether the vault ID was checked against an open vault, rather than read from the manifest's clear header.
+    /// `true` if and only if the vault ID was checked against an open vault; `false` when it was read from the manifest's
+    /// clear header.
     pub verified: bool,
     /// The initialization state reset read.
     pub initialization: InitializationState,
     /// The service state reset started from.
     pub from_state: ServiceState,
-    /// Whether this finishes an interrupted reset.
+    /// `true` if and only if this finishes an interrupted reset.
     pub resumes: bool,
 }
 
@@ -48,7 +49,7 @@ pub struct VaultReset<'a> {
     pub files: &'a [String],
     /// The foreign files left, by their raw names; the event escapes them.
     pub foreign: &'a [String],
-    /// Whether the removal of `reset.unfinished` may not survive a power loss.
+    /// `true` if and only if the removal of `reset.unfinished` may not survive a power loss.
     pub finish_uncertain: bool,
 }
 

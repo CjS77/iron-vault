@@ -171,6 +171,7 @@ const fn retry_after(refusal: &UnlockRefusal) -> Option<u64> {
     }
 }
 
+/// The unlock refusal as its fixed `refusal` label.
 const fn unlock_refusal_label(refusal: &UnlockRefusal) -> &'static str {
     match refusal {
         UnlockRefusal::WrongState(_) => "wrong_state",

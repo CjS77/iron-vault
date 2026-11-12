@@ -1,5 +1,6 @@
-//! The recipient events (`design/recipients.md`, "Audit events"): the inventory check's `recipient.inventory-damaged` and
-//! `recipient.change-recovered`, and a change's `recipient.added`, `recipient.removed` and `recipient.change-failed`.
+//! The recipient events: the inventory check's `recipient.inventory-damaged` and `recipient.change-recovered`, a change's
+//! `recipient.added`, `recipient.removed` and `recipient.change-failed`, and `forget-machine`'s `recipient.forget-checked`
+//! ([recipients: audit events](../../../../design/recipients.md#audit-events)).
 //!
 //! They hold fixed labels, and a recipient key or label, which are public (a label is escaped): never a secret or a
 //! file's bytes.
@@ -111,9 +112,9 @@ pub enum ForgetOutcome<'a> {
     StillEnrolled(&'a RecipientEntry),
     /// The key is not a recipient.
     Forgotten {
-        /// Whether the independence rule holds for the inventory.
+        /// `true` if and only if the independence rule holds for the inventory.
         independence_holds: bool,
-        /// Whether the recovery path is verified: a check ran and no reminder is due.
+        /// `true` if and only if the recovery path is verified: a check ran and no reminder is due.
         recovery_verified: bool,
     },
 }
@@ -175,7 +176,7 @@ pub enum ChangeFailure {
         step: Option<RecipientChangeStep>,
         /// The failure's kind, never its text.
         error_kind: ErrorKindLabel,
-        /// Whether the change committed.
+        /// If the change committed: no, yes, or unknown until the next inventory check.
         committed: ChangeCommitted,
     },
 }

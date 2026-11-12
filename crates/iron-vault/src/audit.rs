@@ -1,11 +1,20 @@
-//! Audit events: the typed records of administrative and security facts (specification §18;
-//! `design/audit-logging.md`, "Audit events").
+//! Audit events: the typed records of administrative and security facts, such as a lock transition or a config approval
+//! ([spec §18](../../../design/iron-vault-specification.md#18-logging);
+//! [audit logging: audit events](../../../design/audit-logging.md#audit-events)). Each submodule holds one subject's
+//! events, and [`RequestRecord`] holds the request event, which has a target of its own, [`REQUEST_TARGET`].
+//!
+//! ```text
+//! event struct ──→ AuditEvent::emit ──→ tracing, under AUDIT_TARGET ──→ RecordFormat ──→ log destination
+//! domain-typed     one call: name,      INFO and above pass             adds the          the log file, or stdout
+//! fields           level, message and                                   CONSTANT_FIELDS
+//!                  &str, u64 or bool fields
+//! ```
 //!
 //! Each event is a struct whose fields are domain types, and its [`AuditEvent::emit`] makes one `tracing` call under
 //! [`AUDIT_TARGET`] with its event name, its level, a fixed message and exactly its own fields, each turned into a
-//! `&str`, `u64` or `bool`. A header value, a URL or a library error's text therefore has no field to go into. Every
-//! value from a fixed vocabulary is written as a snake_case label from this module, never as a type's `Debug` output.
-//! The record's constant fields are the formatter's job ([`crate::logging::RecordFormat`]), so no event may use one of
+//! `&str`, `u64` or `bool`. A header value, a URL or a library error's text has no field to go into. Every value from a
+//! fixed vocabulary is written as a snake_case label from this module, never as a type's `Debug` output. The record's
+//! constant fields are the formatter's job ([`crate::logging::RecordFormat`]), so no event may use one of
 //! [`CONSTANT_FIELDS`] as a field name.
 
 #[cfg(test)]
@@ -220,8 +229,8 @@ impl AuditEvent for LogDestinationChanged {
     }
 }
 
-/// `service.lock-transition` (glossary: *Lock transition*): it names the two states only, and nothing an unlock was
-/// given.
+/// `service.lock-transition` ([glossary: *Lock transition*](../../../design/glossary.md#terms)): it names the two states
+/// only, and nothing an unlock was given.
 #[derive(Debug, Clone, Copy)]
 pub struct LockTransition {
     /// The state left.
@@ -381,7 +390,7 @@ impl AuditEvent for ActivationFailed {
     }
 }
 
-/// `config.check-failed`: a config check failed, whatever started it.
+/// `config.check-failed`: a config check failed, after an unlock, an approval or a reload alike.
 #[derive(Debug, Clone, Copy)]
 pub struct CheckFailed<'a> {
     /// The failure; its detail names versions, routes and credentials only.
@@ -428,6 +437,7 @@ impl AuditEvent for ReloadFailed<'_> {
     }
 }
 
+/// The core dump setting as the fixed `core_dumps` label.
 const fn core_dumps_label(core_dumps: &CoreDumps) -> &'static str {
     match core_dumps {
         CoreDumps::Disabled => "disabled",
@@ -444,6 +454,7 @@ pub(crate) const fn memory_label(memory: &MemoryProtection) -> &'static str {
     }
 }
 
+/// A service state as its fixed label, such as `ready`; an Unavailable state's reason goes in a field of its own.
 const fn state_label(state: ServiceState) -> &'static str {
     match state {
         ServiceState::Starting => "starting",
@@ -455,6 +466,7 @@ const fn state_label(state: ServiceState) -> &'static str {
     }
 }
 
+/// The reason an Unavailable state gives, for the `unavailable_reason` field; `None` for every other state.
 const fn state_unavailable(state: ServiceState) -> Option<UnavailableReason> {
     match state {
         ServiceState::Unavailable(reason) => Some(UnavailableReason::from_failure(reason)),
@@ -472,6 +484,7 @@ const fn unavailable_label(reason: UnavailableReason) -> &'static str {
     }
 }
 
+/// The config check failure as its fixed `failure` label.
 const fn check_failure_label(failure: &CheckFailure) -> &'static str {
     match failure {
         CheckFailure::Vault(_) => "vault_damaged",
@@ -483,6 +496,7 @@ const fn check_failure_label(failure: &CheckFailure) -> &'static str {
     }
 }
 
+/// The approval step as its fixed `step` label.
 const fn step_label(step: ApprovalStep) -> &'static str {
     match step {
         ApprovalStep::WritePending => "write_pending",
