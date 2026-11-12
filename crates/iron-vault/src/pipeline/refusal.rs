@@ -1,17 +1,32 @@
-//! The §15 answer for each pipeline refusal: one status, one fixed body, and the label of a service defect.
+//! The answer to each pipeline refusal ([spec §15][s15]): one status, one fixed body, and the label of a service
+//! defect. The proxy handler sends what this module chooses, so the caller of a refused request sees only a status
+//! and a constant text.
 //!
 //! The table in [`PipelineRefusal::status`] is the one place a refusal becomes a status, so the rules about what a
 //! refusal may reveal are reviewed together:
 //!
 //! - `401` names no scheme, token header or listener caller, and carries no `WWW-Authenticate`, so a client without a
 //!   token learns nothing about where to look for one;
-//! - `403` and `404` get different statuses and neither body names a route or a grant: §15 requires that `404`
+//! - `403` and `404` get different statuses and neither body names a route or a grant: [§15][s15] requires that `404`
 //!   disclose no other caller's grants, and a constant body per status meets that;
 //! - `503` carries a redacted reason: the same body whether the vault is damaged, a record is missing or a kind failed;
 //! - a refusal that only a service defect can cause answers `500` "internal error".
 //!
 //! Every body is a constant. No body repeats caller input, a route the caller is not granted, or a library error,
-//! whose text may hold a URL or a header value (§18).
+//! whose text may hold a URL or a header value ([§18][s18]).
+//!
+//! | Refusal | Status |
+//! |---|---|
+//! | Caller not identified | `401` |
+//! | Malformed target, method no route may allow, ambiguous body framing, foreign or malformed marker in the slot | `400` |
+//! | No route matches the path | `404` |
+//! | The caller may not make this request on the route that matches | `403` |
+//! | Rate limit exhausted | `429` with `Retry-After` |
+//! | Route unavailable, no healthy record, the kind cannot fill the slot | `503` |
+//! | A service defect: a charge for a route or caller the limiter does not know, a construction defect, a final-check failure | `500` |
+//!
+//! [s15]: ../../../../design/iron-vault-specification.md#15-service-states-and-errors
+//! [s18]: ../../../../design/iron-vault-specification.md#18-logging
 
 use iron_vault_policy::{AssembleError, AuthzError, ChargeError};
 
@@ -39,7 +54,7 @@ impl RefusalResponse {
         }
     }
 
-    /// The fixed answer with `status` and its constant body, for a request the pipeline accepted but the service could
+    /// Builds the fixed answer with `status` and its constant body, for a request the pipeline accepted but the service could
     /// not send: `503` when the route has no upstream client, or a transport failure's `502` or `504`.
     pub fn fixed(status: u16) -> Self {
         Self::new(status, body_for(status))
@@ -65,7 +80,7 @@ impl RefusalResponse {
 }
 
 impl PipelineRefusal {
-    /// The HTTP status this refusal is answered with (§15).
+    /// The HTTP status this refusal is answered with ([§15](../../../../design/iron-vault-specification.md#15-service-states-and-errors)).
     pub fn status(&self) -> u16 {
         match self {
             Self::Unauthenticated(_) => 401,
@@ -85,7 +100,7 @@ impl PipelineRefusal {
         }
     }
 
-    /// The full response for this refusal: its status, the constant body for that status and any `Retry-After`.
+    /// Builds the full response for this refusal: its status, the constant body for that status and any `Retry-After`.
     pub fn respond(&self) -> RefusalResponse {
         let status = self.status();
         let mut response = RefusalResponse::new(status, body_for(status));
@@ -95,8 +110,9 @@ impl PipelineRefusal {
         response
     }
 
-    /// A fixed snake_case label for a refusal that only a service defect can cause, for the `request.defect` event;
-    /// `None` for a caller error or a route failure. The variants carry nothing, so the label discloses nothing (§18).
+    /// Returns a fixed snake_case label for a refusal that only a service defect can cause, for the `request.defect`
+    /// event; `None` for a caller error or a route failure. The variants carry nothing, so the label discloses nothing
+    /// ([§18](../../../../design/iron-vault-specification.md#18-logging)).
     pub fn defect(&self) -> Option<&'static str> {
         match self {
             Self::FinalCheck(error) => Some(final_check_label(error)),

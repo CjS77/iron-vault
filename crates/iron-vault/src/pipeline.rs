@@ -1,4 +1,6 @@
-//! The request pipeline: §8 steps 3-8, from an incoming request to a checked request (specification §8, §9).
+//! The request pipeline: turns an incoming request into a checked request, the only form the upstream client sends,
+//! or into a pipeline refusal ([spec §8][s8] steps 3-8, [§9][s9]). The proxy handler calls it once per request; it
+//! is where the service decides who is asking, what they may do and which credential the request carries.
 //!
 //! [`prepare`] runs one step after another, and each returns early, so no step runs before the one ahead of it has
 //! passed:
@@ -12,21 +14,39 @@
 //! 6. build the upstream target and assemble the outgoing request, filling the slot once (step 7);
 //! 7. run the final outgoing-request check (step 8).
 //!
+//! For example, with a route `fx` whose prefix is `/fx`, upstream `https://api.fx.example` and a query slot
+//! `access_key`:
+//!
+//! ```text
+//! GET /fx/latest?base=USD               caller `fx-mcp`, identified by its peer account
+//!   authorize   ─► route `fx`, method `GET`, path `/latest`, query `base=USD`
+//!   sanitize    ─► caller token, hop-by-hop and forwarding headers removed
+//!   charge      ─► one token from the `fx` bucket, or 429
+//!   resolve     ─► the record of the credential `fx` names; never one a marker names
+//!   assemble    ─► GET https://api.fx.example/latest?base=USD&access_key=<secret>
+//!   final check ─► https, permitted host and port, inside the base path: a checked request
+//! ```
+//!
 //! **Why sanitizing follows authorization and precedes the charge.** Headers cannot change which route is selected,
 //! so authorization does not need them sanitized, and authenticating first means a caller without a token learns
 //! nothing about framing rules. Sanitizing does two things. Its framing check refuses an ambiguous body length, which
-//! §15 treats as a malformed request, like the target checks of step 4; running it before the charge means a
+//! [§15][s15] treats as a malformed request, like the target checks of step 4; running it before the charge means a
 //! malformed request neither spends the route's allowance nor resolves a credential. Its stripping of control headers
 //! and caller authentication is what step 7 requires before the slot is filled, and it is pure, so doing it earlier
 //! changes no byte of the outgoing request.
 //!
 //! **The credential comes from the route.** Step 6 looks up the credential the route's configuration names; markers in
-//! the request are never consulted to choose one (implementation spec §2.2 Q-1). A marker in the slot is only checked against that
-//! credential when the slot is filled, and a marker anywhere else is inert text.
+//! the request are never consulted to choose one ([implementation spec §2.2][i22], Q-1). A marker in the slot is only
+//! checked against that credential when the slot is filled, and a marker anywhere else is inert text.
 //!
-//! Step 2 of §8, the request-form gate, runs before authentication and is not part of this pipeline. This module
+//! Step 2 of [§8][s8], the request-form gate, runs before authentication and is not part of this pipeline. This module
 //! refuses absolute-form and authority-form targets ([`RequestTarget::parse`]) and `CONNECT` (the method allowlist) too,
 //! after authentication. It does not refuse upgrades: sanitizing only strips `Upgrade` as a reserved header.
+//!
+//! [s8]: ../../../design/iron-vault-specification.md#8-request-flow
+//! [s9]: ../../../design/iron-vault-specification.md#9-url-header-and-slot-rules
+//! [s15]: ../../../design/iron-vault-specification.md#15-service-states-and-errors
+//! [i22]: ../../../design/implementation-specification.md#22-product-decisions-and-resulting-behavior
 
 use std::fmt;
 use std::time::Instant;
@@ -96,8 +116,8 @@ impl Prepared {
         &self.request
     }
 
-    /// The checked request for the transport and the scrub patterns for the response stage, which takes them so they
-    /// live until the response ends.
+    /// Splits off the checked request for the transport and the scrub patterns for the response stage, which keeps the
+    /// patterns until the response ends.
     pub fn into_parts(self) -> (CheckedRequest, ScrubPatterns) {
         (self.request, self.patterns)
     }
@@ -118,7 +138,8 @@ impl Prepared {
     }
 }
 
-/// Why the pipeline stopped a request: one variant per step that can fail, each answered with one §15 status.
+/// Why the pipeline stopped a request: one variant per step that can fail, each answered with one
+/// [§15](../../../design/iron-vault-specification.md#15-service-states-and-errors) status.
 ///
 /// Every variant keeps only what is safe to log: route, caller and credential names, never a header value, query text
 /// or slot value.
@@ -161,8 +182,8 @@ pub enum PipelineRefusal {
     FinalCheck(#[from] FinalCheckError),
 }
 
-/// Runs §8 steps 3-8 for `head`, which arrived on the connection `tags` describes, against one serving snapshot at
-/// `now`.
+/// Runs [§8](../../../design/iron-vault-specification.md#8-request-flow) steps 3-8 for `head`, which arrived on the
+/// connection `tags` describes, against one serving snapshot at `now`.
 ///
 /// `now` is when the request is charged against its rate limits; the caller passes the current instant. `identified`
 /// receives the caller and route as they are found, so a refusal still says who asked for what.
@@ -200,7 +221,7 @@ impl Sources for ServingSnapshot {
     }
 }
 
-/// The steps in order; see the module documentation for why they run in this order.
+/// Runs the steps in order; the module documentation says why they run in this order.
 fn run(
     sources: &impl Sources,
     tags: &ConnectionTags,
@@ -225,8 +246,9 @@ fn run(
 }
 
 /// Replaces the caller's `Accept-Encoding` with [`UPSTREAM_ACCEPT_ENCODING`], the codings the response stage decodes
-/// (§11), so an upstream never answers in one the service must refuse. The caller's value is never forwarded; the
-/// request handler reads it from the caller's request to choose the coding it emits.
+/// ([§11](../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing)), so an upstream never
+/// answers in one the service must refuse. The caller's value is never forwarded; the request handler reads it from the
+/// caller's request to choose the coding it emits.
 ///
 /// Neither step can fail, since the constant is a valid value and `Accept-Encoding` is not reserved; if one did, the
 /// request would go without the header, which only asks for an uncompressed reply.
@@ -238,7 +260,7 @@ fn ask_for_decodable_codings(headers: &mut OutgoingHeaders) {
     debug_assert!(inserted.is_some(), "the service's Accept-Encoding could not be set");
 }
 
-/// Steps 5-8: charge, resolve, assemble and check. A defect here is reported by the request handler, which knows the
+/// Runs steps 5-8: charge, resolve, assemble and check. A defect here is reported by the request handler, which knows the
 /// request's ID.
 fn charge_and_build(
     sources: &impl Sources,
@@ -263,15 +285,16 @@ fn charge_and_build(
     })
 }
 
-/// Parses the target and the method, then checks the caller's grant and the route's restrictions (§8 step 4).
+/// Parses the target and the method, then checks the caller's grant and the route's restrictions
+/// ([§8](../../../design/iron-vault-specification.md#8-request-flow) step 4).
 fn authorize_request(policy: &ActivePolicy, caller: &CallerName, method: &str, target: &str) -> Result<AuthorizedRequest, PipelineRefusal> {
     let (path, query) = RequestTarget::parse(target)?.into_parts();
     let method = Method::try_from(method).map_err(|_| PipelineRefusal::Method)?;
     Ok(authorize(policy, caller, &method, &path, query)?)
 }
 
-/// The route and credential of an authorization refusal that names its route, so the refusal can still say which route the
-/// caller asked for.
+/// Returns the route and credential of an authorization refusal that names its route, so the request event can still
+/// say which route the caller asked for.
 fn refused_route(policy: &ActivePolicy, refusal: &PipelineRefusal) -> Option<(RouteName, CredentialName, Host)> {
     match refusal {
         PipelineRefusal::Authz(AuthzError::Forbidden { route, .. } | AuthzError::Unavailable { route }) => {
@@ -281,12 +304,12 @@ fn refused_route(policy: &ActivePolicy, refusal: &PipelineRefusal) -> Option<(Ro
     }
 }
 
-/// What the request event says about the selected `route`.
+/// Returns what the request event records about the selected `route`: its name, its credential and its upstream host.
 fn selected(route: &RouteName, config: &RouteConfig) -> (RouteName, CredentialName, Host) {
     (route.clone(), config.credential().clone(), config.upstream().host().clone())
 }
 
-/// The header that carries a caller token on `listener`, which sanitizing strips.
+/// Returns the header that carries a caller token on `listener`, which sanitizing strips.
 ///
 /// Caller identification passed, so the listener is in the policy; one that is not cannot have authenticated anyone.
 fn token_header(policy: &ActivePolicy, listener: &ListenerName) -> Result<HeaderName, Unauthenticated> {
@@ -294,7 +317,7 @@ fn token_header(policy: &ActivePolicy, listener: &ListenerName) -> Result<Header
     Ok(config.caller_token_header())
 }
 
-/// The configuration of the route `authorized` selected.
+/// Returns the configuration of the route `authorized` selected.
 ///
 /// Authorization returns only routes the policy serves, so a miss means the route is unavailable.
 fn selected_route<'p>(policy: &'p ActivePolicy, authorized: &AuthorizedRequest) -> Result<&'p RouteConfig, AuthzError> {
@@ -302,7 +325,8 @@ fn selected_route<'p>(policy: &'p ActivePolicy, authorized: &AuthorizedRequest) 
     policy.route(route).ok_or_else(|| AuthzError::Unavailable { route: route.clone() })
 }
 
-/// Resolves the credential the route names for the route's slot (§8 step 6); never one a marker names.
+/// Resolves the credential the route names for the route's slot
+/// ([§8](../../../design/iron-vault-specification.md#8-request-flow) step 6); never one a marker names.
 fn resolve<'s>(
     sources: &'s impl Sources,
     route: &RouteConfig,
@@ -316,7 +340,8 @@ fn resolve<'s>(
     Ok(record.resolve(route.slot(), authorized)?)
 }
 
-/// Builds the upstream target and fills the route's slot once with the resolved value (§8 step 7).
+/// Builds the upstream target and fills the route's slot once with the resolved value
+/// ([§8](../../../design/iron-vault-specification.md#8-request-flow) step 7).
 fn assemble(
     route: &RouteConfig,
     authorized: &AuthorizedRequest,
