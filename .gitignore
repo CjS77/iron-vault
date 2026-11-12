@@ -1,2 +1,4 @@
 /target
 _site/
+# An instrumented binary that a test starts with a cleared environment writes its coverage profile in its working directory.
+*.profraw
