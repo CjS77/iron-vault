@@ -1,13 +1,22 @@
-//! The deployment profile: how this build is installed, and the install paths and service account that follow from it.
+//! Decides where the service keeps its files and which account runs it, from the deployment profile this binary was
+//! built for. `main` resolves the profile once at startup; everything else in the service takes the resulting
+//! [`ServicePaths`], and library crates never see the profile at all.
 //!
 //! A packaged binary must never be switchable into development mode, which gives no isolation from malware running as
-//! the user (specification §4). So the profile is fixed at build time by the `dev-mode` or `container` feature, never
-//! chosen by config, flag or detection. Without `dev-mode` the development code paths are not compiled in, and the two
-//! features cannot be combined.
+//! the user ([spec §4](../../../design/iron-vault-specification.md#4-installation-and-ownership)). So a Cargo feature fixes
+//! the profile at build time; no config, flag or detection chooses it. Without `dev-mode` the development code paths are
+//! not compiled in, and `dev-mode` and `container` cannot be combined.
 //!
-//! Resolution is pure: [`ServicePaths::for_profile`] takes what it needs from the process as a [`ProfileEnv`] value,
-//! and only [`ProfileEnv::from_process`], [`Accounts::read`] and [`PasswdDirectory::new`] touch the system. Library crates take the resolved
-//! paths as inputs and never see the profile.
+//! ```text
+//! profile       build feature   config file                                    state directory                  service runs as
+//! ───────────   ─────────────   ────────────────────────────────────────────   ──────────────────────────────   ───────────────
+//! Protected     (none)          /etc/iron-vault/config.toml                    /var/lib/iron-vault              `iron-vault`
+//! Container     container       /etc/iron-vault/config.toml                    /var/lib/iron-vault              `iron-vault`
+//! Development   dev-mode        $XDG_CONFIG_HOME/iron-vault-dev/config.toml    $XDG_STATE_HOME/iron-vault-dev   the invoking user
+//! ```
+//!
+//! Resolution is pure: [`ServicePaths::for_profile`] takes what it needs from the process as a [`ProfileEnv`] value.
+//! Only [`ProfileEnv::from_process`], [`Accounts::read`] and [`PasswdDirectory::new`] touch the system.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -33,15 +42,15 @@ pub const OVERFLOW_UID_FILE: &str = "/proc/sys/kernel/overflowuid";
 /// The kernel's overflow uid when [`OVERFLOW_UID_FILE`] does not exist: Linux's built-in default, `nobody`.
 pub const DEFAULT_OVERFLOW_UID: u32 = 65534;
 
-/// The protected config sits in its own service-owned directory so the service can write `config.toml.pending` and
-/// `config.toml.sig` beside it, and the vault's files stay alone in the state directory.
+/// The config file of a service-account install. It sits in a service-owned directory of its own, so the service can
+/// write `config.toml.pending` and `config.toml.sig` beside it and the state directory holds only the vault's files.
 const PROTECTED_CONFIG: &str = "/etc/iron-vault/config.toml";
 const PROTECTED_STATE_DIR: &str = "/var/lib/iron-vault";
 const PROTECTED_RUNTIME_DIR: &str = "/run/iron-vault";
 /// The bootstrap log directory of a protected install; the package's unit has systemd create it (`LogsDirectory=`).
 const PROTECTED_LOG_DIR: &str = "/var/log/iron-vault";
 
-/// The directory name under each XDG base directory; distinct from the protected names so a development build never
+/// The directory name under each XDG base directory. It differs from the protected names, so a development build never
 /// shares files with a protected installation.
 #[cfg(feature = "dev-mode")]
 const DEVELOPMENT_DIR: &str = "iron-vault-dev";
@@ -51,8 +60,9 @@ const DEVELOPMENT_DIR: &str = "iron-vault-dev";
 #[cfg(feature = "dev-mode")]
 const DEVELOPMENT_LOG_DIR: &str = "iron-vault-dev-log";
 
-/// How this build is installed. It decides the install paths, the service account and the admin principals, and
-/// nothing else: development mode never relaxes any request, TLS, scrubbing, encryption or approval check (§4).
+/// How this build is installed (glossary: *Deployment profile*). It decides the install paths, the service account and
+/// the admin principals. Development mode never relaxes any request, TLS, scrubbing, encryption or approval check
+/// ([spec §4](../../../design/iron-vault-specification.md#4-installation-and-ownership)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeploymentProfile {
     /// A supported protected installation: root owns the binary and the `iron-vault` account runs the service.
@@ -84,12 +94,13 @@ impl DeploymentProfile {
         }
     }
 
-    /// Whether the profile keeps its files and runs as the packaged `iron-vault` service account, as `Protected` does.
+    /// Returns `true` if and only if the profile runs as the packaged `iron-vault` service account and keeps its files
+    /// under that account: `Protected` and `Container`.
     pub const fn is_service_account_install(self) -> bool {
         matches!(self, Self::Protected | Self::Container)
     }
 
-    /// The profile's name in a log record's `deployment_profile` field.
+    /// Returns the profile's name in a log record's `deployment_profile` field: `protected`, `development` or `container`.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Protected => "protected",
@@ -184,7 +195,8 @@ impl Accounts {
     }
 }
 
-/// The local accounts that activation resolves peer callers against, and the account the service runs as (spec §7).
+/// The local accounts that activation resolves peer callers against, and the account the service runs as
+/// ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
 ///
 /// Accounts come from `/etc/passwd`, the same list the service account is found in. Package-created and `useradd`
 /// accounts are always there, so no NSS lookup is needed; an account that exists only in a directory service such as
@@ -286,8 +298,8 @@ impl ProfileEnv {
 }
 
 impl ProfileEnv {
-    /// The account that owns the service's files under `profile`: the service account when protected, the invoking user
-    /// in development.
+    /// Returns the account that owns the service's files under `profile`: the `iron-vault` service account for
+    /// `Protected` and `Container`, the invoking user for `Development`.
     pub fn service_owner(&self, profile: DeploymentProfile) -> Result<ExpectedOwner, ProfileError> {
         match profile {
             DeploymentProfile::Protected | DeploymentProfile::Container => self
@@ -299,9 +311,11 @@ impl ProfileEnv {
     }
 }
 
-/// Refuses a protected or container service that is not running as the service account. Root passes the trusted-path checks, which look at
-/// file ownership and not the process uid, and would then write vault files the service account cannot use. Development
-/// always passes: `development_banner` already refuses root.
+/// Refuses a `Protected` or `Container` service that is not running as the service account.
+///
+/// Root would pass the trusted-path checks, which look at file ownership and not at the process uid, and would then
+/// write vault files the service account cannot use. `Development` always passes, because `development_banner` already
+/// refuses root.
 pub fn require_service_account(profile: DeploymentProfile, env: &ProfileEnv) -> Result<(), ProfileError> {
     match profile {
         DeploymentProfile::Protected | DeploymentProfile::Container if env.service_owner(profile)?.uid != env.invoking_uid => {
@@ -311,7 +325,8 @@ pub fn require_service_account(profile: DeploymentProfile, env: &ProfileEnv) -> 
     }
 }
 
-/// The log directory a deployment writes to until an approved config names another: its bootstrap directory.
+/// Returns the bootstrap log directory: where the service writes its log until an approved config names another.
+/// `/var/log/iron-vault` for a service-account install, `$XDG_STATE_HOME/iron-vault-dev-log` in development.
 pub fn bootstrap_log_dir(profile: DeploymentProfile, env: &ProfileEnv) -> Result<PathBuf, ProfileError> {
     match profile {
         DeploymentProfile::Protected | DeploymentProfile::Container => Ok(PathBuf::from(PROTECTED_LOG_DIR)),
@@ -388,8 +403,8 @@ fn xdg_base(variable: Option<&Path>, home: Option<&Path>, default: &str, purpose
         .ok_or(ProfileError::MissingVariable { variable: "HOME", purpose })
 }
 
-/// The startup check of a development build run as `uid`, named `user`: root is refused, anyone else gets the warning
-/// that development mode gives no isolation from that user's malware.
+/// Checks a development build at startup, run as `uid` with account name `user`. Refuses root; for anyone else, returns
+/// the banner warning that development mode gives no isolation from that user's malware.
 #[cfg(feature = "dev-mode")]
 pub fn development_banner(uid: u32, user: &str) -> Result<String, ProfileError> {
     match uid {
@@ -398,14 +413,16 @@ pub fn development_banner(uid: u32, user: &str) -> Result<String, ProfileError> 
     }
 }
 
-/// What a development build gives the user: no isolation from `user`'s malware. The startup banner and `status` both
-/// say it, from here, so the two cannot drift. It is not feature-gated because the CLI shows it for any build's service.
+/// Returns the warning that a development build gives no isolation from `user`'s malware. The startup banner and
+/// `status` both take their text from here, so the two cannot drift. It is not feature-gated, because the CLI shows it
+/// for a development service whatever build the CLI itself is.
 pub fn no_isolation_warning(user: &str) -> String {
     format!("no isolation from malware running as {user}")
 }
 
-/// `<version> (features: <list>)`, naming every enabled non-default build feature so a release check can refuse a build
-/// that has development mode or the test hooks. `--version` prints it after the binary's name.
+/// Returns `<version> (features: <list>)`, naming every enabled build feature, or `none`. A release check reads it to
+/// refuse a build that has development mode or the test hooks. `--version` prints it after the binary's name, for
+/// example `iron-vault 0.3.0-alpha (features: dev-mode)`.
 pub fn version() -> String {
     let enabled: Vec<&str> = CARGO_FEATURES.iter().filter(|(_, on)| *on).map(|(name, _)| *name).collect();
     let features = if enabled.is_empty() {
@@ -416,8 +433,9 @@ pub fn version() -> String {
     format!("{} (features: {features})", env!("CARGO_PKG_VERSION"))
 }
 
-/// Every Cargo feature of this crate, in `Cargo.toml` order, with whether this build enables it. A test compares the
-/// names with `Cargo.toml`'s `[features]` table, so a new feature cannot be left out of `--version`.
+/// Every Cargo feature of this crate, in `Cargo.toml` order, each paired with `true` if and only if this build enables
+/// it. A test compares the names with `Cargo.toml`'s `[features]` table, so a new feature cannot be left out of
+/// `--version`.
 const CARGO_FEATURES: &[(&str, bool)] = &[
     ("dev-mode", cfg!(feature = "dev-mode")),
     ("container", cfg!(feature = "container")),
