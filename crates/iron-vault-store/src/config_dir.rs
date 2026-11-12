@@ -357,8 +357,8 @@ fn rename_staged(fs: &impl StoreFs, dir: &Path, from: ConfigFileName, to: Config
 /// A durable replace cut short by a crash leaves `.<name>.tmp`, and the next replace of `name` refuses to reuse it.
 /// The service runs this once after taking the config-directory lock and before any write. Every other entry,
 /// including the lock file, is left alone. `.config.toml.tmp` is not swept: approvals write `config.toml` only by
-/// rename, and its sole writer is import step 5, whose unfinished-import discard removes the leftover. All removals share one directory fsync, reported
-/// against the first file.
+/// rename, and its sole writer is import step 5, whose unfinished-import discard removes the leftover. All removals
+/// share one directory fsync, reported against the first file.
 pub fn sweep_stale_config_temps(lock: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<ConfigFileName>, ConfigWriteError> {
     let dir = lock.dir();
     let entries = fs.list_dir(dir).map_err(|e| ConfigWriteError::ListConfigDir { kind: e.kind() })?;
