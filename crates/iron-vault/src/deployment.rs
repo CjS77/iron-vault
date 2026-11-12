@@ -415,7 +415,7 @@ pub fn development_banner(uid: u32, user: &str) -> Result<String, ProfileError> 
 
 /// Returns the warning that a development build gives no isolation from `user`'s malware. The startup banner and
 /// `status` both take their text from here, so the two cannot drift. It is not feature-gated, because the CLI shows it
-/// for a development service whatever build the CLI itself is.
+/// for a development service even when the CLI itself was built without `dev-mode`.
 pub fn no_isolation_warning(user: &str) -> String {
     format!("no isolation from malware running as {user}")
 }
