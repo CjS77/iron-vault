@@ -1,20 +1,37 @@
-//! `config approve`'s side of the service context: the approval transaction (specification §12;
-//! design/config-approval.md, "The transaction") driven through the service state model.
+//! Runs `config approve`: the approval transaction that makes a new config active
+//! ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload);
+//! [config approval: The transaction](../../../../design/config-approval.md#the-transaction)). The admin handler
+//! drives it through the two halves below, with the owner's prompts between them.
+//!
+//! ```text
+//!   review_approval ── step 1: write config.toml.pending, validate and activate it ──→ ApprovalReview
+//!        │                                                                              holds the service-wide lock
+//!        │  owner confirms the summary, then answers the approver prompt (open_signer)
+//!        ↓
+//!   commit ── step 2: reserve the next version          (approval.age)
+//!             step 3: sign the approval payload
+//!             step 4: stage config.toml.sig.staged
+//!             step 5: admission pause (Ready → Checking), commit (version, digest)
+//!             step 6: publish config.toml and config.toml.sig, run the config check → Ready or Unavailable
+//! ```
+//!
+//! A version reserved in step 2 is consumed even if a later step fails. So `open_signer` checks the approver's
+//! passphrase or PIN before step 2, and a mistyped one costs no version.
 //!
 //! [`ServiceContext::review_approval`] takes the service-wide lock and runs step 1. The [`ApprovalReview`] it returns
 //! holds that lock until it is committed or abandoned, so the predicted version stays exact and nothing changes the
-//! credential catalog while the owner reads the summary. The review keeps no vault identity, so a `lock` while the owner
-//! is at a prompt leaves no copy of it behind.
+//! credential catalog while the owner reads the summary. The review keeps no vault identity, so a `lock` while the
+//! owner is at a prompt leaves no copy of it behind.
 //!
-//! A `lock` cancels a review still at a prompt: [`ApprovalReview::lock_requested`] completes once a `lock` waits for the
-//! service-wide lock, and the prompt ends the approval with [`ApprovalEnd::CancelledByLock`]. Every other config check
-//! waits for the service-wide lock, so none runs during the review. As a backstop, the review records the service state
-//! and the context's check generation when it starts, and the commit refuses before reserving anything unless both are
-//! unchanged, since each check discards uncommitted pending files.
+//! A `lock` cancels a review still at a prompt: [`ApprovalReview::lock_requested`] completes once a `lock` waits for
+//! the service-wide lock, and the prompt ends the approval with [`ApprovalEnd::CancelledByLock`]. Every other config
+//! check waits for the service-wide lock, so none runs during the review. As a backstop, the review records the
+//! service state and the context's check generation when it starts, and the commit refuses before reserving anything
+//! unless both are unchanged, since each check discards uncommitted pending files.
 //!
 //! [`ApprovalReview::commit`] runs steps 2 to 6 under the context's mutex: reserve, sign and stage, then the admission
 //! pause, the commit and publish, then the config check that ends the pause in Ready or Unavailable. A task of its own
-//! owns the mutex guard and runs all of it (see [`ApprovalReview::commit`] for what that guarantees).
+//! owns the mutex guard and runs all of it; [`ApprovalReview::commit`] says what that guarantees.
 //!
 //! The service-wide guard moves into that task too, so it is held until the transaction ends, whether or not the caller
 //! is dropped meanwhile. A caller dropped before `commit` takes the context mutex releases it with the review, and the
@@ -102,7 +119,8 @@ pub enum ApprovalEnd {
 pub const NO_ASKABLE_APPROVER: &str =
     "no pinned approver can be asked on this install; a TPM approver needs its key file and the TPM signing helper";
 
-/// Step 1 done: the pending config is durable and valid, and the owner has yet to review it. See the module docs.
+/// An approval past step 1: the pending config is durable and valid, and the owner has yet to review it. It holds the
+/// service-wide lock until [`commit`](Self::commit) or [`abandon`](Self::abandon). See the module documentation.
 pub struct ApprovalReview<'a, F> {
     service: &'a ServiceContext<F>,
     /// Owned, so [`ApprovalReview::commit`] can hand it to the transaction task.
@@ -123,10 +141,10 @@ struct Started {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Takes the service-wide lock, refusing at once with [`ApprovalEnd::Busy`] while another holds it, and runs step 1:
-    /// writes `config` as the pending config, then validates and activates it against a vault freshly opened from the
-    /// kept vault identity, so a credential added since the last config check is in the catalog. The upstream clients
-    /// are built too, so a config that cannot be served is invalid before any version is reserved.
+    /// Takes the service-wide lock, refusing at once with [`ApprovalEnd::Busy`] while another holds it, and runs step
+    /// 1: writes `config` as the pending config, then validates and activates it against a vault freshly opened from
+    /// the kept vault identity, so a credential added since the last config check is in the catalog. The upstream
+    /// clients are built too, so a config that cannot be served is invalid before any version is reserved.
     pub async fn review_approval(&self, config: Vec<u8>) -> Result<ApprovalReview<'_, F>, ApprovalEnd> {
         let service_wide = Arc::clone(&self.service_wide).try_lock_owned().map_err(|_| ApprovalEnd::Busy)?;
         let (started, identity, active) = self.approval_start().await?;
@@ -155,8 +173,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         })
     }
 
-    /// Where the approval starts, the kept vault identity, and the config of the serving snapshot, which the summary
-    /// diffs against; none when the service is not serving one.
+    /// Returns where the approval starts, the kept vault identity, and the config of the serving snapshot, which the
+    /// summary diffs against; that config is `None` when the service is not serving one.
     async fn approval_start(&self) -> Result<(Started, Arc<VaultIdentity>, Option<ValidatedConfig>), ApprovalEnd> {
         let inner = self.inner.lock().await;
         let identity = match &inner.identity {
@@ -174,8 +192,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         Ok((started, identity, active))
     }
 
-    /// The pending config activated against `vault`, once its upstream clients build and the log destination it chooses
-    /// passes its pre-check.
+    /// Activates the pending config against `vault`, and returns the policy once its upstream clients build and the log
+    /// destination it chooses passes its pre-check.
     fn servable(&self, bytes: &[u8], vault: &Vault) -> Result<ActivePolicy, InvalidConfig> {
         let policy = activate_config(bytes, vault, &self.setup.accounts)?;
         self.setup.upstream.clients(&policy).map_err(InvalidConfig::Clients)?;
@@ -188,9 +206,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 }
 
-/// The summary of `pending` against `active`. Bytes identical to the committed config's (same digest) are not diffed when
-/// the service serves that config: the approval only signs it again, which is how an approval signer is rotated. With no
-/// active config, as after `import`, the committed config was approved for another host, so the whole of it is listed.
+/// Builds the summary of `pending` against `active`. When the service serves the committed config and `pending` has the
+/// same digest, nothing is diffed: the approval only signs the same bytes again, which is how an approval signer is
+/// rotated. With no active config, as after `import`, the committed config was approved for another host, so the
+/// summary lists the whole of it.
 fn summary_of(
     active: Option<&ValidatedConfig>,
     pending: &ValidatedConfig,
@@ -204,7 +223,7 @@ fn summary_of(
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
-    /// What the owner reviews before confirming: the header, then the summary's sections.
+    /// Returns what the owner reviews before confirming: the header, then the summary's sections.
     pub fn summary(&self) -> String {
         let committed = self
             .approval
@@ -219,27 +238,28 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
         )
     }
 
-    /// The version this approval will commit. Exact, because the service-wide lock keeps anything else from reserving.
+    /// Returns the version this approval will commit. It is exact, because the service-wide lock keeps anything else
+    /// from reserving one.
     pub fn version(&self) -> u64 {
         self.approval.highest_reserved().saturating_add(1)
     }
 
-    /// Completes once a `lock` is waiting for the service-wide lock this review holds, so a prompt can end the approval
-    /// rather than make the `lock` wait for the owner. It completes at once when a `lock` already waits.
+    /// Completes once a `lock` is waiting for the service-wide lock this review holds, or at once when one already
+    /// waits. A prompt ends the approval when it completes, so the `lock` does not wait for the owner to answer.
     pub async fn lock_requested(&self) {
         self.service.lock_requested().await;
     }
 
-    /// The pinned approvers in approver order: the prompt asks the first, and each switch moves to the next.
+    /// Returns the pinned approvers in approver order: the prompt asks the first, and each switch moves to the next.
     pub fn approvers(&self) -> &[PinnedApprover] {
         &self.approvers
     }
 
-    /// Opens `approver`'s own key with what the owner typed, through the check owner presence makes too: for a TPM approver
-    /// that is step 2's presence payload, signed under the PIN. A wrong secret, or a key that is not `approver`'s, is
-    /// [`ApprovalEnd::Denied`] (or [`ApprovalEnd::PinDenied`]), with no fall-through to another approver; a lockout is
-    /// [`ApprovalEnd::LockedOut`]; a check that cannot run or does not finish refuses the approval before anything is
-    /// reserved.
+    /// Opens `approver`'s own key with what the owner typed, through the check owner presence makes too. For a TPM
+    /// approver that is step 2's presence payload, signed under the PIN. A wrong secret, or a key that is not
+    /// `approver`'s, is [`ApprovalEnd::Denied`] (or [`ApprovalEnd::PinDenied`]), with no fall-through to another
+    /// approver; a lockout is [`ApprovalEnd::LockedOut`]; a check that cannot run or does not finish refuses the
+    /// approval before anything is reserved.
     pub async fn open_signer(&self, approver: &PinnedApprover, secret: impl Into<ApproverSecret>) -> Result<ApproverSigner, ApprovalEnd> {
         let vault_id = Some(self.approval.vault_id());
         self.service
@@ -248,14 +268,15 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
             .map_err(|refusal| self.refused(refusal, approver))
     }
 
-    /// Ends the approval for a secret to `approver` that cannot be the approval passphrase or PIN (empty, not UTF-8, or a
-    /// PIN shorter than enrollment allows), which is answered as a wrong one without asking the key or the TPM: records
-    /// `config.approval-refused`, with no `tpm_status`, and returns the denial.
+    /// Ends the approval for a secret to `approver` that cannot be the approval passphrase or PIN (empty, not UTF-8,
+    /// or a PIN shorter than enrollment allows), which is answered as a wrong one without asking the key or the TPM:
+    /// records `config.approval-refused`, with no `tpm_status`, and returns the denial.
     pub fn refuse_unusable_passphrase(&self, approver: &PinnedApprover) -> ApprovalEnd {
         self.refused(PresenceRefusal::Unusable(DenialKind::wrong_answer(approver.kind())), approver)
     }
 
-    /// The one place a refused approval is recorded, with the digest of the config it was for and the approver answered.
+    /// Records a refused approval as `config.approval-refused`, with the digest of the config it was for and the
+    /// approver answered. Every refusal is recorded here and nowhere else.
     fn refused(&self, refusal: PresenceRefusal, approver: &PinnedApprover) -> ApprovalEnd {
         if let Some((kind, tpm_status)) = refusal.audit() {
             ApprovalRefused {
@@ -281,19 +302,21 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
         self.pending.abandon(&self.service.locks.config, &self.service.setup.fs);
     }
 
-    /// Steps 2 to 6 with `signer`, the key of `approver` (the one [`open_signer`](Self::open_signer) opened), which is dropped once it has signed: reserve, sign and stage; then the admission
-    /// pause (from Ready, the move to Checking), the commit and publish; then the config check that ends the pause.
+    /// Runs steps 2 to 6 with `signer`, the key of `approver` that [`open_signer`](Self::open_signer) opened, and drops
+    /// the signer once it has signed: reserve, sign and stage; then the admission pause (from Ready, the move to
+    /// Checking), the commit and publish; then the config check that ends the pause.
     ///
     /// Refuses before reserving unless the service is in the state, and at the check generation, the approval started
     /// at. This is the backstop for a state or generation change made without the service-wide lock, which today is
     /// only a `stop`: a `lock` cancels the approval at its prompt, and every config check waits for the lock.
     ///
-    /// Cancel-safe: once `commit` holds the context mutex, a task of its own owns that guard, and the service-wide guard
-    /// with it, and runs every step to its end, as [`ServiceContext::unlock`] does for a config check. Dropping this
-    /// future after the commit therefore never leaves the service in Checking (§15): the task still settles in Ready
-    /// on the new config, or in Unavailable. A task that ends without a result fails closed through its
-    /// [`SettleGuard`], and this call then answers [`ApprovalEnd::Unavailable`], whose message says a version may be
-    /// consumed or committed.
+    /// Cancel-safe: once `commit` holds the context mutex, a task of its own owns that guard, and the service-wide
+    /// guard with it, and runs every step to its end, as [`ServiceContext::unlock`] does for a config check. Dropping
+    /// this future after the commit therefore never leaves the service in Checking
+    /// ([spec §15](../../../../design/iron-vault-specification.md#15-service-states-and-errors)): the task still
+    /// settles in Ready on the new config, or in Unavailable. A task that ends without a result fails closed through
+    /// its `SettleGuard`, and this call then answers [`ApprovalEnd::Unavailable`], whose message says a version may
+    /// be consumed or committed.
     pub async fn commit<S: ApprovalSigner + Send + 'static>(
         self,
         approver: PinnedApprover,
@@ -339,7 +362,8 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
     }
 }
 
-/// What the task that runs steps 2 to 6 owns: everything the transaction reads, so it can outlive the call that started it.
+/// What the task that runs steps 2 to 6 owns: everything the transaction reads, so it can outlive the call that started
+/// it.
 struct Transaction<S> {
     started: ServiceState,
     identity: Arc<VaultIdentity>,
@@ -351,7 +375,7 @@ struct Transaction<S> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
-    /// Steps 2 to 6 of `transaction` under `inner`, which the caller's task owns.
+    /// Runs steps 2 to 6 of `transaction` under `inner`, which the caller's task owns.
     async fn run_approval<S: ApprovalSigner + Send + 'static>(
         &self,
         inner: &mut Inner,
@@ -416,8 +440,8 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         }
     }
 
-    /// Steps 5 and 6 after a durable commit: the config check, from Checking when the approval started in Ready, or
-    /// through `Repaired` when it started in Unavailable.
+    /// Finishes steps 5 and 6 after a durable commit: runs the config check from Checking when the approval started in
+    /// Ready, or through `Repaired` when it started in Unavailable.
     async fn check_committed(&self, inner: &mut Inner, started: ServiceState, identity: Arc<VaultIdentity>) -> ServiceState {
         let checked = match started {
             ServiceState::Ready => self.settle(inner, identity, ServiceEvent::ApprovalCommitting, None).await,
@@ -426,7 +450,8 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         checked.unwrap_or_else(|illegal| illegal.state)
     }
 
-    /// An uncertain commit that could not be settled: Unavailable needing recovery, through Checking from either start.
+    /// Handles an uncertain commit that could not be settled: moves the service through Checking to Unavailable needing
+    /// recovery, from either start, and returns that state.
     fn recovery_needed(&self, inner: &mut Inner, started: ServiceState) -> ServiceState {
         if started != ServiceState::Ready {
             inner.open = None;
@@ -435,8 +460,8 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         apply(&self.holder, inner, ServiceEvent::CheckFailed(FailureReason::RecoveryNeeded)).unwrap_or(inner.state)
     }
 
-    /// Whether step 5 left a durable commit. A commit whose publish failed is durable: the config check's recovery
-    /// finishes the publish. Otherwise this ends the admission pause and the approval:
+    /// Returns `Ok` if and only if step 5 left a durable commit. A commit whose publish failed is durable: the config
+    /// check's recovery finishes the publish. Otherwise this ends the admission pause and the approval:
     ///
     /// - a clean failure before the commit leaves the committed approval and the published pair as they were. From
     ///   Ready the config check runs on them and normally returns to Ready on the old policy; from Unavailable nothing
@@ -478,8 +503,8 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
     }
 }
 
-/// Steps 2 to 4. The reservation is recorded before signing starts, so a signing failure, or a crash while the signer
-/// waits for the owner, follows it in the log.
+/// Runs steps 2 to 4: reserve, sign and stage. The reservation is recorded before signing starts, so a signing failure,
+/// or a crash while the signer waits for the owner, follows it in the log.
 async fn reserve_and_sign<'s, F: StoreFs, S: ApprovalSigner + Send + 'static>(
     storage: &ApprovalStorage<'_, F>,
     pending: PendingConfig,
@@ -499,10 +524,10 @@ async fn reserve_and_sign<'s, F: StoreFs, S: ApprovalSigner + Send + 'static>(
 
 /// A signature made on the blocking pool, handed to step 3 as its signer.
 ///
-/// A TPM approver's signature is a round trip to the signing helper, which can take hundreds of milliseconds and, from a
-/// hung helper, up to its 30 s deadline. Made on the service's runtime thread, it would stall proxying, admin connections
-/// and timers meanwhile. Step 3 still checks the envelope against the reserved payload, and a failure here, including a
-/// task that ended without an answer, is a step 3 failure that consumes the version.
+/// A TPM approver's signature is a round trip to the signing helper, which can take hundreds of milliseconds and,
+/// from a hung helper, up to its 30 s deadline. Made on the service's runtime thread, it would stall proxying, admin
+/// connections and timers meanwhile. Step 3 still checks the envelope against the reserved payload, and a failure
+/// here, including a task that ended without an answer, is a step 3 failure that consumes the version.
 struct Presigned {
     algorithm: SignatureAlgorithm,
     public_key: ApproverPublicKey,
@@ -534,14 +559,14 @@ impl ApprovalSigner for Presigned {
         self.public_key
     }
 
-    /// Returns the envelope made for the payload [`Presigned::sign`] was given, whatever payload is asked for here. That is
-    /// safe only because step 3 checks the envelope against the reserved payload, and refuses one signed for another.
+    /// Returns the envelope made for the payload [`Presigned::sign`] was given, and ignores `_payload`. That is safe
+    /// only because step 3 checks the envelope against the reserved payload, and refuses one signed for another.
     fn sign(&self, _payload: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError> {
         self.signed.clone()
     }
 }
 
-/// Records an uncertain commit, whether it was settled or not.
+/// Records every uncertain write of the commit of `version`, whether the commit then succeeded or failed.
 fn record_commit(version: ApprovalVersion, committed: &Result<CommittedApproval, ApprovalError>) {
     match committed {
         Ok(committed) => committed
@@ -552,7 +577,8 @@ fn record_commit(version: ApprovalVersion, committed: &Result<CommittedApproval,
     }
 }
 
-/// A failure before the commit: the version consumed when one was reserved, logged as a failed approval of `digest`.
+/// Ends an approval that failed before the commit. When a version was reserved, logs a failed approval of `digest` and
+/// returns [`ApprovalEnd::Failed`] with that consumed version; otherwise returns [`ApprovalEnd::Unavailable`].
 fn not_committed(error: ApprovalError, digest: ConfigDigest) -> ApprovalEnd {
     match error.progress() {
         ApprovalProgress::Reserved(version) => {
@@ -580,8 +606,8 @@ fn unavailable(error: impl std::fmt::Display) -> ApprovalEnd {
     ApprovalEnd::Unavailable(error.to_string())
 }
 
-/// The durable steps' storage over the context's locks and filesystem, for the review (step 1) and the task that runs
-/// the rest.
+/// Builds the durable steps' storage over the context's locks and filesystem, for the review (step 1) and for the task
+/// that runs the rest.
 fn approval_storage<'s, F>(locks: &'s ServiceLocks, fs: &'s F, identity: &'s VaultIdentity) -> ApprovalStorage<'s, F> {
     ApprovalStorage {
         state_dir: &locks.state,
