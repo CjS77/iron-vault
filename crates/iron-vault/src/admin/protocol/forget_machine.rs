@@ -1,5 +1,6 @@
-//! The `forget-machine` result (`design/admin-protocol.md#forget-machine`): the independence rule's failure, if any, and the
-//! recovery check state in `status`'s encoding. The request is `recipient remove`'s: one key, as text.
+//! The `forget-machine` result ([admin protocol: forget-machine](../../../../../design/admin-protocol.md#forget-machine)): the
+//! independence rule's failure, if any, and the recovery check state in `status`'s encoding. The request is
+//! `recipient remove`'s: one key, as text.
 
 use super::fields::{self, Field, exact, read_text};
 use super::recovery_status::{self, RecoveryStatus};
@@ -8,7 +9,7 @@ use super::{AdminResponse, FrameError};
 const TAG_COMMAND: u16 = super::body::TAG_COMMAND;
 const TAG_INDEPENDENCE: u16 = 2;
 
-/// The success body: the command it answers, the failed part's sentence (empty when the rule holds), then tags 13 to 17.
+/// Encodes the success body: the command it answers, the failed part's sentence (empty when the rule holds), then tags 13 to 17.
 pub(super) fn encode_result(command: u16, independence: Option<&str>, recovery: &RecoveryStatus) -> Vec<u8> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &command.to_be_bytes());

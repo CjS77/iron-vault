@@ -1,5 +1,6 @@
-//! `add`'s arguments and success result (`design/admin-protocol.md`, add), which `replace` shares. Only the bounds are
-//! checked here: the host stays text, and the service parses the name, the hosts and the material it prompts for.
+//! `add`'s arguments and success result ([admin protocol: add](../../../../../design/admin-protocol.md#add)), which `replace` shares.
+//! Only the bounds are checked here: the host stays text, and the service parses the name, the hosts and the material
+//! it prompts for.
 
 use iron_vault_policy::{CredentialKind, Port};
 use iron_vault_store::RecordId;
@@ -18,8 +19,8 @@ const KIND_BASIC: u8 = 2;
 
 const INVALID_ORIGINS: FrameError = FrameError::InvalidValue(TAG_ORIGINS);
 
-/// The request body. Out-of-bounds origins are refused rather than encoded, so the encoder never writes a body the
-/// decoder would refuse.
+/// Encodes the request body. Out-of-bounds origins are refused here, so the encoder never writes a body the decoder
+/// would refuse.
 pub(super) fn encode_request(command: u16, name: &str, kind: CredentialKind, origins: &[RequestedOrigin]) -> Result<Vec<u8>, FrameError> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &command.to_be_bytes());
@@ -29,7 +30,7 @@ pub(super) fn encode_request(command: u16, name: &str, kind: CredentialKind, ori
     Ok(out)
 }
 
-/// The request `command` builds from the decoded name, kind and origins.
+/// Builds the request `command` names from the decoded name, kind and origins.
 pub(super) fn decode_request(
     fields: &[Field<'_>],
     command: fn(String, CredentialKind, Vec<RequestedOrigin>) -> AdminRequest,
@@ -38,7 +39,7 @@ pub(super) fn decode_request(
     Ok(command(read_text(TAG_NAME, name)?, read_kind(kind)?, decode_origins(origins)?))
 }
 
-/// The success body: the command it answers, then the new record's ID.
+/// Encodes the success body: the command it answers, then the new record's ID.
 pub(super) fn encode_result(command: u16, record_id: RecordId) -> Vec<u8> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &command.to_be_bytes());
@@ -46,7 +47,7 @@ pub(super) fn encode_result(command: u16, record_id: RecordId) -> Vec<u8> {
     out
 }
 
-/// The new record's ID from a success body.
+/// Reads the new record's ID from a success body.
 pub(super) fn decode_result(fields: &[Field<'_>]) -> Result<RecordId, FrameError> {
     let [_, record_id] = exact(fields, [TAG_COMMAND, TAG_RECORD_ID])?;
     <[u8; 16]>::try_from(record_id)
@@ -70,7 +71,12 @@ fn read_kind(value: &[u8]) -> Result<CredentialKind, FrameError> {
     }
 }
 
-/// A `u8` count, then per origin a `u8` host length, the host and a `u16` port.
+/// Encodes the origins: a `u8` count, then per origin a `u8` host length, the host and a `u16` port.
+///
+/// ```text
+/// count  host len  host               port
+/// 01     0b        "example.com"      01 bb      one origin, example.com:443
+/// ```
 fn encode_origins(origins: &[RequestedOrigin]) -> Result<Vec<u8>, FrameError> {
     let count = u8::try_from(origins.len())
         .ok()

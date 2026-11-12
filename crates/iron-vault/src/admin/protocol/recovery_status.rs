@@ -1,7 +1,8 @@
-//! The recovery check part of the status report and its field encoding (`design/admin-protocol.md#status`, tags 13 to 17).
+//! The recovery check part of the status report and its field encoding
+//! ([admin protocol: status](../../../../../design/admin-protocol.md#status), tags 13 to 17).
 //!
-//! The service computes the days and the due flag with its own clock, so the CLI prints the same line whatever its own
-//! clock says.
+//! The service computes the days and the due flag with its own clock, so the CLI prints the same line even when its own
+//! clock is wrong.
 
 use iron_vault_store::UtcSecond;
 
@@ -22,7 +23,7 @@ pub enum RecoveryStatus {
     Unknown {
         /// Why the record is unknown.
         detail: String,
-        /// Whether a recovery reminder is due.
+        /// `true` if and only if a recovery reminder is due.
         due: bool,
     },
     /// The vault has a record but no check has run since the schedule started counting at `since`.
@@ -31,7 +32,7 @@ pub enum RecoveryStatus {
         since: UtcSecond,
         /// Whole days from `since` to the service's clock; zero for a time in the future.
         days: u64,
-        /// Whether a recovery reminder is due.
+        /// `true` if and only if a recovery reminder is due.
         due: bool,
     },
     /// A recovery check has run.
@@ -40,14 +41,15 @@ pub enum RecoveryStatus {
         last_checked: UtcSecond,
         /// Whole days from `last_checked` to the service's clock; zero for a time in the future.
         days: u64,
-        /// Whether a recovery reminder is due.
+        /// `true` if and only if a recovery reminder is due.
         due: bool,
     },
 }
 
 impl RecoveryStatus {
-    /// Whether a recovery check has run and no reminder is due: the only status `forget-machine` accepts as proof that another
-    /// recovery path exists. A vault that was never checked, or whose record is unusable, has not shown one.
+    /// Returns `true` if and only if a recovery check has run and no reminder is due: the only status `forget-machine`
+    /// accepts as proof that another recovery path exists. A vault that was never checked, or whose record is unusable,
+    /// has not shown one.
     pub const fn verified(&self) -> bool {
         matches!(self, Self::Checked { due: false, .. })
     }
@@ -67,7 +69,7 @@ pub(super) fn encode(out: &mut Vec<u8>, status: &RecoveryStatus) {
     fields::put(out, TAG_DETAIL, detail.as_bytes());
 }
 
-/// The encoded values of tags 13 to 17, in tag order.
+/// Returns the encoded values of tags 13 to 17, in tag order.
 pub(super) struct Raw<'a> {
     pub(super) record: &'a [u8],
     pub(super) time: &'a [u8],

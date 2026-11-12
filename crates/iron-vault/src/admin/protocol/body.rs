@@ -62,7 +62,7 @@ const TAG_CHECKED_AT: u16 = 3;
 const TAG_RECORDED: u16 = 4;
 const TAG_NAME: u16 = 2;
 
-/// A request body; only `add` and `replace`, whose origins have bounds, can be refused.
+/// Encodes a request body. Only `add` and `replace`, whose origins have bounds, can be refused.
 pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameError> {
     match request {
         AdminRequest::Add { name, kind, origins } => return add::encode_request(COMMAND_ADD, name, *kind, origins),
@@ -94,7 +94,8 @@ pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameErr
     Ok(out)
 }
 
-/// The command is read first, so an unknown command is reported as such whatever arguments follow it.
+/// Decodes a request body. The command is read first, so an unknown command is reported as unknown even when the
+/// arguments after it are malformed.
 pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
     let fields = fields::parse(body)?;
     match read_u16(TAG_COMMAND, first(&fields, TAG_COMMAND)?)? {
@@ -171,7 +172,7 @@ pub(super) fn decode_prompt(body: &[u8]) -> Result<Prompt, FrameError> {
     })
 }
 
-/// `ping`'s success body: the command it answers, then the deployment profile.
+/// Encodes `ping`'s success body: the command it answers, then the deployment profile.
 pub(super) fn encode_ping_result(profile: DeploymentProfile) -> Vec<u8> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &COMMAND_PING.to_be_bytes());
@@ -179,13 +180,13 @@ pub(super) fn encode_ping_result(profile: DeploymentProfile) -> Vec<u8> {
     out
 }
 
-/// `status`'s success body: the command it answers, then the report's fields.
+/// Encodes `status`'s success body: the command it answers, then the report's fields.
 pub(super) fn encode_status_result(report: &StatusReport) -> Vec<u8> {
     status::encode(COMMAND_STATUS, report)
 }
 
-/// `lock`'s success body: the command it answers, whether every cached secret was confirmed cleared, then whether the
-/// owner-lock file was written.
+/// Encodes `lock`'s success body: the command it answers, a flag set if and only if every cached secret was confirmed
+/// cleared, then a flag set if and only if the owner-lock file was written.
 pub(super) fn encode_lock_result(cleared: bool, persisted: bool) -> Vec<u8> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &COMMAND_LOCK.to_be_bytes());
@@ -194,7 +195,8 @@ pub(super) fn encode_lock_result(cleared: bool, persisted: bool) -> Vec<u8> {
     out
 }
 
-/// `unlock`'s success body: the command it answers, then whether the owner-lock file is gone.
+/// Encodes `unlock`'s success body: the command it answers, then a flag set if and only if the owner-lock file is
+/// gone.
 pub(super) fn encode_unlock_result(owner_lock_removed: bool) -> Vec<u8> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &COMMAND_UNLOCK.to_be_bytes());
@@ -202,17 +204,17 @@ pub(super) fn encode_unlock_result(owner_lock_removed: bool) -> Vec<u8> {
     out
 }
 
-/// `add`'s success body: the command it answers, then the new record's ID.
+/// Encodes `add`'s success body: the command it answers, then the new record's ID.
 pub(super) fn encode_add_result(record_id: RecordId) -> Vec<u8> {
     add::encode_result(COMMAND_ADD, record_id)
 }
 
-/// `replace`'s success body: the command it answers, then the new record's ID.
+/// Encodes `replace`'s success body: the command it answers, then the new record's ID.
 pub(super) fn encode_replace_result(record_id: RecordId) -> Vec<u8> {
     add::encode_result(COMMAND_REPLACE, record_id)
 }
 
-/// `caller-token`'s success body: the command it answers, then the token's text. It holds the token, so it is built in a
+/// Encodes `caller-token`'s success body: the command it answers, then the token's text. It holds the token, so it is built in a
 /// clearing buffer sized for it up front, which never reallocates.
 pub(super) fn encode_caller_token_result(token: &CallerToken) -> Zeroizing<Vec<u8>> {
     let mut out = Zeroizing::new(Vec::with_capacity(2 * fields::FIELD_HEADER_LEN + 2 + CALLER_TOKEN_LEN));
@@ -221,8 +223,8 @@ pub(super) fn encode_caller_token_result(token: &CallerToken) -> Zeroizing<Vec<u
     out
 }
 
-/// The token is parsed straight from the read buffer into its own secret type. A wrong length or an invalid token is
-/// an invalid value: the error names the tag, and never the bytes.
+/// Decodes `caller-token`'s result, parsing the token straight from the read buffer into its own secret type. A wrong
+/// length or an invalid token is an invalid value: the error names the tag, and never the bytes.
 fn decode_caller_token_result(fields: &[fields::Field<'_>]) -> Result<AdminResponse, FrameError> {
     let [_, token] = exact(fields, [TAG_COMMAND, TAG_TOKEN])?;
     CallerToken::parse(token)
@@ -230,13 +232,14 @@ fn decode_caller_token_result(fields: &[fields::Field<'_>]) -> Result<AdminRespo
         .map_err(|_| FrameError::InvalidValue(TAG_TOKEN))
 }
 
-/// `list`'s success body: the command it answers, whether a vault is open, then the entries. An entry the wire cannot
+/// Encodes `list`'s success body: the command it answers, a flag set if and only if a vault is open, then the
+/// entries. An entry the wire cannot
 /// carry is an error.
 pub(super) fn encode_list_result(credentials: Option<&[CredentialStanding]>) -> Result<Vec<u8>, FrameError> {
     list::encode_result(COMMAND_LIST, credentials)
 }
 
-/// `recipient remove`'s success body: the command it answers, then the recipient count after the removal.
+/// Encodes `recipient remove`'s success body: the command it answers, then the recipient count after the removal.
 pub(super) fn encode_recipient_remove_result(recipients: u8) -> Vec<u8> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &COMMAND_RECIPIENT_REMOVE.to_be_bytes());
@@ -244,37 +247,37 @@ pub(super) fn encode_recipient_remove_result(recipients: u8) -> Vec<u8> {
     out
 }
 
-/// `approver list`'s success body: the command it answers, then the entries.
+/// Encodes `approver list`'s success body: the command it answers, then the entries.
 pub(super) fn encode_approver_list_result(entries: &[super::ApproverEntry]) -> Result<Vec<u8>, FrameError> {
     approver_list::encode_result(COMMAND_APPROVER_LIST, entries)
 }
 
-/// `recipient list`'s success body: the command it answers, then the entries.
+/// Encodes `recipient list`'s success body: the command it answers, then the entries.
 pub(super) fn encode_recipient_list_result(entries: &[RecipientEntry]) -> Result<Vec<u8>, FrameError> {
     recipient_list::encode_result(COMMAND_RECIPIENT_LIST, entries)
 }
 
-/// `recipient add`'s success body: the command it answers, the enrolled key, then the recipient count.
+/// Encodes `recipient add`'s success body: the command it answers, the enrolled key, then the recipient count.
 pub(super) fn encode_recipient_add_result(recipient: &RecipientKey, recipients: u8) -> Vec<u8> {
     recipient_add::encode_result(COMMAND_RECIPIENT_ADD, recipient, recipients)
 }
 
-/// `approver add`'s success body: the command it answers, the new approver ID, then the approver count.
+/// Encodes `approver add`'s success body: the command it answers, the new approver ID, then the approver count.
 pub(super) fn encode_approver_add_result(approver: ApproverId, approvers: u8) -> Vec<u8> {
     approver_add::encode_result(COMMAND_APPROVER_ADD, approver, approvers)
 }
 
-/// `approver remove`'s success body: the command it answers, then the approver count.
+/// Encodes `approver remove`'s success body: the command it answers, then the approver count.
 pub(super) fn encode_approver_remove_result(approvers: u8) -> Vec<u8> {
     approver_remove::encode_result(COMMAND_APPROVER_REMOVE, approvers)
 }
 
-/// `forget-machine`'s success body: the command it answers, the independence failure and the recovery check state.
+/// Encodes `forget-machine`'s success body: the command it answers, the independence failure and the recovery check state.
 pub(super) fn encode_forget_machine_result(independence: Option<&str>, recovery: &RecoveryStatus) -> Vec<u8> {
     forget_machine::encode_result(COMMAND_FORGET_MACHINE, independence, recovery)
 }
 
-/// `reset`'s success body: the command it answers, then the result's fields.
+/// Encodes `reset`'s success body: the command it answers, then the result's fields.
 pub(super) fn encode_reset_result(
     vault_id: Option<VaultId>,
     removed: u64,
@@ -285,17 +288,17 @@ pub(super) fn encode_reset_result(
     reset::encode_result(COMMAND_RESET, vault_id, removed, foreign, cleared, finish_uncertain)
 }
 
-/// `export`'s success body: the command it answers, the vault ID, the record count and the bundle's byte count.
+/// Encodes `export`'s success body: the command it answers, the vault ID, the record count and the bundle's byte count.
 pub(super) fn encode_export_result(vault_id: VaultId, records: u64, bytes: u64) -> Vec<u8> {
     bundle::encode_export_result(COMMAND_EXPORT, vault_id, records, bytes)
 }
 
-/// `import`'s success body: the command it answers, then the result's fields.
+/// Encodes `import`'s success body: the command it answers, then the result's fields.
 pub(super) fn encode_import_result(result: &bundle::ImportResult) -> Vec<u8> {
     bundle::encode_import_result(COMMAND_IMPORT, result)
 }
 
-/// `init`'s success body: the command it answers, the new vault's ID as its 16 raw bytes (as `status` sends it), the
+/// Encodes `init`'s success body: the command it answers, the new vault's ID as its 16 raw bytes (as `status` sends it), the
 /// committed version, then the code of each recipient role enrolled, one byte each.
 pub(super) fn encode_init_result(vault_id: VaultId, version: u64, recipients: &[RecipientRole]) -> Vec<u8> {
     let mut out = Vec::new();
@@ -325,8 +328,8 @@ fn decode_init_result(fields: &[fields::Field<'_>]) -> Result<AdminResponse, Fra
     })
 }
 
-/// `recovery check`'s success body: the command it answers, the vault ID as its 16 raw bytes, the check time in Unix
-/// seconds, then whether the check record was written.
+/// Encodes `recovery check`'s success body: the command it answers, the vault ID as its 16 raw bytes, the check time in Unix
+/// seconds, then a flag set if and only if the check record was written.
 pub(super) fn encode_recovery_check_result(vault_id: VaultId, checked_at: u64, recorded: bool) -> Vec<u8> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &COMMAND_RECOVERY_CHECK.to_be_bytes());
@@ -348,7 +351,7 @@ fn decode_recovery_check_result(fields: &[fields::Field<'_>]) -> Result<AdminRes
     })
 }
 
-/// `config approve`'s success body: the command it answers, the committed version, the config digest and the headline.
+/// Encodes `config approve`'s success body: the command it answers, the committed version, the config digest and the headline.
 pub(super) fn encode_approval_result(result: &ApprovalResult) -> Vec<u8> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &COMMAND_CONFIG_APPROVE.to_be_bytes());
@@ -382,8 +385,8 @@ pub(super) fn decode_notice(body: &[u8]) -> Result<Notice, FrameError> {
     })
 }
 
-/// A success without a result has only the empty body; one with a result names its command first, so the body
-/// decodes without knowing which request it answers.
+/// Decodes a success body. A success without a result has only the empty body; one with a result names its command
+/// first, so the body decodes without knowing which request it answers.
 pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
     let fields = fields::parse(body)?;
     if fields.is_empty() {

@@ -1,4 +1,4 @@
-//! `reset`'s success result (`design/reset.md`, "Result"). The request has no arguments.
+//! `reset`'s success result ([reset: Result](../../../../../design/reset.md#result)). The request has no arguments.
 
 use iron_vault_store::VaultId;
 
@@ -12,9 +12,10 @@ const TAG_FOREIGN: u16 = 4;
 const TAG_CLEARED: u16 = 5;
 const TAG_FINISH_UNCERTAIN: u16 = 6;
 
-/// The success body: the command it answers, the confirmed vault ID (empty when the confirmation was the state directory's
-/// path), the number of files removed, the foreign files left (escaped names, one per line), whether the lock drain
-/// cleared the vault identity, and whether the removal of `reset.unfinished` is uncertain.
+/// Encodes the success body: the command it answers, the confirmed vault ID (empty when the confirmation was the state directory's
+/// path), the number of files removed, the foreign files left (escaped names, one per line), a flag set if and only if
+/// the lock drain cleared the vault identity, and a flag set if and only if the removal of `reset.unfinished` is
+/// uncertain.
 pub(super) fn encode_result(
     command: u16,
     vault_id: Option<VaultId>,

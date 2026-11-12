@@ -1,6 +1,24 @@
-//! The bundle data frame and the results of `export` and `import` (`design/migration-bundle.md`, "Transfer" and
-//! "Admin exchanges"). Neither command's request carries the bundle: it travels as bundle data frames beside the
-//! exchange, so the service never reads or writes a path the owner names.
+//! The bundle data frame and the results of `export` and `import` ([migration bundle: Transfer][transfer] and
+//! [Admin exchanges][exchanges]). Neither command's request carries the bundle: it travels as bundle data frames beside
+//! the exchange, so the service never reads or writes a path the owner names.
+//!
+//! ```text
+//! export:  CLI --> request                                     service
+//!          CLI <-> authorization and export passphrase prompts service
+//!          CLI <-- bundle data, bundle data, ...               service
+//!          CLI <-- bundle data, empty: the end                 service
+//!          CLI <-- success: vault ID, record count, byte count service   the CLI checks the byte count
+//!
+//! import:  CLI --> request                                     service
+//!          CLI --> bundle data, bundle data, ...               service
+//!          CLI --> bundle data, empty: the end                 service
+//!          CLI <-> export passphrase, new vault passphrase,    service
+//!                  recovery key reveal and confirmation
+//!          CLI <-- success: the import result                  service
+//! ```
+//!
+//! [transfer]: ../../../../../design/migration-bundle.md#transfer
+//! [exchanges]: ../../../../../design/migration-bundle.md#admin-exchanges
 
 use std::fmt;
 
@@ -27,27 +45,27 @@ const TAG_RECIPIENTS: u16 = 7;
 pub struct BundleChunk(Vec<u8>);
 
 impl BundleChunk {
-    /// Wraps `bytes`, refusing more than [`MAX_BODY_LEN`] of them.
+    /// Wraps `bytes`. Returns `None` if there are more than [`MAX_BODY_LEN`] of them.
     pub fn new(bytes: Vec<u8>) -> Option<Self> {
         (bytes.len() <= MAX_BODY_LEN).then_some(Self(bytes))
     }
 
-    /// The chunk that ends a bundle.
+    /// Returns the empty chunk, which ends a bundle.
     pub const fn end() -> Self {
         Self(Vec::new())
     }
 
-    /// Whether this is the empty chunk that ends the bundle.
+    /// Returns `true` if and only if this is the empty chunk that ends the bundle.
     pub fn is_end(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// The bundle bytes.
+    /// Returns the bundle bytes.
     pub fn bytes(&self) -> &[u8] {
         &self.0
     }
 
-    /// The bundle bytes, by value.
+    /// Returns the bundle bytes, by value.
     pub fn into_bytes(self) -> Vec<u8> {
         self.0
     }
@@ -59,7 +77,7 @@ impl fmt::Debug for BundleChunk {
     }
 }
 
-/// `export`'s success body: the command it answers, the vault ID as its 16 raw bytes, the record count, then the
+/// Encodes `export`'s success body: the command it answers, the vault ID as its 16 raw bytes, the record count, then the
 /// bundle's byte count.
 pub(super) fn encode_export_result(command: u16, vault_id: VaultId, records: u64, bytes: u64) -> Vec<u8> {
     let mut out = Vec::new();
@@ -97,7 +115,7 @@ pub struct ImportResult {
     pub recipients: Vec<RecipientRole>,
 }
 
-/// `import`'s success body: the command it answers, the vault ID as its 16 raw bytes, the record count, the committed
+/// Encodes `import`'s success body: the command it answers, the vault ID as its 16 raw bytes, the record count, the committed
 /// approval version, the highest reserved version, the committed config's digest, then the code of each recipient role
 /// enrolled, one byte each, as `init` sends them.
 pub(super) fn encode_import_result(command: u16, result: &ImportResult) -> Vec<u8> {

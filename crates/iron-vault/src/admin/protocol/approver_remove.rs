@@ -1,6 +1,7 @@
-//! `approver remove`'s argument and success result (`design/approval-signers.md`, "Admin protocol"). The ID travels as 16
-//! raw bytes and stays raw in the request: whether it is a version 4 UUID is the service's decision (`approver-invalid`),
-//! not the codec's, so only a length other than 16 is a malformed frame.
+//! `approver remove`'s argument and success result
+//! ([approval signers: Admin protocol](../../../../../design/approval-signers.md#admin-protocol)). The ID travels as 16 raw bytes and stays
+//! raw in the request: the service, not the codec, checks that it is a version 4 UUID (`approver-invalid`), so only a
+//! length other than 16 is a malformed frame.
 
 use super::fields::{self, Field, exact};
 use super::{AdminRequest, AdminResponse, FrameError};
@@ -22,7 +23,7 @@ pub(super) fn decode_request(fields: &[Field<'_>]) -> Result<AdminRequest, Frame
     Ok(AdminRequest::ApproverRemove { approver })
 }
 
-/// The success body: the command it answers, then the approver count.
+/// Encodes the success body: the command it answers, then the approver count.
 pub(super) fn encode_result(command: u16, approvers: u8) -> Vec<u8> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &command.to_be_bytes());

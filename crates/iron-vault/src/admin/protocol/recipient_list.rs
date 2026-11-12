@@ -1,6 +1,6 @@
 //! The `recipient list` result: one entry per enrolled recipient, in inventory order
-//! (`design/recipients.md`, "Admin protocol"). Public keys, roles, labels and times only: no type here can hold a
-//! secret.
+//! ([recipients: Admin protocol](../../../../../design/recipients.md#admin-protocol)). Public keys, roles, labels and times only: no type
+//! here can hold a secret.
 
 use iron_vault_store::{RecipientEntry, RecipientLabel, RecipientRole, UtcSecond};
 
@@ -13,7 +13,7 @@ const TAG_ENTRIES: u16 = 2;
 
 const INVALID_ENTRIES: FrameError = FrameError::InvalidValue(TAG_ENTRIES);
 
-/// The success body: the command it answers, then the entries as one byte value. An entry whose key or label is longer
+/// Encodes the success body: the command it answers, then the entries as one byte value. An entry whose key or label is longer
 /// than its one-byte length counts is refused, never truncated; the store's own bounds make that unreachable.
 pub(super) fn encode_result(command: u16, entries: &[RecipientEntry]) -> Result<Vec<u8>, FrameError> {
     let entries = entries.iter().try_fold(Vec::new(), |mut out, entry| {

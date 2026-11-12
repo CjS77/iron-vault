@@ -1,5 +1,6 @@
-//! The `approver list` result: one entry per pinned approver, in approver order (`design/approval-signers.md`, "Admin
-//! protocol"). Approver IDs, kinds, labels and times only: no type here can hold a key or a secret.
+//! The `approver list` result: one entry per pinned approver, in approver order
+//! ([approval signers: Admin protocol](../../../../../design/approval-signers.md#admin-protocol)). Approver IDs, kinds, labels and times
+//! only: no type here can hold a key or a secret.
 
 use iron_vault_store::{ApproverId, ApproverLabel, SignerKind, UtcSecond};
 
@@ -19,7 +20,7 @@ pub struct ApproverEntry {
     pub id: ApproverId,
     /// What signs for the approver.
     pub kind: SignerKind,
-    /// Whether this approver signed the active approval.
+    /// `true` if and only if this approver signed the active approval.
     pub active: bool,
     /// The owner's label.
     pub label: ApproverLabel,
@@ -27,8 +28,17 @@ pub struct ApproverEntry {
     pub enrolled_at: UtcSecond,
 }
 
-/// The success body: the command it answers, then the entries as one byte value. Each entry is the 16-byte ID, the kind
-/// code, the active flag, a one-byte label length, the label and the enrolment time as a big-endian `u64`.
+/// Encodes the success body: the command it answers, then the entries as one byte value. Each entry is laid out as:
+///
+/// ```text
+/// bytes  field
+/// 16     approver ID
+/// 1      signer kind code: 1 software, 2 tpm
+/// 1      active flag: 1 if and only if this approver signed the active approval
+/// 1      label length
+/// n      label, UTF-8
+/// 8      enrolment time, Unix seconds, big-endian u64
+/// ```
 pub(super) fn encode_result(command: u16, entries: &[ApproverEntry]) -> Result<Vec<u8>, FrameError> {
     let entries = entries.iter().try_fold(Vec::new(), |mut out, entry| {
         out.extend_from_slice(entry.id.as_bytes());

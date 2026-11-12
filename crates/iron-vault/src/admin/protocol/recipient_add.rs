@@ -1,5 +1,15 @@
-//! `recipient add`'s arguments and success result (`design/recipients.md`, "Admin protocol"). Only the bounds are checked
-//! here: the key and the label stay text, and the service parses and validates them, so a bad one is `recipient-invalid`.
+//! `recipient add`'s arguments and success result ([recipients: Admin protocol](../../../../../design/recipients.md#admin-protocol)).
+//! Only the bounds are checked here: the key and the label stay text, and the service parses and validates them, so a
+//! bad one is `recipient-invalid`.
+//!
+//! One command ID carries three requests, told apart by the source field:
+//!
+//! ```text
+//! source  key field  request
+//! 1       the key    recipient add age1...                  a key the owner gives
+//! 2       empty      recipient add --recovery               a recovery key the service generates
+//! 3       the key    recipient add --host-unlock age1...    a host unlock identity's key the owner gives
+//! ```
 
 use iron_vault_store::RecipientKey;
 
@@ -20,7 +30,7 @@ const SOURCE_NEW_RECOVERY: u8 = 2;
 /// The source of a host unlock identity's key the owner gives, enrolled with the `host-unlock` role.
 const SOURCE_HOST_UNLOCK_KEY: u8 = 3;
 
-/// The request for a key the owner gives: `host_unlock` picks source `3` over source `1`.
+/// Encodes the request for a key the owner gives: `host_unlock` picks source `3` over source `1`.
 pub(super) fn encode_request(command: u16, recipient: &str, label: &str, host_unlock: bool) -> Vec<u8> {
     let source = if host_unlock { SOURCE_HOST_UNLOCK_KEY } else { SOURCE_OWNER_KEY };
     let mut out = Vec::new();
@@ -40,8 +50,8 @@ pub(super) fn encode_recovery_request(command: u16, label: &str) -> Vec<u8> {
     out
 }
 
-/// An owner key needs source `1` or `3` and a key, and a new recovery key source `2` and none: a mismatch is a malformed
-/// frame, not a rule the service judges.
+/// Decodes a request. An owner key needs source `1` or `3` and a key, and a new recovery key source `2` and none: a
+/// mismatch is a malformed frame, not a rule the service judges.
 pub(super) fn decode_request(fields: &[Field<'_>]) -> Result<AdminRequest, FrameError> {
     let [_, source, recipient, label] = exact(fields, [TAG_COMMAND, TAG_SOURCE, TAG_RECIPIENT, TAG_LABEL])?;
     let (recipient, label) = (read_text(TAG_RECIPIENT, recipient)?, read_text(TAG_LABEL, label)?);
@@ -55,7 +65,7 @@ pub(super) fn decode_request(fields: &[Field<'_>]) -> Result<AdminRequest, Frame
     }
 }
 
-/// The success body: the command it answers, the enrolled key as text, then the recipient count.
+/// Encodes the success body: the command it answers, the enrolled key as text, then the recipient count.
 pub(super) fn encode_result(command: u16, recipient: &RecipientKey, recipients: u8) -> Vec<u8> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &command.to_be_bytes());

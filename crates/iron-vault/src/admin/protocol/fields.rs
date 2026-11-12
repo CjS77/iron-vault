@@ -1,5 +1,10 @@
-//! The field layer every body except owner input uses: a `u16` tag, a `u32` length and the value, with tags strictly
-//! ascending so each body has exactly one encoding.
+//! The field layer every body uses except the bare values of owner input, reveal and bundle data: a `u16` tag, a `u32`
+//! length and the value, all big-endian, with tags strictly ascending so each body has exactly one encoding.
+//!
+//! ```text
+//! 00 01  00 00 00 02  00 01      tag 1, length 2, value 0x0001
+//! 00 03  00 00 00 01  01         tag 3, length 1, value 0x01
+//! ```
 
 use super::FrameError;
 use crate::deployment::DeploymentProfile;
@@ -13,8 +18,8 @@ pub(super) struct Field<'a> {
     value: &'a [u8],
 }
 
-/// Appends one field. Callers keep the whole body within the frame bound, so the length always fits a `u32`; a value
-/// that did not would be refused by the frame bound anyway, so it saturates rather than wrapping.
+/// Appends one field. Callers keep the whole body within the frame bound, so the length always fits a `u32`. A longer
+/// value saturates the length at `u32::MAX` instead of wrapping to a small number, and the frame bound refuses it.
 pub(super) fn put(out: &mut Vec<u8>, tag: u16, value: &[u8]) {
     out.extend_from_slice(&tag.to_be_bytes());
     out.extend_from_slice(&u32::try_from(value.len()).unwrap_or(u32::MAX).to_be_bytes());
@@ -41,8 +46,8 @@ pub(super) fn parse(body: &[u8]) -> Result<Vec<Field<'_>>, FrameError> {
     Ok(fields)
 }
 
-/// The values of exactly the fields `tags` names, in order: any other tag, or a missing one, is an error. `tags` must be
-/// ascending, as the fields already are.
+/// Returns the values of exactly the fields `tags` names, in order: any other tag, or a missing one, is an error.
+/// `tags` must be ascending, as the fields already are.
 pub(super) fn exact<'a, const N: usize>(fields: &[Field<'a>], tags: [u16; N]) -> Result<[&'a [u8]; N], FrameError> {
     if let Some(unknown) = fields.iter().find(|field| !tags.contains(&field.tag)) {
         return Err(FrameError::UnknownTag(unknown.tag));
@@ -59,7 +64,7 @@ pub(super) fn exact<'a, const N: usize>(fields: &[Field<'a>], tags: [u16; N]) ->
     Ok(values)
 }
 
-/// The value of the first field, which must carry `tag`.
+/// Returns the value of the first field, which must carry `tag`.
 pub(super) fn first<'a>(fields: &[Field<'a>], tag: u16) -> Result<&'a [u8], FrameError> {
     fields
         .first()
@@ -68,21 +73,21 @@ pub(super) fn first<'a>(fields: &[Field<'a>], tag: u16) -> Result<&'a [u8], Fram
         .ok_or(FrameError::MissingField(tag))
 }
 
-/// A `u16` field value, which must be exactly two bytes.
+/// Reads a `u16` field value, which must be exactly two bytes.
 pub(super) fn read_u16(tag: u16, value: &[u8]) -> Result<u16, FrameError> {
     <[u8; 2]>::try_from(value)
         .map(u16::from_be_bytes)
         .map_err(|_| FrameError::InvalidValue(tag))
 }
 
-/// A `u64` field value, which must be exactly eight bytes.
+/// Reads a `u64` field value, which must be exactly eight bytes.
 pub(super) fn read_u64(tag: u16, value: &[u8]) -> Result<u64, FrameError> {
     <[u8; 8]>::try_from(value)
         .map(u64::from_be_bytes)
         .map_err(|_| FrameError::InvalidValue(tag))
 }
 
-/// The deployment profile's one-byte code, which `ping` and `status` share.
+/// Returns the deployment profile's one-byte code, which `ping` and `status` share.
 pub(super) const fn profile_code(profile: DeploymentProfile) -> u8 {
     match profile {
         DeploymentProfile::Protected => 1,
@@ -91,7 +96,7 @@ pub(super) const fn profile_code(profile: DeploymentProfile) -> u8 {
     }
 }
 
-/// A deployment profile field value: exactly one byte, a [`profile_code`].
+/// Reads a deployment profile field value: exactly one byte, a [`profile_code`].
 pub(super) fn read_profile(tag: u16, value: &[u8]) -> Result<DeploymentProfile, FrameError> {
     match value {
         [1] => Ok(DeploymentProfile::Protected),
@@ -101,7 +106,7 @@ pub(super) fn read_profile(tag: u16, value: &[u8]) -> Result<DeploymentProfile, 
     }
 }
 
-/// A flag field value: exactly one byte, 0 or 1.
+/// Reads a flag field value: exactly one byte, 0 or 1.
 pub(super) fn read_flag(tag: u16, value: &[u8]) -> Result<bool, FrameError> {
     match value {
         [0] => Ok(false),
@@ -110,7 +115,7 @@ pub(super) fn read_flag(tag: u16, value: &[u8]) -> Result<bool, FrameError> {
     }
 }
 
-/// A text field value, which must be UTF-8.
+/// Reads a text field value, which must be UTF-8.
 pub(super) fn read_text(tag: u16, value: &[u8]) -> Result<String, FrameError> {
     std::str::from_utf8(value)
         .map(str::to_owned)

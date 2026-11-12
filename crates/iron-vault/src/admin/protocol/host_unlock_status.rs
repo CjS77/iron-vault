@@ -1,14 +1,26 @@
-//! The startup host unlock outcome in the status report and its field encoding (`design/admin-protocol.md#status`, tag 18).
+//! The startup host unlock outcome in the status report and its field encoding
+//! ([admin protocol: status](../../../../../design/admin-protocol.md#status), tag 18).
 //!
 //! An empty value means the profile tried no host unlock. Otherwise the first byte is the outcome, and a refusal adds a
-//! second byte naming why, so the report round-trips as the service's own type.
+//! second byte naming why, so the report round-trips as the service's own type:
+//!
+//! ```text
+//! value      outcome
+//! (empty)    no host unlock tried
+//! 01         unlocked
+//! 02         absent: no host unlock credential
+//! 03         unseal failed
+//! 04         owner-locked: an owner lock kept the vault Locked
+//! 05 rr      refused, for reason rr: 00 memory unprotected, 01 untrusted, 02 unreadable, 03 not an identity,
+//!            04 not initialized, 05 not a recipient
+//! ```
 
 use super::FrameError;
 use crate::service_context::{HostUnlockOutcome, HostUnlockRefusal};
 
 pub(super) const TAG_OUTCOME: u16 = 18;
 
-/// The value of tag 18.
+/// Encodes the value of tag 18.
 pub(super) fn encode(outcome: Option<HostUnlockOutcome>) -> Vec<u8> {
     match outcome {
         None => Vec::new(),
@@ -20,7 +32,7 @@ pub(super) fn encode(outcome: Option<HostUnlockOutcome>) -> Vec<u8> {
     }
 }
 
-/// A refusal's code. Exhaustive, so a new refusal cannot reach the wire under another's code.
+/// Returns a refusal's code. The match is exhaustive, so a new refusal cannot reach the wire under another's code.
 const fn refusal_code(refusal: HostUnlockRefusal) -> u8 {
     match refusal {
         HostUnlockRefusal::MemoryUnprotected => 0,
@@ -32,7 +44,7 @@ const fn refusal_code(refusal: HostUnlockRefusal) -> u8 {
     }
 }
 
-/// The refusal a code names.
+/// Returns the refusal a code names, or `None` for an unknown code.
 const fn refusal_of(code: u8) -> Option<HostUnlockRefusal> {
     match code {
         0 => Some(HostUnlockRefusal::MemoryUnprotected),

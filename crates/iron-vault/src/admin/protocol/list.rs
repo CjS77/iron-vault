@@ -1,6 +1,6 @@
-//! The `list` result: whether a vault is open, then one entry per credential with its kind and permitted origins
-//! (`design/admin-protocol.md#list`). Names, kinds, hosts and ports only: no type here can hold a secret value or a
-//! record digest.
+//! The `list` result: a flag set if and only if a vault is open, then one entry per credential with its kind and
+//! permitted origins ([admin protocol: list](../../../../../design/admin-protocol.md#list)). Names, kinds, hosts and ports only: no type
+//! here can hold a secret value or a record digest.
 
 use iron_vault_policy::{CredentialKind, Host, Port};
 
@@ -19,7 +19,7 @@ const KIND_BASIC: u8 = 2;
 
 const INVALID_ENTRIES: FrameError = FrameError::InvalidValue(TAG_ENTRIES);
 
-/// The success body: the command it answers, the vault-open flag, then the entries. `None` is no open vault and no
+/// Encodes the success body: the command it answers, the vault-open flag, then the entries. `None` is no open vault and no
 /// entries. An entry the wire cannot carry (a healthy credential without its summary, or more origins than a byte
 /// counts) is refused, never truncated.
 pub(super) fn encode_result(command: u16, credentials: Option<&[CredentialStanding]>) -> Result<Vec<u8>, FrameError> {
@@ -67,7 +67,8 @@ fn decode_entries(mut rest: &[u8]) -> Result<Vec<CredentialStanding>, FrameError
     std::iter::from_fn(|| (!rest.is_empty()).then(|| take_entry(&mut rest))).collect()
 }
 
-/// A damaged record has no kind and no origins; a healthy one has a kind and at least one origin.
+/// Takes one entry from the front of `rest`. A damaged record has no kind and no origins; a healthy one has a kind and
+/// at least one origin.
 fn take_entry(rest: &mut &[u8]) -> Result<CredentialStanding, FrameError> {
     let name = take_name_in(TAG_ENTRIES, rest)?;
     let [standing, kind, count] = *take_in(TAG_ENTRIES, rest, 3)?.first_chunk::<3>().ok_or(INVALID_ENTRIES)?;
@@ -101,7 +102,7 @@ fn kind_code(kind: CredentialKind) -> u8 {
     }
 }
 
-/// `None` is the unknown kind of a damaged record.
+/// Reads a kind code. `None` is the unknown kind of a damaged record.
 fn read_kind(code: u8) -> Result<Option<CredentialKind>, FrameError> {
     match code {
         KIND_UNKNOWN => Ok(None),

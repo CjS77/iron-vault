@@ -1,6 +1,8 @@
-//! `approver add`'s arguments and success result (`design/approval-signers.md`, "Admin protocol"). Only the bounds are
-//! checked here: the label stays text, and the service validates it, so a bad one is `approver-invalid`. A kind code
-//! outside 1 to 3 is a malformed frame; a kind this install does not offer is the service's `approver-kind-unavailable`.
+//! `approver add`'s arguments and success result
+//! ([approval signers: Admin protocol](../../../../../design/approval-signers.md#admin-protocol)). Only the
+//! bounds are checked here: the label stays text, and the service validates it, so a bad one is `approver-invalid`. A
+//! kind code outside 1 to 3 is a malformed frame; a kind this install does not offer is the service's
+//! `approver-kind-unavailable`.
 
 use iron_vault_store::ApproverId;
 
@@ -19,14 +21,14 @@ const TAG_APPROVERS: u16 = 3;
 pub enum RequestedSignerKind {
     /// `software`: an Ed25519 key sealed to its own approval passphrase.
     Software = 1,
-    /// `tpm`: a TPM approval key with a PIN (EP-33).
+    /// `tpm`: a TPM approval key with a PIN ([TPM approval signer](../../../../../design/tpm-approval-signer.md)).
     Tpm = 2,
-    /// `hardware`: a hardware key with PIN and touch (the hardware-key phase).
+    /// `hardware`: a hardware key with PIN and touch, planned for a later phase.
     Hardware = 3,
 }
 
 impl RequestedSignerKind {
-    /// The kind's name, as `--kind` takes it and the summary shows it.
+    /// Returns the kind's name, as `--kind` takes it and the summary shows it: `software`, `tpm` or `hardware`.
     pub const fn name(self) -> &'static str {
         match self {
             Self::Software => "software",
@@ -61,7 +63,7 @@ pub(super) fn decode_request(fields: &[Field<'_>]) -> Result<AdminRequest, Frame
     })
 }
 
-/// The success body: the command it answers, the new approver ID's 16 bytes, then the approver count.
+/// Encodes the success body: the command it answers, the new approver ID's 16 bytes, then the approver count.
 pub(super) fn encode_result(command: u16, approver: ApproverId, approvers: u8) -> Vec<u8> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &command.to_be_bytes());
