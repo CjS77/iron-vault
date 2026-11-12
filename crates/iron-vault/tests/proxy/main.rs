@@ -15,6 +15,7 @@ mod proxy_scrub;
 mod proxy_scrub_stream;
 mod proxy_serving_gate;
 mod refusal_events;
+mod release_egress;
 mod request_events;
 mod request_events_relayed;
 mod request_socket;

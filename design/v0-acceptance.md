@@ -36,7 +36,8 @@ for the file only.
 | A token caller on a loopback listener reaches its route | `crates/iron-vault/tests/proxy/pipeline_egress.rs::a_token_caller_on_the_loopback_listener_reaches_its_route` | `cargo test` |
 | Generated requests go only to the route's upstream, with the slot written once | `crates/iron-vault-policy/tests/policy/destination.rs::checked_requests_go_only_to_the_route_upstream`, `crates/iron-vault-policy/tests/policy/destination.rs::checked_requests_write_the_slot_exactly_once` | `cargo test` |
 | A record's permitted origins bound the destination | `crates/iron-vault-policy/tests/policy/destination.rs::omitted_origins_never_produce_a_checked_request` | `cargo test` |
-| Through `init`, `add` and `config approve`, three upstreams at once, no credential reaching another upstream; a Unix peer-account caller | **gap**: K-361 | `cargo test` |
+| Through `add` and `config approve` on the running service, three upstreams on distinct hosts at once, each credential only to its own origin and slot and no other credential in any scrubbed form | `crates/iron-vault/tests/proxy/release_egress.rs::fx_brave_and_venice_each_carry_only_their_own_credential_to_their_enrolled_origin_and_slot` | `cargo test` |
+| A Unix peer-account caller reaches its granted route and is refused another with no upstream connection | `crates/iron-vault/tests/proxy/release_egress.rs::a_peer_account_caller_reaches_its_route_and_no_other` | `cargo test` |
 | Real FX, Brave and Venice providers | **gap**: K-373 | `owner, real provider keys` |
 
 ## 2. No credentialed egress for hostile requests
