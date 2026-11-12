@@ -1,6 +1,11 @@
-//! The log destination an approved config chooses: opened as the config check's last step, checked by `config approve`
-//! before it reserves a version, and switched to on entering Ready (`design/audit-logging.md`, "Switching at
-//! activation").
+//! Moves the audit log to the destination an approved config chooses
+//! ([audit logging: Switching at activation](../../../../design/audit-logging.md#switching-at-activation)):
+//!
+//! ```text
+//!   config approve, before step 2 reserves a version   precheck      creates nothing, opens nothing for writing
+//!   config check, its last step                        open_chosen   opens and verifies the directory
+//!   entering Ready                                     switch        logs the change to the old and the new destination
+//! ```
 //!
 //! Nothing happens when the chosen destination is the current one. A config that sets none chooses the bootstrap
 //! destination, so removing the setting moves the log back.
@@ -34,8 +39,8 @@ impl Unusable {
     }
 }
 
-/// Opens and verifies the destination `config` chooses when it differs from the current one, for [`switch`]; `None`
-/// when the log stays where it is.
+/// Opens and verifies the destination `config` chooses when it differs from the current one, for [`switch`]. Returns
+/// `None` when the log stays where it is.
 pub(super) fn open_chosen(config: &ValidatedConfig, log: &LogSwitch, paths: &ServicePaths) -> Result<Option<OpenedLog>, InvalidConfig> {
     let Some(destination) = moved(config, log) else { return Ok(None) };
     check_outside(config.log_destination(), paths)
@@ -44,8 +49,9 @@ pub(super) fn open_chosen(config: &ValidatedConfig, log: &LogSwitch, paths: &Ser
         .map_err(|unusable| refused(&destination, &unusable))
 }
 
-/// `config approve`'s check of the destination `config` chooses, when it differs from the current one. It creates
-/// nothing and opens nothing for writing; the check at activation still runs, since the directory can change in between.
+/// Runs `config approve`'s check of the destination `config` chooses, when it differs from the current one. It
+/// creates nothing and opens nothing for writing; the check at activation still runs, since the directory can change
+/// in between.
 pub(super) fn precheck(config: &ValidatedConfig, log: &LogSwitch, paths: &ServicePaths) -> Result<(), InvalidConfig> {
     let Some(destination) = moved(config, log) else { return Ok(()) };
     check_outside(config.log_destination(), paths)
@@ -53,7 +59,8 @@ pub(super) fn precheck(config: &ValidatedConfig, log: &LogSwitch, paths: &Servic
         .map_err(|unusable| refused(&destination, &unusable))
 }
 
-/// Points the log at `opened`, writing `service.log-destination-changed` to the old destination and then to the new one.
+/// Points the log at `opened`, writing `service.log-destination-changed` to the old destination and then to the new
+/// one.
 pub(super) fn switch(log: &LogSwitch, opened: OpenedLog, version: ApprovalVersion) {
     let changed = LogDestinationChanged {
         destination: opened.destination().clone(),
@@ -65,7 +72,7 @@ pub(super) fn switch(log: &LogSwitch, opened: OpenedLog, version: ApprovalVersio
     changed.emit();
 }
 
-/// The destination `config` chooses, when it is not the current one.
+/// Returns the destination `config` chooses, or `None` when it is the current one.
 fn moved(config: &ValidatedConfig, log: &LogSwitch) -> Option<LogDestination> {
     let chosen = match config.log_destination() {
         Some(LogDestinationSetting::Stdout) => LogDestination::Stdout,
@@ -103,7 +110,7 @@ fn check_outside(setting: Option<&LogDestinationSetting>, paths: &ServicePaths) 
         })
 }
 
-/// A reserved directory canonicalised. The service holds both directories locked, so this fails only on a broken
+/// Canonicalises a reserved directory. The service holds both directories locked, so this fails only on a broken
 /// install, and then the overlap cannot be ruled out.
 fn reserved(path: Option<&Path>) -> Result<PathBuf, Unusable> {
     path.and_then(|path| path.canonicalize().ok()).ok_or(Unusable::Unresolved)
