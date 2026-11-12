@@ -1,10 +1,16 @@
-//! `recipient add` in the running service (`design/recipients.md`, "`recipient add <age1…>`"): step 3, the inventory
-//! check and the change applied in memory, and steps 9 and 10, consuming the authorization and the rewrap.
+//! Runs the service's part of `recipient add`
+//! ([recipients: `recipient add <age1…>`](../../../../design/recipients.md#recipient-add-age1)): step 3, the
+//! inventory check and the change applied in memory, and steps 9 and 10, consuming the authorization and the rewrap.
+//! Steps 5 to 7 are migration authorization, which the `migration` module runs.
 //!
-//! Both run inside the [`MigrationSession`] that holds the service-wide lock, and both hand a clone of that lock to the
-//! blocking task that touches the state directory, so a connection that drops mid-write cannot let another command
-//! start on a half-finished change. Step 10 consumes the authorization against the key in the plan, so a rewrap cannot
-//! start without an authorization for exactly the change the owner was shown.
+//! In this module the `--host-unlock` and `--recovery` forms differ only at step 3: they enrol the host unlock
+//! identity's key with the `host-unlock` role, or a new recovery key with the `recovery` role. For `--recovery`, step
+//! 10 also proves the new envelope with the recovery identity before writing it.
+//!
+//! Steps 3 and 10 run inside the [`MigrationSession`] that holds the service-wide lock, and both hand a clone of that
+//! lock to the blocking task that touches the state directory, so a connection that drops mid-write cannot let
+//! another command start on a half-finished change. Step 10 consumes the authorization against the key in the plan,
+//! so a rewrap cannot start without an authorization for exactly the change the owner was shown.
 
 use std::sync::Arc;
 
@@ -44,8 +50,8 @@ pub enum AddRefusal {
     /// The service no longer holds the vault identity.
     #[error("the service no longer holds the vault identity")]
     WrongState(ServiceState),
-    /// The authorization was not for this vault and this change, or expired, or the service changed since step 2. Nothing
-    /// was written.
+    /// The authorization was not for this vault and this change, or expired, or the service changed since step 2.
+    /// Nothing was written.
     #[error("migration authorization was refused")]
     Unauthorized(MigrationRefusal),
     /// The recipient change failed; [`RecipientChangeError`] says whether it may have committed.
@@ -68,12 +74,12 @@ pub struct RecipientAddPlan {
 }
 
 impl RecipientAddPlan {
-    /// The entry to enrol.
+    /// Returns the entry to enrol.
     pub fn entry(&self) -> &RecipientEntry {
         &self.entry
     }
 
-    /// The inventory after the change, for the summary. It still carries the old envelope's digest.
+    /// Returns the inventory after the change, for the summary. It still carries the old envelope's digest.
     pub fn after(&self) -> &RecipientInventory {
         &self.after
     }
@@ -84,14 +90,15 @@ impl RecipientAddPlan {
 pub struct Enrolled {
     /// The inventory that describes the new `identity.age`.
     pub inventory: RecipientInventory,
-    /// Whether the inventory file or the staged file's removal is left for the next recipient command to finish.
+    /// `true` if and only if the inventory file or the staged file's removal is left for the next recipient command
+    /// to finish.
     pub unfinished: bool,
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Step 3: opens the inventory under the session's lock and applies the add to it in memory. An already-enrolled key
-    /// or a set that breaks the independence rule is refused here, recorded as `recipient.change-failed`, before any
-    /// challenge.
+    /// Runs step 3: opens the inventory under the session's lock and applies the add to it in memory. An
+    /// already-enrolled key or a set that breaks the independence rule is refused here, recorded as
+    /// `recipient.change-failed`, before any challenge.
     pub async fn plan_recipient_add(
         &self,
         session: &MigrationSession<'_, F>,
@@ -101,7 +108,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         self.plan(session, key, RecipientRole::Added, label, None).await
     }
 
-    /// Step 3 of `recipient add --host-unlock`: the same check for a host unlock identity's key, enrolled with the
+    /// Runs step 3 of `recipient add --host-unlock`: the same check for a host unlock identity's key, enrolled with the
     /// `host-unlock` role, so part 1 of the independence rule can keep it once the unlock handoff holds its identity.
     pub async fn plan_host_unlock_add(
         &self,
@@ -112,7 +119,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         self.plan(session, key, RecipientRole::HostUnlock, label, None).await
     }
 
-    /// Step 3 of `recipient add --recovery`: the same check for the new recovery key's identity, enrolled with the
+    /// Runs step 3 of `recipient add --recovery`: the same check for the new recovery key's identity, enrolled with the
     /// `recovery` role. The identity is kept in the plan only to prove the new envelope before it is written.
     pub async fn plan_recovery_add(
         &self,
@@ -148,10 +155,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         })
     }
 
-    /// Steps 9 and 10: consumes `authorization` for adding the plan's key, then rewraps the vault identity for it and
-    /// writes the inventory that describes it, on the blocking pool with the session's lock. Records `recipient.added`
-    /// once the envelope is replaced, and `recipient.change-failed` for a failure, with whether the change committed.
-    /// An authorization for another key or operation is refused before anything is written.
+    /// Runs steps 9 and 10: consumes `authorization` for adding the plan's key, then rewraps the vault identity for
+    /// it and writes the inventory that describes it, on the blocking pool with the session's lock. Records
+    /// `recipient.added` once the envelope is replaced, and `recipient.change-failed` for a failure, with whether the
+    /// change committed. An authorization for another key or operation is refused before anything is written.
     pub async fn add_recipient(
         &self,
         session: &MigrationSession<'_, F>,
@@ -212,7 +219,7 @@ fn rule_failure(rule: RecipientChangeRefusal) -> ChangeFailure {
     }
 }
 
-/// A rewrap that did not commit, or may not have.
+/// Describes a rewrap that did not commit, or may not have, for `recipient.change-failed`.
 fn failure_of(error: &RecipientChangeError) -> ChangeFailure {
     match error {
         RecipientChangeError::Refused(rule) => rule_failure(*rule),

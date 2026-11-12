@@ -1,11 +1,12 @@
-//! `recipient remove`'s side of the service context (`design/recipients.md`, "`recipient remove <age1…>`").
+//! Runs the service's part of `recipient remove`
+//! ([recipients: `recipient remove <age1…>`](../../../../design/recipients.md#recipient-remove-age1)).
 //!
 //! [`ServiceContext::plan_recipient_removal`] takes the service-wide lock without waiting and runs steps 2 and 3: the
-//! inventory check, then the independence rule on the set without the key. The [`RecipientRemoval`] it returns holds the
-//! lock through the summary, the passphrase prompt and the write, so owner presence authorizes exactly the change the
-//! owner was shown. Like a vault change's plan it keeps no vault identity, so a `lock` while the owner is at the prompt
-//! leaves no copy behind; the write takes the identity from the context again, and refuses unless the service is still in
-//! the state and at the check generation it recorded.
+//! inventory check, then the independence rule on the set without the key. The [`RecipientRemoval`] it returns holds
+//! the lock through the summary, the passphrase prompt and the write, so owner presence authorizes exactly the change
+//! the owner was shown. Like a vault change's plan it keeps no vault identity, so a `lock` while the owner is at the
+//! prompt leaves no copy behind; the write takes the identity from the context again, and refuses unless the service
+//! is still in the state and at the check generation it recorded.
 //!
 //! A removal changes no credential and no serving snapshot, so it runs no config check. A blocking task owns the lock
 //! guard while it writes, so a dropped caller never leaves a half-finished change running without the lock.
@@ -42,7 +43,7 @@ pub enum RemovalRefusal {
     /// The change failed while it was written; `committed` says whether `identity.age` was replaced.
     #[error("{cause}")]
     Failed {
-        /// Whether the change committed.
+        /// Whether `identity.age` was replaced: no, maybe, or yes.
         committed: ChangeCommitted,
         /// What failed, without key material.
         cause: String,
@@ -60,8 +61,8 @@ pub struct RemovedRecipient {
     pub unfinished: bool,
 }
 
-/// Steps 2 and 3 of `recipient remove` done: the service-wide lock is held, the inventory is current and the independence
-/// rule allows the set without the key. See the module docs.
+/// A `recipient remove` past steps 2 and 3: the service-wide lock is held, the inventory is current and the
+/// independence rule allows the set without the key. See the module documentation.
 pub struct RecipientRemoval<'a, F> {
     service: &'a ServiceContext<F>,
     service_wide: OwnedMutexGuard<()>,
@@ -78,9 +79,9 @@ pub struct RecipientRemoval<'a, F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Takes the service-wide lock, refusing at once with [`RecipientRefusal::Busy`] while another holds it, then runs the
-    /// checks before any prompt. A key that is not enrolled, or whose removal breaks the independence rule, is logged as
-    /// `recipient.change-failed` and refused.
+    /// Takes the service-wide lock, refusing at once with [`RecipientRefusal::Busy`] while another holds it, then
+    /// runs the checks before any prompt. A key that is not enrolled, or whose removal breaks the independence rule,
+    /// is logged as `recipient.change-failed` and refused.
     pub async fn plan_recipient_removal(&self, key: RecipientKey) -> Result<RecipientRemoval<'_, F>, RemovalRefusal> {
         let service_wide = Arc::clone(&self.service_wide)
             .try_lock_owned()
@@ -108,8 +109,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 }
 
-/// The entry `key` names and the inventory without it, if the independence rule allows that set with `host_unlock` as
-/// the configured host unlock adapter's recipient key.
+/// Returns the entry `key` names and the inventory without it, if the independence rule allows that set with
+/// `host_unlock` as the configured host unlock adapter's recipient key.
 fn apply_removal(
     inventory: &RecipientInventory,
     key: &RecipientKey,
@@ -135,29 +136,30 @@ fn log_refused(key: &RecipientKey, refusal: &RemovalRefusal) {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> RecipientRemoval<'_, F> {
-    /// The recipient the removal takes out.
+    /// Returns the recipient the removal takes out.
     pub fn removed(&self) -> &RecipientEntry {
         &self.removed
     }
 
-    /// The inventory after the removal, which the summary counts the remaining recipients from.
+    /// Returns the inventory after the removal, which the summary counts the remaining recipients from.
     pub fn remaining(&self) -> &RecipientInventory {
         &self.after
     }
 
-    /// Completes once a `lock` is waiting for the service-wide lock this removal holds, so a prompt can end the change
-    /// rather than make the `lock` wait for the owner.
+    /// Completes once a `lock` is waiting for the service-wide lock this removal holds. A prompt ends the change when
+    /// it completes, so the `lock` does not wait for the owner to answer.
     pub async fn lock_requested(&self) {
         self.service.lock_requested().await;
     }
 
-    /// The pinned approvers in approver order: owner presence asks the first and lets the owner switch to the rest.
+    /// Returns the pinned approvers in approver order: owner presence asks the first and lets the owner switch to the
+    /// rest.
     pub fn approvers(&self) -> &[PinnedApprover] {
         &self.approvers
     }
 
-    /// Owner presence (`design/credential-commands.md`): opens `approver`'s own key with
-    /// `secret` and drops the signer at once. Nothing is reserved, signed or written.
+    /// Proves [owner presence](../../../../design/credential-commands.md#owner-presence): opens `approver`'s own key
+    /// with `secret` and drops the signer at once. Nothing is reserved, signed or written.
     pub async fn prove_presence(
         &self,
         secret: impl Into<ApproverSecret>,
@@ -166,9 +168,9 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientRemoval<'_, F> {
         self.service.prove_presence(secret.into(), approver).await
     }
 
-    /// Step 7: rewraps the vault identity for the set without the recipient, if the service is still in the state and at
-    /// the check generation of step 2. It logs `recipient.removed` at the commit point, and `recipient.change-failed` when
-    /// a step fails. Taking the proof by value makes one proof authorize one change.
+    /// Runs step 7: rewraps the vault identity for the set without the recipient, if the service is still in the
+    /// state and at the check generation of step 2. It logs `recipient.removed` at the commit point, and
+    /// `recipient.change-failed` when a step fails. Taking the proof by value makes one proof authorize one change.
     pub async fn remove(self, _proof: OwnerPresence) -> Result<RemovedRecipient, RemovalRefusal> {
         let Self {
             service,
@@ -227,7 +229,7 @@ fn log_write_failure(key: &RecipientKey, error: &RecipientChangeWriteError) {
     log_failure(CHANGE, key, step_failure(error));
 }
 
-/// The refusal for a change that failed before the commit point or at it, logged as `recipient.change-failed`.
+/// Returns the refusal for a change that failed before the commit point or at it, logged as `recipient.change-failed`.
 fn refused_write(key: &RecipientKey, error: &RecipientChangeError) -> RemovalRefusal {
     match error {
         RecipientChangeError::Write(write) => {
