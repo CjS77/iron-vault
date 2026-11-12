@@ -1,5 +1,7 @@
-//! The service's side of the TPM signing helper (`design/tpm-approval-signer.md`, "Helper protocol"): one connection per
-//! request, one framed request and one framed response, with the helper's 30-second deadline.
+//! Talks to the TPM signing helper
+//! ([TPM approval signer: Helper protocol](../../../../design/tpm-approval-signer.md#helper-protocol)), the separate
+//! process that reaches the TPM, so the service never does: one connection per request, one framed request and one
+//! framed response, with the helper's 30-second deadline.
 //!
 //! A [`HelperSession`] holds the owner's PIN until the first request derives the authorization value from it, then only
 //! the value, so the PIN is cleared as soon as the value exists.
@@ -15,11 +17,12 @@ use iron_vault_tpm_protocol::{
     PUBLIC_KEY_LEN, Request, Response, SIGNATURE_LEN, SignRequest, TpmApprovalPin, TpmAuthValue, TpmKeyBlob, read_frame,
 };
 
-/// Where the helper's socket is in a protected install; the helper is offered only while it exists.
+/// The path of the helper's socket in a protected install; the helper is offered only while it exists.
 pub(super) const SIGNER_SOCKET: &str = "/run/iron-vault-tpm/signer.sock";
 
-/// The helper socket a service of `profile` offers the `tpm` kind through. Only a protected install runs the helper: a
-/// development install has no TPM-bound key to protect, and a container has no TPM device.
+/// Returns the helper socket a service of `profile` offers the `tpm` kind through, or `None` for a profile with no
+/// helper. Only a protected install runs the helper: a development install has no TPM-bound key to protect, and a
+/// container has no TPM device.
 pub(super) fn offered_socket(profile: DeploymentProfile) -> Option<PathBuf> {
     (profile == DeploymentProfile::Protected).then(|| PathBuf::from(SIGNER_SOCKET))
 }
@@ -53,7 +56,7 @@ pub enum TpmStatus {
 }
 
 impl TpmStatus {
-    /// The snake_case label audit events record.
+    /// Returns the snake_case label audit events record, such as `not_this_tpm`.
     pub const fn label(self) -> &'static str {
         match self {
             Self::WrongPin => "wrong_pin",
@@ -79,7 +82,7 @@ pub(super) enum HelperError {
     /// The TPM is in lockout, or the reserve withheld the try.
     #[error("the TPM signing helper refused: the TPM is locked out; try again in {wait_seconds} seconds")]
     LockedOut {
-        /// The whole seconds to wait.
+        /// The number of whole seconds to wait.
         wait_seconds: u64,
     },
     /// Any other refusal, or no usable answer.
@@ -101,7 +104,7 @@ impl From<HelperError> for TpmHelperFailure {
     }
 }
 
-/// The helper's answer to `request` over a fresh connection to the socket at `socket`.
+/// Sends `request` over a fresh connection to the socket at `socket` and returns the helper's answer.
 fn ask(socket: &Path, request: &Request) -> Result<Response, HelperError> {
     let mut stream = UnixStream::connect(socket).map_err(|e| unavailable(&format!("cannot connect ({})", e.kind())))?;
     stream
@@ -145,7 +148,7 @@ pub(super) struct HelperSession {
 }
 
 impl HelperSession {
-    /// A session over the helper at `socket`, authorizing with the key under `pin`.
+    /// Starts a session over the helper at `socket`, authorizing with the key under `pin`.
     pub(super) fn new(socket: PathBuf, pin: TpmApprovalPin) -> Self {
         Self {
             socket,
@@ -154,7 +157,7 @@ impl HelperSession {
         }
     }
 
-    /// The authorization value for approver `id`, derived once; the PIN is dropped as the value is made.
+    /// Returns the authorization value for approver `id`, derived once; the PIN is dropped as the value is made.
     fn auth_for(&mut self, id: &ApproverId) -> Result<TpmAuthValue, TpmHelperFailure> {
         if let Some(pin) = self.pin.take() {
             self.auth = Some(TpmAuthValue::derive(id.as_bytes(), &pin));
@@ -196,7 +199,7 @@ fn unavailable(detail: &str) -> HelperError {
     }
 }
 
-/// A helper answer that is not the success the request wanted.
+/// Maps a helper answer that is not the success the request wanted to the error it means.
 fn refusal(response: &Response) -> HelperError {
     let failed = |status, text: &str| HelperError::Failed {
         status,

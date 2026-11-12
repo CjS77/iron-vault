@@ -1,7 +1,8 @@
-//! A TPM approver's key in use (`design/tpm-approval-signer.md`, "Prompt and proof"): owner presence proves the PIN by
-//! having the TPM signing helper sign a fresh presence payload, and `config approve` keeps the authorization value that
-//! proof used to have the helper sign the approval payload at step 3. Migration authorization proves the PIN the same way
-//! over the challenge's migration proof payload.
+//! Uses a TPM approver's key
+//! ([TPM approval signer: Prompt and proof](../../../../design/tpm-approval-signer.md#prompt-and-proof)). Owner
+//! presence proves the PIN by having the TPM signing helper sign a fresh presence payload, and `config approve` keeps
+//! the authorization value that proof used to have the helper sign the approval payload at step 3. Migration
+//! authorization proves the PIN the same way over the challenge's migration proof payload.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -28,9 +29,10 @@ pub struct TpmSigner {
 }
 
 impl TpmSigner {
-    /// Proves `pin` for `approver`: derives the authorization value from it, drops the PIN, has the helper at `socket` sign
-    /// `message` (a fresh presence payload or a migration proof payload) with the key in `blob`, and verifies the signature
-    /// against the pinned key. Nothing is reserved or written, and a right PIN spends no TPM try.
+    /// Proves `pin` for `approver`: derives the authorization value from it, drops the PIN, has the helper at
+    /// `socket` sign `message` (a fresh presence payload or a migration proof payload) with the key in `blob`, and
+    /// verifies the signature against the pinned key. Nothing is reserved or written, and a right PIN spends no TPM
+    /// try.
     pub(super) fn prove(
         socket: PathBuf,
         (blob, approver): (TpmKeyBlob, PinnedApprover),
@@ -70,8 +72,8 @@ impl ApprovalSigner for TpmSigner {
         *self.approver.public_key()
     }
 
-    /// Step 3: has the helper sign the approval payload under the version already reserved. A failure is the signer's, so
-    /// the version is consumed.
+    /// Runs step 3: has the helper sign the approval payload under the version already reserved. A failure is the
+    /// signer's, so the version is consumed.
     fn sign(&self, payload: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError> {
         let signature = sign_message(&self.socket, (&self.auth, &self.blob, &self.key), &payload.encode())
             .map_err(|error| SignError::TpmHelper(error.to_string()))?;
