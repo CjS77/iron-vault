@@ -1,7 +1,13 @@
-//! `unlock`: opens the vault with the passphrase the service prompts for (specification §14, §15, §16).
+//! `unlock`: opens the vault with the passphrase the service prompts for (spec [§14][s14], [§15][s15],
+//! [§16][s16]).
 //!
-//! The service, not the CLI, asks for the passphrase, with echo off, so no argument ever carries it (§5). Only the
-//! vault passphrase is asked for: an approval passphrase is a separate type and is never accepted here.
+//! The service, not the CLI, asks for the passphrase, with echo off, so no argument ever carries it ([§5][s5]). Only
+//! the vault passphrase is asked for: an approval passphrase is a separate type and is never accepted here.
+//!
+//! [s5]: ../../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns
+//! [s14]: ../../../../design/iron-vault-specification.md#14-recipients-startup-and-memory
+//! [s15]: ../../../../design/iron-vault-specification.md#15-service-states-and-errors
+//! [s16]: ../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration
 
 use std::sync::Arc;
 
@@ -37,9 +43,9 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for Unlock<F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
-    /// Refuses before prompting when the service is not Locked, the vault is not Initialized, or a protected install's
-    /// memory is not locked, in that order, so the owner is not asked for a passphrase that cannot be used; the context
-    /// checks all three again under its mutex.
+    /// Refuses before prompting when the service is not Locked, the vault is not Initialized, a protected install's
+    /// memory is not locked, or the vault passphrase attempt limit is cooling down, in that order, so the owner is not
+    /// asked for a passphrase that cannot be used. The context checks them again under its mutex.
     async fn run(&self, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
         let state = self.service.state().await;
         if !state.admin_allows(AdminOperation::Unlock) {
@@ -75,8 +81,8 @@ impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
     }
 }
 
-/// The response for the state a successful unlock settled in: Ready succeeds; Unavailable names its redacted reason and,
-/// when the owner-lock file could not be removed, says the next start stays Locked.
+/// Returns the response for the state a successful unlock settled in: Ready succeeds; Unavailable names its redacted
+/// reason and, when the owner-lock file could not be removed, says the next start stays Locked.
 fn settled(unlocked: Unlocked) -> AdminResponse {
     match unlocked.state {
         ServiceState::Ready => AdminResponse::Unlock {
@@ -113,7 +119,7 @@ fn refused(refusal: UnlockRefusal) -> AdminResponse {
     }
 }
 
-/// A state as the owner reads it, with Unavailable's redacted reason.
+/// Names a state as the owner reads it, with Unavailable's redacted reason.
 pub(super) fn state_name(state: ServiceState) -> String {
     match state {
         ServiceState::Unavailable(reason) => format!("Unavailable ({})", UnavailableReason::from_failure(reason).as_str()),

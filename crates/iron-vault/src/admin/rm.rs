@@ -1,10 +1,13 @@
-//! `rm`: removes a credential record after owner presence (specification §6, §16; `design/admin-protocol.md`, rm;
-//! `design/credential-commands.md`).
+//! `rm`: removes a credential record after owner presence (spec [§6][s6], [§16][s16];
+//! [admin protocol: rm](../../../../design/admin-protocol.md#rm); [credential commands](../../../../design/credential-commands.md)).
 //!
 //! The service-wide lock, the manifest lookup and the vault change check all come from
 //! [`ServiceContext::plan_vault_change`], so a name a route still uses is refused before any prompt, and the lock is
 //! held through the notice, the passphrase prompt and the write. The service describes the removal in a notice, and the
-//! owner proves presence by typing the approval passphrase after reading it.
+//! owner proves presence by typing an approver's approval passphrase or TPM approval PIN after reading it.
+//!
+//! [s6]: ../../../../design/iron-vault-specification.md#6-credential-records-and-configuration
+//! [s16]: ../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration
 
 use std::sync::Arc;
 

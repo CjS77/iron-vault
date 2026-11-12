@@ -1,10 +1,23 @@
-//! `config approve`: the approval transaction on the owner's proposed config (specification §12, §5, §16;
-//! `design/admin-protocol.md`, "config approve").
+//! `config approve`: the approval transaction on the owner's proposed config (spec [§5][s5], [§12][s12], [§16][s16];
+//! [admin protocol: config approve](../../../../design/admin-protocol.md#config-approve)).
 //!
 //! The service writes and validates the pending config, shows its own summary as notices, and asks for the
 //! confirmation, then the approval passphrase, in that order. Nothing is reserved until the passphrase has opened the
 //! approver key, so a declined, cancelled or mistyped approval consumes no version. The CLI only carries the bytes and
 //! the owner's answers; the service signs only its own pending transaction.
+//!
+//! ```text
+//! 1  pending config written and validated            config-invalid
+//! 2  summary sent as notices
+//! 3  "Approve this config as version n?"              declined
+//! 4  approval passphrase or TPM approval PIN          approval-denied, tpm-locked-out
+//!    ---------- nothing above reserves a version ----------
+//! 5  reserve, sign, commit, publish, config check     approval-failed, committed-not-active
+//! ```
+//!
+//! [s5]: ../../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns
+//! [s12]: ../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload
+//! [s16]: ../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration
 
 use std::sync::Arc;
 
@@ -35,7 +48,8 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for Approve<F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Approve<F> {
-    /// Step 1, then the review; a cancelled prompt removes the pending config and ends the command without a response.
+    /// Runs step 1, then the review; a cancelled prompt removes the pending config and ends the command without a
+    /// response.
     async fn run(&self, request: AdminRequest, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
         let AdminRequest::ConfigApprove(config) = request else {
             return Ok(refused(ApprovalEnd::Unavailable("the request is not `config approve`".to_owned())));
@@ -61,8 +75,8 @@ impl<F: StoreFs + Send + Sync + 'static> Approve<F> {
     }
 }
 
-/// Shows the summary, asks for the confirmation, then the approval passphrase or PIN, and opens the signer with it. The outer
-/// error is a prompt that got no owner input; the inner one ends the approval before any reservation.
+/// Shows the summary, asks for the confirmation, then the approval passphrase or PIN, and opens the signer with it. The
+/// outer error is a prompt that got no owner input; the inner one ends the approval before any reservation.
 ///
 /// A `lock` waiting for the service-wide lock ends the approval at either prompt with [`ApprovalEnd::CancelledByLock`].
 /// Once the passphrase is in, the approval is no longer at a prompt, and the `lock` waits for it to end.

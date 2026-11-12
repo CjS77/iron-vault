@@ -1,9 +1,12 @@
 //! `replace`: writes new material and origins under a name the manifest already lists, healthy or damaged
-//! (specification §6, §14; design/credential-commands.md, "Order of steps").
+//! (spec [§6][s6], [§14][s14]; [credential commands: Order of steps](../../../../design/credential-commands.md#order-of-steps)).
 //!
 //! Unlike `add`, the service-wide lock is taken before any prompt, so the vault change check and the summary the owner
 //! reads stay true until the write. Owner presence comes before the secret prompts, so a caller without the approval
 //! passphrase never gets the owner to type a new secret into the exchange. A `lock` cancels any of the prompts.
+//!
+//! [s6]: ../../../../design/iron-vault-specification.md#6-credential-records-and-configuration
+//! [s14]: ../../../../design/iron-vault-specification.md#14-recipients-startup-and-memory
 
 use std::sync::Arc;
 
@@ -84,7 +87,8 @@ impl<F: StoreFs + Send + Sync + 'static> Replace<F> {
     }
 }
 
-/// The error response for a refused or failed change, with the step table's code (design/credential-commands.md).
+/// Returns the error response for a refused or failed change, with the code from the step table in
+/// [credential commands: Order of steps](../../../../design/credential-commands.md#order-of-steps).
 fn refused(refusal: VaultChangeRefusal) -> AdminResponse {
     let code = match &refusal {
         VaultChangeRefusal::Busy => ErrorCode::Busy,

@@ -1,6 +1,5 @@
 //! Decides who may use the admin socket: an admin principal, judged only from the uid the kernel reports for the
-//! connecting process
-//! ([spec §5: How the service identifies an admin principal](../../../../design/iron-vault-specification.md#how-the-service-identifies-an-admin-principal)).
+//! connecting process ([spec §5: How the service identifies an admin principal][s5]).
 //!
 //! The socket's `0600` mode is the first barrier; this check refuses everyone else even when those permissions are
 //! wrong. It is the only admin identity check, so nothing the client sends, no source port and no executable name takes
@@ -12,6 +11,8 @@
 //! Container     0 (root) only; the owner runs the CLI on the host through sudo
 //! Development   the uid the service runs as, never 0
 //! ```
+//!
+//! [s5]: ../../../../design/iron-vault-specification.md#how-the-service-identifies-an-admin-principal
 
 #[cfg(test)]
 mod tests;

@@ -1,5 +1,6 @@
 //! `list`: names, kinds, permitted origins and standing of every credential in the open vault, never a secret
-//! (specification §16; `design/admin-protocol.md`, list).
+//! ([spec §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration);
+//! [admin protocol: list](../../../../design/admin-protocol.md#list)).
 //!
 //! Like `status` it is answered in every state ([`AdminOperation::Status`](crate::service_state::AdminOperation)):
 //! everything comes from what the service context already holds, and while no vault is open it holds nothing.
@@ -32,8 +33,8 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for List<F> {
     }
 }
 
-/// The list as a response, or an error naming the count when it does not fit one frame. The list is never truncated: a
-/// partial inventory would hide credentials from the owner.
+/// Returns the list as a response, or an error naming the count when it does not fit one frame. The list is never
+/// truncated: a partial inventory would hide credentials from the owner.
 fn fit_one_frame(credentials: Option<Vec<CredentialStanding>>) -> AdminResponse {
     let count = credentials.as_ref().map_or(0, Vec::len);
     let frame = Frame::Response(AdminResponse::List { credentials });

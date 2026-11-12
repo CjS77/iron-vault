@@ -1,4 +1,6 @@
-//! `recovery check`: proves that the owner's recovery key opens the vault (specification §16; design/recovery.md).
+//! `recovery check`: proves that the owner's recovery key opens the vault
+//! ([spec §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration);
+//! [recovery](../../../../design/recovery.md)).
 //!
 //! The service prompts for the key with echo off, so no argument carries it. The checks that need no key run before the
 //! prompt; the lock, the store check and the record write are the service context's. The key's text lives in three
@@ -68,8 +70,8 @@ impl<F: StoreFs + Send + Sync + 'static> RecoveryCheck<F> {
     }
 }
 
-/// The owner's input as a recovery key identity. Empty, non-UTF-8 or unparsable input is not one. The input's buffer is
-/// cleared when it drops here, and a rejected input is not carried in the error.
+/// Parses the owner's input as a recovery key identity. Returns `None` for empty, non-UTF-8 or unparsable input. The
+/// input's buffer is cleared when it drops here, and a rejected input is not carried in the error.
 fn recovery_key(input: OwnerInput) -> Option<iron_vault_store::RecipientIdentity> {
     let text = std::str::from_utf8(input.expose_secret()).ok()?;
     RecoveryKeySecret::parse(SecretString::from(text)).ok()

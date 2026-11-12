@@ -1,10 +1,14 @@
-//! `add`: enrols a new credential record under a name the manifest does not hold (specification §6, §16;
-//! `design/admin-protocol.md`, add).
+//! `add`: enrols a new credential record under a name the manifest does not hold (spec [§6][s6], [§16][s16];
+//! [admin protocol: add](../../../../design/admin-protocol.md#add)).
 //!
 //! The state, the name and the origins are checked before any prompt, so the owner is never asked for a secret that
 //! cannot be stored. The service, not the CLI, decides what to prompt for, by kind, and the material never travels as
-//! an argument (§5). The service-wide lock is taken only once the material is in hand, so a slow owner never blocks
-//! an approval.
+//! an argument ([§5][s5]). The service-wide lock is taken only once the material is in hand, so a slow owner never
+//! blocks an approval.
+//!
+//! [s5]: ../../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns
+//! [s6]: ../../../../design/iron-vault-specification.md#6-credential-records-and-configuration
+//! [s16]: ../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration
 
 use std::collections::BTreeSet;
 use std::future::{self, Future};
@@ -68,7 +72,7 @@ impl<F: StoreFs + Send + Sync + 'static> Add<F> {
     }
 }
 
-/// The name and the permitted origins, or the rule one of them breaks, without the value that broke it.
+/// Checks the name and the permitted origins. Returns the rule one of them breaks, without the value that broke it.
 pub(super) fn checked_arguments(name: &str, origins: &[RequestedOrigin]) -> Result<(CredentialName, PermittedOrigins), String> {
     let name = CredentialName::try_from(name).map_err(|error| format!("invalid credential name: {}", name_rule(error.rule())))?;
     let origins = origins.iter().map(requested_origin).collect::<Result<BTreeSet<_>, _>>()?;
@@ -82,7 +86,7 @@ fn requested_origin(origin: &RequestedOrigin) -> Result<(Host, Port), String> {
     parse_origin(&format!("{}:{}", origin.host, origin.port.get())).map_err(|error| format!("invalid origin: {error}"))
 }
 
-/// The name rule broken, without the character that broke it.
+/// Describes the name rule broken, without the character that broke it.
 pub(super) fn name_rule(rule: &NameRule) -> String {
     match rule {
         NameRule::BadStart { .. } => "it must start with a lowercase ASCII letter".to_owned(),
@@ -154,7 +158,8 @@ async fn secret_text(
     Ok(input.map(|input| secret_string(input).ok_or_else(|| "invalid credential material: a value must be UTF-8 text".to_owned())))
 }
 
-/// The owner's input as text; `None` when it is not UTF-8. The input's buffer is cleared when it drops here.
+/// Reads the owner's input as text. Returns `None` when it is not UTF-8. The input's buffer is cleared when it drops
+/// here.
 fn secret_string(input: OwnerInput) -> Option<SecretString> {
     std::str::from_utf8(input.expose_secret()).ok().map(SecretString::from)
 }
