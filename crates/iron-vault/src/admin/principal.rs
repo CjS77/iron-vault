@@ -1,9 +1,17 @@
-//! Who may use the admin socket (spec §5): an admin principal, judged only from the uid the kernel reports for the
-//! connecting process.
+//! Decides who may use the admin socket: an admin principal, judged only from the uid the kernel reports for the
+//! connecting process
+//! ([spec §5: How the service identifies an admin principal](../../../../design/iron-vault-specification.md#how-the-service-identifies-an-admin-principal)).
 //!
 //! The socket's `0600` mode is the first barrier; this check refuses everyone else even when those permissions are
 //! wrong. It is the only admin identity check, so nothing the client sends, no source port and no executable name takes
-//! part. The rule is pure: [`peer_identity`] is the only part that asks the kernel.
+//! part. The rule is pure: [`peer_identity`] is the only part that asks the kernel. The rule by deployment profile:
+//!
+//! ```text
+//! profile       accepted uid
+//! Protected     0 (root) only; the owner runs the CLI through sudo
+//! Container     0 (root) only; the owner runs the CLI on the host through sudo
+//! Development   the uid the service runs as, never 0
+//! ```
 
 #[cfg(test)]
 mod tests;
@@ -31,7 +39,7 @@ pub struct AdminPrincipal {
 }
 
 impl AdminPrincipal {
-    /// The accepted peer, for the audit log.
+    /// Returns the accepted peer, for the audit log.
     pub const fn peer(&self) -> PeerIdentity {
         self.peer
     }
@@ -45,16 +53,17 @@ pub struct AdminPrincipals {
 }
 
 impl AdminPrincipals {
-    /// The admin principals of `profile`. `service_uid` matters only in development, where the service account is the
-    /// invoking user and the only admin principal.
+    /// Makes the admin principals of `profile`. `service_uid` matters only in development, where the service account is
+    /// the invoking user and the only admin principal.
     pub const fn new(profile: DeploymentProfile, service_uid: u32) -> Self {
         Self { profile, service_uid }
     }
 
-    /// Accepts `peer` when its uid is an admin principal: only root in a protected install or a container, because no
-    /// administrator acts as the service account and accepting it would let whatever takes over the service lock the
-    /// vault or burn the owner's passphrase attempts; only the invoking user in development, never root, because a
-    /// development build refuses to run as root.
+    /// Accepts `peer` when its uid is an admin principal, and refuses it with [`NotAnAdminPrincipal`] otherwise.
+    ///
+    /// A protected install or a container accepts only root. No administrator acts as the service account, and accepting
+    /// it would let anything that takes over the service lock the vault or spend the owner's passphrase attempts.
+    /// Development accepts only the invoking user, never root, because a development build refuses to run as root.
     pub fn accepts(&self, peer: PeerIdentity) -> Result<AdminPrincipal, NotAnAdminPrincipal> {
         match self.profile {
             DeploymentProfile::Protected | DeploymentProfile::Container if peer.uid() == 0 => Ok(AdminPrincipal { peer }),
@@ -81,7 +90,8 @@ pub enum NotAnAdminPrincipal {
         /// The refused uid.
         uid: u32,
     },
-    /// A container install refused the peer; the owner reaches the service from the host, where root owns the admin socket.
+    /// A container install refused the peer; the owner reaches the service from the host, where root owns the admin
+    /// socket.
     #[error("uid {uid} may not use the admin socket; run the command on the host through `sudo`")]
     Container {
         /// The refused uid.
@@ -90,7 +100,7 @@ pub enum NotAnAdminPrincipal {
 }
 
 impl NotAnAdminPrincipal {
-    /// The refused uid.
+    /// Returns the refused uid.
     pub const fn uid(&self) -> u32 {
         match self {
             Self::Protected { uid } | Self::Development { uid } | Self::Container { uid } => *uid,

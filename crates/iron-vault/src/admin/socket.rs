@@ -1,5 +1,6 @@
-//! Binding the admin socket (`design/admin-protocol.md`, "Admin socket"): `admin.sock` in the runtime directory, owned
-//! by the service account with mode `0600`, and never connectable at a wider mode.
+//! Binds the admin socket ([admin protocol: Admin socket](../../../../design/admin-protocol.md#admin-socket)): `admin.sock` in the runtime
+//! directory, owned by the service account with mode `0600`, and never connectable at a wider mode. The service binds
+//! it at startup and hands it to the admin server.
 //!
 //! [`crate::socket_file`] does the binding; this module fixes the path and the mode.
 
@@ -37,12 +38,12 @@ impl AdminSocket {
         Ok(Self { listener, file })
     }
 
-    /// The socket file's path.
+    /// Returns the socket file's path.
     pub fn path(&self) -> &Path {
         self.file.path()
     }
 
-    /// The listener and the socket file, which the server holds until it stops.
+    /// Splits the socket into its listener and its socket file, which the server holds until it stops.
     pub fn into_parts(self) -> (UnixListener, SocketFile) {
         (self.listener, self.file)
     }

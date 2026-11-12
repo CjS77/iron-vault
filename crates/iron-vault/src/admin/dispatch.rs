@@ -1,5 +1,9 @@
-//! The handler registry: which async handler serves each admin command. Commands register here as their epics land;
-//! a command with no handler is answered `unknown-command`.
+//! The handler registry: which async handler serves each admin command. The admin server looks up the command of each
+//! admin request here, after the admin principal check, and runs its handler. A command with no handler is answered
+//! `unknown-command`.
+//!
+//! `ping`, `lock`, `status` and `caller-token` are handled in this module, because each is a few lines. Every other
+//! command has a module of its own.
 
 use std::collections::BTreeMap;
 use std::future::{self, Future};
@@ -36,8 +40,8 @@ use crate::library_error::LibraryError;
 use crate::service_context::{LockOutcome, ServiceContext};
 use iron_vault_store::StoreFs;
 
-/// The future a handler returns: the exchange's admin response, or the error that cancelled its command when a prompt
-/// got no owner input.
+/// The future a handler returns: the exchange's admin response, or the [`ExchangeError`] that cancelled its command
+/// when a prompt got no owner input.
 pub type HandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<AdminResponse, ExchangeError>> + Send + 'a>>;
 
 /// Serves one admin command.
@@ -45,8 +49,8 @@ pub type HandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<AdminResponse, E
 /// A handler only ever runs for a peer the admin principal check accepted: it receives the [`AdminPrincipal`] that
 /// proves it. It may send prompts through the exchange, and returns the response the server sends before closing.
 ///
-/// A prompt that fails ends the exchange: the handler returns its [`ExchangeError`], typically with `?`, before it
-/// changes anything, and the server closes with the error response the fault calls for, or none when the CLI has gone.
+/// A prompt that fails ends the exchange: the handler returns its [`ExchangeError`], usually with `?`, before it changes
+/// anything, and the server closes with the error response the fault calls for, or none when the CLI has gone.
 pub trait AdminHandler: Send + Sync {
     /// Answers `request` for `principal`.
     fn handle<'a>(&'a self, principal: AdminPrincipal, request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a>;
@@ -57,17 +61,18 @@ pub trait AdminHandler: Send + Sync {
 pub struct Handlers(BTreeMap<AdminCommand, Box<dyn AdminHandler>>);
 
 impl Handlers {
-    /// The service's handlers that need no service context: `ping`, answering with `profile`, and `caller-token`.
+    /// Registers the handlers that need no service context: `ping`, answering with `profile`, and `caller-token`.
     pub fn standard(profile: DeploymentProfile) -> Self {
         Self::default()
             .with(AdminCommand::Ping, Ping { profile })
             .with(AdminCommand::CallerToken, IssueCallerToken)
     }
 
-    /// The running service's handlers: [`standard`](Self::standard)'s, for `service`'s profile, then `status`,
-    /// `unlock`, `lock`, `config approve`, `add`, `replace`, `init`, `list`, `rm`, `recovery check`, `recipient list`,
-    /// `recipient add`, `recipient remove`, `forget-machine`, `approver list`, `approver add`, `approver remove`, `export`, `import` and `reset`.
-    /// A command that acts on the service registers here with a clone of `service`.
+    /// Registers the running service's handlers: [`standard`](Self::standard)'s, for `service`'s profile, then
+    /// `status`, `unlock`, `lock`, `config approve`, `add`, `replace`, `init`, `list`, `rm`, `recovery check`,
+    /// `recipient list`, `recipient add`, `recipient remove`, `forget-machine`, `approver list`, `approver add`,
+    /// `approver remove`, `export`, `import` and `reset`. Each handler that acts on the service holds a clone of
+    /// `service`.
     pub fn for_service<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) -> Self {
         Self::standard(service.paths().profile)
             .with(AdminCommand::Status, Status(Arc::clone(service)))
@@ -91,9 +96,9 @@ impl Handlers {
             .with_lock_drain(service, LOCK_DRAIN)
     }
 
-    /// Registers `lock` for `service` with a lock drain of `drain`: how long it waits for a request that ignores its
-    /// cancellation before answering that the secrets are not confirmed cleared. [`for_service`](Self::for_service)
-    /// uses a drain fit for production; a test of the expired wait shortens it.
+    /// Registers `lock` and `reset` for `service` with a lock drain of `drain`: how long each waits for a request that
+    /// ignores its cancellation before answering that the secrets are not confirmed cleared.
+    /// [`for_service`](Self::for_service) uses a drain fit for production; a test of the expired wait shortens it.
     pub fn with_lock_drain<F: StoreFs + Send + Sync + 'static>(self, service: &Arc<ServiceContext<F>>, drain: Duration) -> Self {
         self.with(
             AdminCommand::Lock,
@@ -128,11 +133,12 @@ impl Handlers {
     }
 }
 
-/// How long `lock` waits for requests to release the old snapshot. It is far below the CLI's 60-second socket timeout, and
-/// longer than a cancelled request needs to unwind.
+/// How long `lock` and `reset` wait for requests to release the old snapshot. It is far below the CLI's 60-second socket
+/// timeout, and longer than a cancelled request needs to unwind.
 const LOCK_DRAIN: Duration = Duration::from_secs(10);
 
-/// `lock`: clears the vault identity and every cached secret, then reports whether that was confirmed.
+/// `lock`: clears the vault identity and every cached secret. Its response's `cleared` is `true` if and only if every
+/// snapshot was released within the lock drain, and its `persisted` if and only if the owner-lock file was written.
 struct Lock<F> {
     service: Arc<ServiceContext<F>>,
     drain: Duration,
@@ -169,9 +175,11 @@ impl AdminHandler for Ping {
     }
 }
 
-/// `caller-token`: a fresh caller token for the owner to enroll through `config approve`. The state gate allows it in
-/// every state the admin socket is served in, so it checks no state. It returns the token in the response and keeps no
-/// copy; the log names the event only, never the token or its hash, which would let a log reader tie it to a caller.
+/// `caller-token`: issues a fresh caller token for the owner to enroll through `config approve`.
+///
+/// The state gate allows it in every state the admin socket is served in, so it checks no state. It returns the token
+/// in the response and keeps no copy. The log names the event only, never the token or its hash, which would let a log
+/// reader tie it to a caller.
 struct IssueCallerToken;
 
 impl AdminHandler for IssueCallerToken {

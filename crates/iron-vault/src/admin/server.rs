@@ -1,8 +1,21 @@
-//! The admin server (`design/admin-protocol.md`, "Admin socket"): one exchange per connection, and nothing reaches a
-//! handler unless the kernel reports the peer as an admin principal.
+//! Serves the admin socket ([admin protocol: Admin socket](../../../../design/admin-protocol.md#admin-socket)): one
+//! exchange per connection, and nothing reaches a handler unless the kernel reports the peer as an admin principal.
 //!
 //! Each connection is checked before a byte is read from it. Only [`peer_identity`]'s answer for the accepted stream is
-//! ever judged, so no value the peer sends takes part in deciding who it is.
+//! ever judged, so no value the peer sends takes part in deciding who it is. Handlers talk to the owner through the
+//! [`Exchange`], which bounds every step in time, so a CLI that stalls holds the service-wide lock no longer than these
+//! limits allow:
+//!
+//! ```text
+//! limit               default  bounds
+//! request deadline    30 s     reading the whole admin request; writing each prompt, notice, reveal and the response;
+//!                              moving each bundle data frame
+//! prompt deadline     5 min    the owner input after a prompt; one deadline covers a whole approver prompt, switches
+//!                              included
+//! transfer deadline   10 min   the whole migration bundle, from the exchange's first bundle data frame
+//! max connections     4        open exchanges; one more is answered busy
+//! shutdown grace      5 s      open exchanges after shutdown begins; the rest are abandoned
+//! ```
 
 use std::future::Future;
 use std::io;
@@ -71,7 +84,7 @@ pub struct AdminServer {
 }
 
 impl AdminServer {
-    /// A server admitting `principals` and dispatching to `handlers`.
+    /// Makes a server that admits `principals` and dispatches to `handlers`.
     pub fn new(principals: AdminPrincipals, handlers: Handlers, limits: Limits) -> Self {
         Self {
             principals,
@@ -218,15 +231,16 @@ pub struct Exchange {
     buffer: Zeroizing<Vec<u8>>,
     limits: Limits,
     /// When the approver prompt under way times out: set by its first switchable prompt and kept across switches, so
-    /// switching never stretches the approver prompt past one prompt deadline (`design/approval-signers.md`,
-    /// "Switching"). Owner input ends the approver prompt and clears it.
+    /// switching never stretches the approver prompt past one prompt deadline
+    /// ([approval signers: Switching](../../../../design/approval-signers.md#switching)). Owner input ends the approver prompt and
+    /// clears it.
     approver_deadline: Option<Instant>,
     /// When the bundle transfer times out: set by the exchange's first bundle data frame, sent or received, and kept for
     /// the rest of the exchange.
     transfer_deadline: Option<Instant>,
-    /// Whether a frame write was cut off or failed part-way, so the peer may hold the front of a frame. Any later write
-    /// would be read as the rest of that frame's body, so [`respond`](Self::respond) writes nothing and the connection
-    /// just closes.
+    /// `true` if and only if a frame write was cut off or failed part-way, so the peer may hold the front of a frame.
+    /// The peer would read any later write as the rest of that frame's body, so [`respond`](Self::respond) then writes
+    /// nothing and the connection closes.
     frame_cut: bool,
 }
 
@@ -312,17 +326,19 @@ impl Exchange {
         only_input(self.answer(false).await?)
     }
 
-    /// [`prompt`](Self::prompt), unless `cancel` completes while the owner's input is awaited: then `None`. The prompt
-    /// frame is always written whole and nothing more is read, so the exchange can still end with a response.
+    /// Runs [`prompt`](Self::prompt), unless `cancel` completes while the owner's input is awaited: then returns `None`.
+    /// The prompt frame is always written whole and nothing more is read, so the exchange can still end with a
+    /// response.
     pub async fn prompt_unless(&mut self, prompt: &Prompt, cancel: impl Future<Output = ()>) -> Result<Option<OwnerInput>, ExchangeError> {
         self.send(&Frame::Prompt(prompt.clone())).await?;
         self.answer_unless(false, cancel).await?.map(only_input).transpose()
     }
 
-    /// Sends `prompt` and returns the CLI's answer: owner input, or, when `prompt` is switchable, a switch frame asking
-    /// for the next approver (`design/approval-signers.md`, "Switching"). `None` when `cancel` completes first, as for
-    /// [`prompt_unless`](Self::prompt_unless). One prompt deadline covers the whole approver prompt: it starts at the
-    /// first switchable prompt, and a switch does not restart it, so a handler may loop on switches without bounding them.
+    /// Sends `prompt` and returns the CLI's answer: owner input or, when `prompt` is switchable, a switch frame asking
+    /// for the next approver ([approval signers: Switching](../../../../design/approval-signers.md#switching)). Returns `None` when
+    /// `cancel` completes first, as [`prompt_unless`](Self::prompt_unless) does. One prompt deadline covers the whole
+    /// approver prompt: it starts at the first switchable prompt, and a switch does not restart it, so a handler may
+    /// loop on switches without bounding them.
     pub async fn prompt_or_switch_unless(
         &mut self,
         prompt: &Prompt,
@@ -332,7 +348,8 @@ impl Exchange {
         self.answer_unless(prompt.switchable, cancel).await
     }
 
-    /// [`answer`](Self::answer), unless `cancel` completes first: then `None`, with the read buffer cleared.
+    /// Runs [`answer`](Self::answer), unless `cancel` completes first: then returns `None`, with the read buffer
+    /// cleared.
     async fn answer_unless(&mut self, switchable: bool, cancel: impl Future<Output = ()>) -> Result<Option<PromptAnswer>, ExchangeError> {
         let answered = tokio::select! {
             biased;
@@ -349,8 +366,8 @@ impl Exchange {
         }
     }
 
-    /// The CLI's answer to the prompt just sent, within the prompt deadline: for a switchable prompt, the approver
-    /// prompt's deadline. A switch frame is an answer only when the prompt was `switchable`.
+    /// Waits for the CLI's answer to the prompt just sent, within the prompt deadline or, for a switchable prompt, the
+    /// approver prompt's deadline. A switch frame is an answer only when the prompt was `switchable`.
     async fn answer(&mut self, switchable: bool) -> Result<PromptAnswer, ExchangeError> {
         let deadline = self.answer_deadline(switchable);
         match tokio::time::timeout_at(deadline, self.read_frame()).await {
@@ -367,8 +384,8 @@ impl Exchange {
         }
     }
 
-    /// When the answer to the prompt just sent times out: one prompt deadline from now, or for a switchable prompt the
-    /// approver prompt's deadline, started now if this is its first prompt.
+    /// Returns when the answer to the prompt just sent times out: one prompt deadline from now or, for a switchable
+    /// prompt, the approver prompt's deadline, started now if this is its first prompt.
     fn answer_deadline(&mut self, switchable: bool) -> Instant {
         let fresh = Instant::now() + self.limits.prompt_deadline;
         if switchable {
@@ -426,10 +443,11 @@ impl Exchange {
         }
     }
 
-    /// When the bundle data frame about to move times out, and the error that expiry is: one request deadline from now, or
-    /// the transfer deadline, started now if this is the exchange's first bundle frame, whichever comes first. A transfer
-    /// deadline that has passed is an error here, before any byte moves: a timeout polls its future first, so a frame that
-    /// could move at once would otherwise still succeed.
+    /// Returns when the bundle data frame about to move times out, and the error that expiry is. The deadline is one
+    /// request deadline from now or the transfer deadline, whichever comes first; the transfer deadline starts now if
+    /// this is the exchange's first bundle frame. A transfer deadline that has already passed is an error here, before
+    /// any byte moves: a timeout polls its future first, so a frame that could move at once would otherwise still
+    /// succeed.
     fn bundle_frame_deadline(&mut self) -> Result<(Instant, ExchangeError), ExchangeError> {
         let now = Instant::now();
         let transfer = *self.transfer_deadline.get_or_insert(now + self.limits.transfer_deadline);
@@ -474,7 +492,7 @@ impl Exchange {
         }
     }
 
-    /// The exchange's first frame, which must be an admin request, read within the request deadline.
+    /// Reads the exchange's first frame, which must be an admin request, within the request deadline.
     async fn read_request(&mut self) -> Result<AdminRequest, NoRequest> {
         let read = tokio::time::timeout(self.limits.request_deadline, self.read_frame()).await;
         let unanswered = |reason: &str| {
@@ -546,7 +564,8 @@ impl Exchange {
     }
 }
 
-/// The owner input of an answer to a prompt that was not switchable, where a switch frame is out of turn.
+/// Returns the owner input of an answer to a prompt that was not switchable, where a switch frame is
+/// [`Unexpected`](ExchangeError::Unexpected).
 fn only_input(answer: PromptAnswer) -> Result<OwnerInput, ExchangeError> {
     match answer {
         PromptAnswer::OwnerInput(input) => Ok(input),
@@ -560,8 +579,8 @@ async fn write_and_close(stream: &mut UnixStream, response: AdminResponse) -> io
     stream.shutdown().await
 }
 
-/// The bytes of a frame the service sends: a prompt, a notice or a response. `caller-token`'s response holds the token,
-/// so every frame is encoded into a clearing buffer; `encode` sizes it once, so no partial copy is left behind.
+/// Encodes a frame the service sends: a prompt, a notice or a response. `caller-token`'s response holds the token, so
+/// every frame is encoded into a clearing buffer; `encode` sizes it once, so no partial copy is left behind.
 fn encoded(frame: &Frame) -> Zeroizing<Vec<u8>> {
     let mut out = Zeroizing::new(Vec::new());
     if let Err(e) = protocol::encode(frame, &mut out) {
