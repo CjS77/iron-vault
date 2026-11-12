@@ -1,4 +1,13 @@
-//! The one ustar entry header form the migration bundle uses: every field fixed except the name, size and checksum.
+//! The one ustar entry header form the migration bundle uses: every field fixed except the name, size and checksum
+//! ([migration bundle v1, "Entry header"](../../../../design/storage-formats.md#entry-header)).
+//!
+//! ```text
+//! one entry:  ┌──────────────────┬──────────────────────┬──────────────────────────┐
+//!             │ 512-byte header  │ the entry's bytes    │ zero bytes to a multiple │
+//!             │ name, size, sum  │                      │ of 512                   │
+//!             └──────────────────┴──────────────────────┴──────────────────────────┘
+//! archive:    entry, entry, …, then two 512-byte zero blocks
+//! ```
 
 use super::{BundleError, EntryName};
 
@@ -20,7 +29,7 @@ const TYPE_REGULAR_FILE: (usize, &[u8]) = (156, b"0");
 const MAGIC: (usize, &[u8]) = (257, b"ustar\0");
 const VERSION: (usize, &[u8]) = (263, b"00");
 
-/// The ustar header the bundle encoder writes for the entry `name` holding `size` bytes, checksum included.
+/// Builds the ustar header the bundle encoder writes for the entry `name` holding `size` bytes, checksum included.
 ///
 /// The decoder requires each header it reads to equal this one for the name and size it parsed, so this function is
 /// the format's only definition of an entry header. A `u32` size always fits the 11 octal digits of the size field.
@@ -28,7 +37,7 @@ pub(crate) fn entry_header(name: &EntryName, size: u32) -> [u8; BLOCK_LEN] {
     ustar_header(name.to_string().as_bytes(), size)
 }
 
-/// The name and size a header block gives, if it is exactly [`entry_header`] for them.
+/// Returns the name and size a header block gives, if it is exactly [`entry_header`] for them.
 ///
 /// The name runs to the first zero byte and the size is read from its octal digits only far enough to rebuild the
 /// header; the comparison then refuses every field, terminator and checksum the encoder would not write.
@@ -42,7 +51,7 @@ pub(crate) fn parse_entry_header(block: &[u8; BLOCK_LEN]) -> Result<(EntryName, 
         .ok_or(BundleError::EntryHeader)
 }
 
-/// Octal digits as a `u32`, or `None` for any other byte or a value too large for an entry size.
+/// Parses octal digits as a `u32`, returning `None` for any other byte or a value too large for an entry size.
 fn parse_octal(digits: &[u8]) -> Option<u32> {
     digits.iter().try_fold(0_u32, |value, &digit| match digit {
         b'0'..=b'7' => value.checked_mul(8)?.checked_add(u32::from(digit - b'0')),
@@ -50,7 +59,8 @@ fn parse_octal(digits: &[u8]) -> Option<u32> {
     })
 }
 
-/// Every entry name is at most [`NAME_LEN`] bytes (the longest, an approver's, is 49), so no name is ever cut here.
+/// Builds a header from the name, the fixed fields, the size and the checksum. Every entry name is at most
+/// [`NAME_LEN`] bytes (the longest, an approver's, is 49), so no name is ever cut here.
 fn ustar_header(name: &[u8], size: u32) -> [u8; BLOCK_LEN] {
     let mut header = [0; BLOCK_LEN];
     header[..NAME_LEN].iter_mut().zip(name).for_each(|(slot, byte)| *slot = *byte);
@@ -69,13 +79,13 @@ fn put(header: &mut [u8; BLOCK_LEN], at: usize, value: &[u8]) {
     header[at..].iter_mut().zip(value).for_each(|(slot, byte)| *slot = *byte);
 }
 
-/// `value` in `N` zero-padded octal digits. Callers pass values that fit: a `u32` size in 11 digits, and a checksum of
-/// at most 512 × 255 = 0o377000 in 6.
+/// Writes `value` in `N` zero-padded octal digits. Callers pass values that fit: a `u32` size in 11 digits, and a
+/// checksum of at most 512 × 255 = 0o377000 in 6.
 fn octal<const N: usize>(value: u32) -> [u8; N] {
     std::array::from_fn(|i| b'0' + ((u64::from(value) >> (3 * (N - 1 - i))) & 7) as u8)
 }
 
-/// How many zero bytes follow an entry of `size` bytes to fill its last block.
+/// Returns how many zero bytes follow an entry of `size` bytes to fill its last block.
 pub(crate) fn padding_len(size: usize) -> usize {
     (BLOCK_LEN - size % BLOCK_LEN) % BLOCK_LEN
 }

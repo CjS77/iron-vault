@@ -69,7 +69,7 @@ impl ArchiveReader {
         self.entries.get(name).map(Vec::as_slice)
     }
 
-    /// The bundle header and entries of an archive that has ended.
+    /// Returns the bundle header and entries of an archive that has ended, or `None` before its end.
     pub(super) fn into_parts(self) -> Option<(BundleHeader, BTreeMap<EntryName, Vec<u8>>)> {
         let header = self.order.header().filter(|_| self.stage == Stage::Ended)?;
         Some((header, self.entries))
@@ -86,8 +86,8 @@ impl ArchiveReader {
         Ok(rest)
     }
 
-    /// The stage after a whole header block: the end of the archive at the first zero block, else the entry it opens,
-    /// whose order and size limit are checked before any of its bytes are read.
+    /// Returns the stage after a whole header block: the end of the archive at the first zero block, else the entry it
+    /// opens, whose order and size limit are checked before any of its bytes are read.
     fn read_header(&mut self) -> Result<Stage, BundleError> {
         if self.block.iter().all(|&byte| byte == 0) {
             self.order.check_complete()?;

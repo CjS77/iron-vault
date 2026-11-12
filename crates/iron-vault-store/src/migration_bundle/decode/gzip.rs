@@ -1,7 +1,8 @@
 //! The gzip framing, parsed by hand: one member with a flagless header, raw deflate and a checked trailer.
 //!
-//! A general gzip reader accepts file names, comments, extra fields and further members; the bundle allows none, and
-//! parsing the ten header bytes here keeps the inflater fed incrementally with nothing buffered whole.
+//! A general gzip reader accepts file names, comments, extra fields and further members; the bundle allows none
+//! ([migration bundle v1, "One encoding per bundle"](../../../../../design/storage-formats.md#one-encoding-per-bundle)).
+//! Parsing the ten header bytes here keeps the inflater fed incrementally with nothing buffered whole.
 
 use flate2::{Crc, Decompress, FlushDecompress, Status};
 
@@ -14,7 +15,7 @@ const MAGIC: [u8; 2] = [0x1f, 0x8b];
 const METHOD_DEFLATE: u8 = 8;
 
 /// The inflate buffer: each piece of archive is handed on before the next is inflated, so this bounds the decoder's
-/// own working memory whatever the input's compression ratio.
+/// own working memory at any compression ratio.
 const OUT_LEN: usize = 32 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,7 +133,7 @@ impl GzipReader {
         }
     }
 
-    /// One inflate call into the first `room` bytes of the buffer, refusing an archive past the bound.
+    /// Makes one inflate call into the first `room` bytes of the buffer, refusing an archive past the bound.
     fn inflate_once(&mut self, input: &[u8], room: usize) -> Result<(usize, usize, Status), BundleError> {
         let (in_before, out_before) = (self.inflate.total_in(), self.inflate.total_out());
         let out = self.out.get_mut(..room).ok_or(BundleError::Deflate)?;
@@ -148,21 +149,22 @@ impl GzipReader {
         Ok((consumed, produced, status))
     }
 
-    /// How many archive bytes have been inflated, for the bound tests.
+    /// Returns how many archive bytes have been inflated, for the bound tests.
     #[cfg(test)]
     pub(super) fn archive_len(&self) -> u64 {
         self.inflate.total_out()
     }
 
-    /// Output room for one call: at most one byte past the bound, so an archive that passes it is refused at once.
+    /// Returns the output room for one call: at most one byte past the bound, so an archive that passes it is refused at
+    /// once.
     fn room(&self) -> usize {
         let left = self.max_len.saturating_sub(self.inflate.total_out()).saturating_add(1);
         usize::try_from(left).map_or(OUT_LEN, |left| left.min(OUT_LEN))
     }
 }
 
-/// The magic and method must be gzip's deflate, and no flag may be set; the modification time, XFL and OS bytes do not
-/// change the archive, so they are not checked.
+/// Checks the gzip header: the magic and method must be gzip's deflate, and no flag may be set. The modification time,
+/// XFL and OS bytes do not change the archive, so they are not checked.
 fn check_header(header: &[u8; HEADER_LEN]) -> Result<(), BundleError> {
     let [m0, m1, method, flags, ..] = *header;
     if [m0, m1] != MAGIC || method != METHOD_DEFLATE {

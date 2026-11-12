@@ -1,4 +1,5 @@
-//! One test per gzip framing rule of "One encoding per bundle".
+//! One test per gzip framing rule of
+//! [migration bundle v1, "One encoding per bundle"](../../../../../../design/storage-formats.md#one-encoding-per-bundle).
 
 use super::*;
 

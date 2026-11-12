@@ -1,4 +1,5 @@
-//! The closed list of migration bundle entry names, in bundle order.
+//! The closed list of migration bundle entry names, in bundle order
+//! ([migration bundle v1, "Entries"](../../../../design/storage-formats.md#entries)).
 
 use std::fmt;
 
@@ -37,7 +38,7 @@ pub enum EntryName {
     Record(RecordId),
 }
 
-/// Bytes that are not a migration bundle entry name. Names are public, but the error carries no input either way.
+/// Bytes that are not a migration bundle entry name. Names are public, but the error still carries no input.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum EntryNameError {
     /// The name is not one the bundle format lists.
@@ -49,8 +50,8 @@ pub enum EntryNameError {
 }
 
 impl EntryName {
-    /// The entry with this name, refusing a name the format does not list or an ID in any other form than the one
-    /// [`fmt::Display`] writes.
+    /// Parses the entry with this name, refusing a name the format does not list or an ID in any other form than the
+    /// one [`fmt::Display`] writes.
     pub fn parse(name: &[u8]) -> Result<Self, EntryNameError> {
         match name {
             b"bundle-header" => Ok(Self::BundleHeader),
@@ -62,7 +63,7 @@ impl EntryName {
         }
     }
 
-    /// The most bytes this entry may hold; the bundle header is exactly this long.
+    /// Returns the most bytes this entry may hold; the bundle header is exactly this long.
     pub fn size_limit(&self) -> u64 {
         let limit = match self {
             Self::BundleHeader => BUNDLE_HEADER_LEN,
@@ -90,7 +91,8 @@ impl EntryName {
     }
 }
 
-/// The bytes of a UUID written in lowercase hyphenated form, refusing every other spelling the `uuid` parser accepts.
+/// Parses the bytes of a UUID written in lowercase hyphenated form, refusing every other spelling the `uuid` parser
+/// accepts.
 fn canonical_uuid(text: &[u8]) -> Result<[u8; 16], EntryNameError> {
     let uuid = Uuid::try_parse_ascii(text).map_err(|_| EntryNameError::InvalidId)?;
     let canonical = uuid.hyphenated().to_string();

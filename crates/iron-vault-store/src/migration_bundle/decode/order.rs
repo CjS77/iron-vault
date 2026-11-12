@@ -1,4 +1,5 @@
-//! Bundle order: the fixed entries in turn, then approvers and records strictly ascending, numbering the header's counts.
+//! Bundle order: the fixed entries in turn, then approvers and records strictly ascending, numbering the header's counts
+//! ([migration bundle v1, "Entries"](../../../../../design/storage-formats.md#entries)).
 
 use super::BundleError;
 use crate::migration_bundle::{BundleHeader, EntryName};
@@ -40,8 +41,8 @@ impl EntryOrder {
         }
     }
 
-    /// The fixed entries follow one another in turn; an approver or record only follows a lower one of its kind, and the
-    /// first record follows the last approver.
+    /// Refuses an entry out of bundle order. The fixed entries follow one another in turn, an approver or record only
+    /// follows a lower one of its kind, and the first record follows the last approver.
     fn check_follows(&self, name: EntryName) -> Result<(), BundleError> {
         use EntryName::{ApprovalState, Approver, BundleHeader, Config, ExportedIdentity, Manifest, Record};
         let follows = match (self.last, name) {
@@ -79,7 +80,8 @@ impl EntryOrder {
         (self.approvers, self.records)
     }
 
-    /// The header's counts; before the header is in no approver or record can be admitted, so none are expected.
+    /// Returns the header's approver and record counts. Before the header is in, no approver or record can be admitted,
+    /// so none are expected.
     fn expected(&self) -> (usize, usize) {
         self.header
             .map_or((0, 0), |header| (header.approver_count(), header.record_count()))

@@ -25,7 +25,8 @@ fn header(approvers: usize, records: usize) -> BundleHeader {
     BundleHeader::new(vault_id, approvers, records).unwrap()
 }
 
-/// The entries of storage-formats.md's "Example", at its sizes, after the bundle header.
+/// The entries of [migration bundle v1, "Example"](../../../../../design/storage-formats.md#example-6), at its sizes, after the bundle
+/// header.
 fn example_entries() -> Vec<(EntryName, Vec<u8>)> {
     let config = b"schema_version = 1\n".to_vec();
     [

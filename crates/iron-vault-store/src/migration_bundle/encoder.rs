@@ -1,4 +1,5 @@
-//! The streaming migration bundle encoder: one gzip member around a ustar archive of the bundle's entries.
+//! The streaming migration bundle encoder for `export`: one gzip member around a ustar archive of the bundle's entries
+//! ([migration bundle v1, "Entry header"](../../../../design/storage-formats.md#entry-header)).
 
 use std::io::{self, Write};
 
@@ -23,8 +24,8 @@ const PADDING: [u8; BLOCK_LEN] = [0; BLOCK_LEN];
 /// bundle order, and [`BundleEncoder::finish`] ends the archive once every entry the header counts is in. The gzip
 /// member has no file name, comment or extra field and modification time 0, so the output depends only on the entries.
 ///
-/// Dropping an encoder that was not finished still writes a gzip trailer to `W`, after however much of the archive got
-/// there, so the output of an encoder that failed or was dropped must be discarded, never kept as a bundle.
+/// Dropping an encoder that was not finished still writes a gzip trailer to `W`, after the part of the archive written
+/// so far, so the output of an encoder that failed or was dropped must be discarded, never kept as a bundle.
 pub struct BundleEncoder<W: Write> {
     gzip: GzEncoder<W>,
     header: BundleHeader,

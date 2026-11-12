@@ -1,4 +1,13 @@
-//! The bundle header: the migration bundle's first entry and its format version gate.
+//! The bundle header: the migration bundle's first entry and its format version gate
+//! ([migration bundle v1, "Entries"](../../../../design/storage-formats.md#entries)).
+//!
+//! ```text
+//! offset  0  4  magic "IVBH"
+//!         4  1  bundle format version, 01
+//!         5 16  vault ID
+//!        21  8  approver count, u64, 1 to 16
+//!        29  8  record count, u64, at most 4096
+//! ```
 
 use thiserror::Error;
 
@@ -19,8 +28,8 @@ const RECORDS_AT: usize = 29;
 /// The vault ID and entry counts a migration bundle announces, valid on construction: from 1 to [`MAX_APPROVERS`]
 /// approvers and at most [`MAX_MANIFEST_ENTRIES`] records.
 ///
-/// It is not authenticated. It lets import refuse a foreign or oversized file before any prompt; import trusts none of
-/// it until the files the vault identity opens agree with it.
+/// It is not authenticated. It lets `import` refuse a foreign or oversized file before any prompt; `import` trusts none
+/// of it until the files the vault identity opens agree with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BundleHeader {
     vault_id: VaultId,
@@ -28,7 +37,7 @@ pub struct BundleHeader {
     record_count: usize,
 }
 
-/// A bundle header that is malformed or out of range. The header is public, but the error carries no input either way.
+/// A bundle header that is malformed or out of range. The header is public, but the error still carries no input.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum BundleHeaderError {
     /// The entry is not exactly [`BUNDLE_HEADER_LEN`] bytes.
@@ -52,7 +61,7 @@ pub enum BundleHeaderError {
 }
 
 impl BundleHeader {
-    /// A header for a vault with these counts, refusing counts no vault can have.
+    /// Builds a header for a vault with these counts, refusing counts no vault can have.
     pub fn new(vault_id: VaultId, approver_count: usize, record_count: usize) -> Result<Self, BundleHeaderError> {
         if !(1..=MAX_APPROVERS).contains(&approver_count) {
             return Err(BundleHeaderError::ApproverCount);
@@ -82,7 +91,7 @@ impl BundleHeader {
         self.record_count
     }
 
-    /// The header's bytes, as the `bundle-header` entry holds them.
+    /// Encodes the header as the `bundle-header` entry holds it.
     pub fn encode(&self) -> [u8; BUNDLE_HEADER_LEN] {
         let mut bytes = [0; BUNDLE_HEADER_LEN];
         bytes[..VERSION_AT].copy_from_slice(&MAGIC);
@@ -93,8 +102,8 @@ impl BundleHeader {
         bytes
     }
 
-    /// The header in a `bundle-header` entry, refusing any length but [`BUNDLE_HEADER_LEN`], a wrong magic, an unknown
-    /// version, a vault ID that is not a version 4 UUID and counts out of range.
+    /// Decodes the header in a `bundle-header` entry, refusing any length but [`BUNDLE_HEADER_LEN`], a wrong magic, an
+    /// unknown version, a vault ID that is not a version 4 UUID and counts out of range.
     pub fn decode(bytes: &[u8]) -> Result<Self, BundleHeaderError> {
         let bytes: &[u8; BUNDLE_HEADER_LEN] = bytes.try_into().map_err(|_| BundleHeaderError::WrongLength)?;
         if field(bytes, 0) != MAGIC {
@@ -111,12 +120,12 @@ impl BundleHeader {
     }
 }
 
-/// The `N` bytes of the header starting at `at`; every caller's field lies inside the header.
+/// Returns the `N` bytes of the header starting at `at`; every caller's field lies inside the header.
 fn field<const N: usize>(bytes: &[u8; BUNDLE_HEADER_LEN], at: usize) -> [u8; N] {
     std::array::from_fn(|i| bytes[at + i])
 }
 
-/// A big-endian `u64` count as a `usize`; a count too large for `usize` is out of range for any bundle.
+/// Reads a big-endian `u64` count as a `usize`; a count too large for `usize` is out of range for any bundle.
 fn count(bytes: [u8; 8], out_of_range: BundleHeaderError) -> Result<usize, BundleHeaderError> {
     usize::try_from(u64::from_be_bytes(bytes)).map_err(|_| out_of_range)
 }
@@ -125,7 +134,7 @@ fn count(bytes: [u8; 8], out_of_range: BundleHeaderError) -> Result<usize, Bundl
 mod tests {
     use super::*;
 
-    /// The worked example in storage-formats.md, "Migration bundle v1", "Example".
+    /// The worked example in [migration bundle v1, "Example"](../../../../design/storage-formats.md#example-6).
     const EXAMPLE: [u8; BUNDLE_HEADER_LEN] = [
         0x49, 0x56, 0x42, 0x48, 0x01, 0x3f, 0x2b, 0x8c, 0x1e, 0x5d, 0x4a, 0x4e, 0x6f, 0x9a, 0x7b, 0x1c, 0x2d, 0x3e, 0x4f, 0x5a, 0x6b, 0, 0,
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1,

@@ -1,7 +1,18 @@
-//! The strict streaming migration bundle decoder: it accepts only the one encoding [`super::BundleEncoder`] writes.
+//! The strict streaming migration bundle decoder for `import`: it accepts only the one encoding
+//! [`super::BundleEncoder`] writes.
 //!
-//! The bundle is hostile input that crossed machines, so the decoder checks every rule of `design/storage-formats.md`,
-//! "One encoding per bundle", as soon as the bytes it needs are in, and never holds the compressed bundle whole.
+//! The bundle is hostile input that crossed machines, so the decoder checks every rule of
+//! [migration bundle v1, "One encoding per bundle"](../../../../design/storage-formats.md#one-encoding-per-bundle) as
+//! soon as the bytes it needs are in, and never holds the compressed bundle whole. The gzip layer hands the archive
+//! layer only the bytes it has inflated, and the archive layer asks the order check to admit each entry before reading
+//! its bytes:
+//!
+//! ```text
+//! pushed bytes ─→ gzip.rs: header, inflate, trailer ─→ archive.rs: entry headers, padding, end blocks
+//!                                                                      │ each entry name
+//!                                                                      ▼
+//!                                                       order.rs: bundle order, header counts
+//! ```
 
 mod archive;
 mod gzip;
@@ -36,7 +47,9 @@ pub struct DecodedBundle {
     entries: BTreeMap<EntryName, Vec<u8>>,
 }
 
-/// A rule of "One encoding per bundle" the bytes break.
+/// A rule of
+/// [migration bundle v1, "One encoding per bundle"](../../../../design/storage-formats.md#one-encoding-per-bundle) that
+/// the bytes break.
 ///
 /// Import names the rule in its `bundle-invalid` message and the `migration.import-refused` event, so each variant has
 /// a fixed short name, [`BundleError::rule`], and none carries a byte of the bundle.
@@ -108,7 +121,7 @@ pub enum BundleError {
 }
 
 impl BundleError {
-    /// The rule's fixed short name, for the `bundle-invalid` message and the audit event's `detail`.
+    /// Returns the rule's fixed short name, for the `bundle-invalid` message and the audit event's `detail`.
     pub fn rule(&self) -> &'static str {
         match self {
             Self::TooLarge => "too_large",
@@ -149,12 +162,12 @@ impl From<BundleHeaderError> for BundleError {
 }
 
 impl BundleDecoder {
-    /// A decoder for one bundle of at most [`MAX_BUNDLE_LEN`] bytes, compressed and decompressed.
+    /// Creates a decoder for one bundle of at most [`MAX_BUNDLE_LEN`] bytes, compressed and decompressed.
     pub fn new() -> Self {
         Self::with_max_len(MAX_BUNDLE_LEN)
     }
 
-    /// A decoder with a lower length bound, so tests can pass it without allocating a full bundle.
+    /// Creates a decoder with a lower length bound, so tests can pass it without allocating a full bundle.
     pub(crate) fn with_max_len(max_len: u64) -> Self {
         Self {
             gzip: GzipReader::new(max_len),
@@ -171,12 +184,12 @@ impl BundleDecoder {
         result
     }
 
-    /// The entry `name` once it is decoded in full; `None` before then, and always for the bundle header.
+    /// Returns the entry `name` once it is decoded in full; `None` before then, and always for the bundle header.
     pub fn entry(&self, name: &EntryName) -> Option<&[u8]> {
         self.archive.entry(name)
     }
 
-    /// The decoded bundle, refusing one whose gzip member or archive has not ended.
+    /// Returns the decoded bundle, refusing one whose gzip member or archive has not ended.
     pub fn finish(self) -> Result<DecodedBundle, BundleError> {
         self.refuse_after_failure()?;
         self.gzip.finish()?;
@@ -201,17 +214,18 @@ impl DecodedBundle {
         self.header
     }
 
-    /// The bytes of the entry `name`, or `None` if the bundle does not hold it; the bundle header is not an entry here.
+    /// Returns the bytes of the entry `name`, or `None` if the bundle does not hold it; the bundle header is not an
+    /// entry here.
     pub fn entry(&self, name: &EntryName) -> Option<&[u8]> {
         self.entries.get(name).map(Vec::as_slice)
     }
 
-    /// Every entry after the bundle header, in bundle order.
+    /// Returns every entry after the bundle header, in bundle order.
     pub fn entries(&self) -> impl Iterator<Item = (EntryName, &[u8])> {
         self.entries.iter().map(|(name, bytes)| (*name, bytes.as_slice()))
     }
 
-    /// The header and the entries after it, moved out so import keeps one copy of a bundle of up to
+    /// Moves out the header and the entries after it, so `import` keeps one copy of a bundle of up to
     /// [`MAX_BUNDLE_LEN`] bytes.
     pub(crate) fn into_parts(self) -> (BundleHeader, BTreeMap<EntryName, Vec<u8>>) {
         (self.header, self.entries)

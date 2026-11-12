@@ -1,4 +1,5 @@
-//! One test per ustar, order and bundle header rule of "One encoding per bundle".
+//! One test per ustar, order and bundle header rule of
+//! [migration bundle v1, "One encoding per bundle"](../../../../../../design/storage-formats.md#one-encoding-per-bundle).
 
 use super::*;
 
@@ -8,7 +9,7 @@ fn example_archive() -> Vec<u8> {
     gunzip(&example_bundle())
 }
 
-/// The refusal of the example archive with the header block at `at` changed by `change`, checksum recomputed.
+/// Returns the refusal of the example archive with the header block at `at` changed by `change`, checksum recomputed.
 fn block_refusal(at: usize, change: impl FnOnce(&mut [u8])) -> BundleError {
     let mut archive = example_archive();
     let block = &mut archive[at..at + BLOCK_LEN];

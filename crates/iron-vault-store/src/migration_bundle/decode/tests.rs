@@ -18,7 +18,8 @@ const RECORD: &str = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
 const SECOND_ID: &str = "9b2d0c4a-1e3f-4a5b-8c6d-7e8f9a0b1c2d";
 const THIRD_ID: &str = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d";
 
-/// The archive offsets of the example bundle's header blocks, from storage-formats.md's "Example".
+/// The archive offsets of the example bundle's header blocks, from
+/// [migration bundle v1, "Example"](../../../../../design/storage-formats.md#example-6).
 const EXAMPLE_HEADERS: [usize; 7] = [0, 1_024, 2_048, 3_072, 4_608, 5_632, 6_656];
 const EXAMPLE_CONFIG_AT: usize = 4_608;
 const EXAMPLE_END_AT: usize = 7_680;
@@ -49,7 +50,8 @@ fn noise(seed: u64, len: usize) -> Vec<u8> {
         .collect()
 }
 
-/// The entries of storage-formats.md's "Example", at its sizes, after the bundle header.
+/// The entries of [migration bundle v1, "Example"](../../../../../design/storage-formats.md#example-6), at its sizes,
+/// after the bundle header.
 fn example_entries() -> Vec<(EntryName, Vec<u8>)> {
     vec![
         (EntryName::ExportedIdentity, noise(1, 256)),
@@ -96,7 +98,7 @@ fn gzip(archive: &[u8]) -> Vec<u8> {
     encoder.finish().unwrap()
 }
 
-/// An archive of these entries in the order given, without the encoder's order checks, and the end blocks.
+/// Builds an archive of these entries in the order given, without the encoder's order checks, and the end blocks.
 fn raw_archive(entries: &[(EntryName, Vec<u8>)]) -> Vec<u8> {
     let mut archive: Vec<u8> = entries
         .iter()
@@ -109,7 +111,7 @@ fn raw_archive(entries: &[(EntryName, Vec<u8>)]) -> Vec<u8> {
     archive
 }
 
-/// `entries` after a bundle header with these counts.
+/// Returns `entries` after a bundle header with these counts.
 fn with_header(header: BundleHeader, entries: Vec<(EntryName, Vec<u8>)>) -> Vec<(EntryName, Vec<u8>)> {
     [vec![(EntryName::BundleHeader, header.encode().to_vec())], entries].concat()
 }
@@ -124,7 +126,7 @@ fn decode(bundle: &[u8]) -> Result<DecodedBundle, BundleError> {
     decode_in(bundle, bundle.len().max(1))
 }
 
-/// The refusal of this archive, gzipped as the encoder would.
+/// Returns the refusal of this archive, gzipped as the encoder would.
 fn archive_refusal(archive: &[u8]) -> BundleError {
     decode(&gzip(archive)).unwrap_err()
 }
