@@ -1,22 +1,23 @@
-//! Response decoders: turn a content-coded response body back into the bytes the scrubber screens (spec §11, Q-6, implementation spec §3).
+//! Response decoders: turn a content-coded response body back into the bytes the scrubber screens ([spec §11][s11],
+//! [Q-6][i22], [implementation spec §3][i3]).
 //!
 //! A compressed body hides an echoed secret from the scrubber, so the service decodes `gzip`, `deflate` and `br` before
-//! scrubbing. Like the [`Scrubber`](crate::scrub::Scrubber), a [`ResponseDecoder`] is fed each upstream chunk in turn
-//! and no body is buffered whole. A small chunk can expand a thousandfold, so
+//! scrubbing. Like the [`Scrubber`](crate::scrub::Scrubber), a [`ResponseDecoder`] is fed the upstream chunks one at a
+//! time and no body is buffered whole. A small chunk can expand a thousandfold, so
 //! [`next_piece`](ResponseDecoder::next_piece) yields the output in pieces of at most [`PIECE_SIZE`] bytes, each decoded
 //! only when it is pulled. The caller checks its size budget between pieces and stops pulling when one runs out, and
 //! can send each piece on before pulling the next, so a response is held in memory one piece at a time.
 //!
-//! The codings are decoded strictly, so a body that is not exactly what its `Content-Encoding` claims is an error rather
-//! than a guess:
+//! The codings are decoded strictly, so a body that is not exactly what its `Content-Encoding` claims is an error, never
+//! a guess:
 //!
-//! - `gzip` (RFC 1952): one or more members back to back, each with its CRC-32 and length checked. Bytes after the last
+//! - `gzip` ([RFC 1952][rfc1952]): one or more members back to back, each with its CRC-32 and length checked. Bytes after the last
 //!   member are [`DecodeError::TrailingData`]. A header's optional fields are skipped and its CRC-16, when present, is
 //!   checked.
-//! - `deflate`: the zlib format that RFC 9110 §8.4.1.2 defines (RFC 1950), Adler-32 checked. Raw deflate, which some
+//! - `deflate`: the zlib format that [RFC 9110 §8.4.1.2][rfc9110] defines ([RFC 1950][rfc1950]), Adler-32 checked. Raw deflate, which some
 //!   servers send by mistake, is [`DecodeError::Corrupt`]; guessing between the two would let a body choose how it is
 //!   read. Bytes after the zlib trailer are [`DecodeError::TrailingData`].
-//! - `br` (RFC 7932): one brotli stream. The large-window extension is refused, which keeps the window to 16 MiB. Bytes
+//! - `br` ([RFC 7932][rfc7932]): one brotli stream. The large-window extension is refused, which keeps the window to 16 MiB. Bytes
 //!   after the stream's last meta-block are [`DecodeError::TrailingData`].
 //!
 //! An empty body is not a complete stream in any of these codings, so [`finish`](ResponseDecoder::finish) reports it as
@@ -25,8 +26,17 @@
 //! The decoders' windows hold plaintext response data, which may echo a secret before the scrubber has seen it. The brotli
 //! buffers and the piece buffer are wiped by `Zeroizing` when the decoder is dropped. The gzip and deflate window is
 //! wiped by miniz_oxide's reset with ordinary (non-volatile) stores that `black_box` keeps the compiler from removing, so
-//! that wipe is best-effort (see `design/secret-handling.md`). Neither a [`DecodeError`] nor a `Debug` output carries any
+//! that wipe is best-effort (see [Compressed responses][sh]). Neither a [`DecodeError`] nor a `Debug` output carries any
 //! body byte.
+//!
+//! [s11]: ../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing
+//! [i22]: ../../../design/implementation-specification.md#22-product-decisions-and-resulting-behavior
+//! [i3]: ../../../design/implementation-specification.md#3-implementation-gates-and-unresolved-details
+//! [sh]: ../../../design/secret-handling.md#compressed-responses
+//! [rfc1950]: https://www.rfc-editor.org/rfc/rfc1950
+//! [rfc1952]: https://www.rfc-editor.org/rfc/rfc1952
+//! [rfc7932]: https://www.rfc-editor.org/rfc/rfc7932
+//! [rfc9110]: https://www.rfc-editor.org/rfc/rfc9110#section-8.4.1.2
 
 mod br;
 mod budget;
@@ -55,11 +65,11 @@ pub const PIECE_SIZE: usize = 64 * 1024;
 /// not a variant, because a body with no coding needs no decoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentCoding {
-    /// `gzip`, RFC 1952, possibly several members.
+    /// `gzip`, [RFC 1952](https://www.rfc-editor.org/rfc/rfc1952), possibly several members.
     Gzip,
-    /// `deflate`, the zlib format of RFC 1950.
+    /// `deflate`, the zlib format of [RFC 1950](https://www.rfc-editor.org/rfc/rfc1950).
     Deflate,
-    /// `br`, RFC 7932.
+    /// `br`, [RFC 7932](https://www.rfc-editor.org/rfc/rfc7932).
     Br,
 }
 
@@ -91,7 +101,7 @@ struct Step {
 }
 
 impl Step {
-    /// This step if it fits the buffers it was given. A library that claims more than that is not trusted: slicing by the
+    /// Returns this step if it fits the buffers it was given. A library that claims more than that is not trusted: slicing by the
     /// claim would drop input or release bytes that are not output, so the body fails closed.
     fn within(self, input: usize, out: usize) -> Result<Self, DecodeError> {
         if self.consumed <= input && self.produced <= out {
@@ -107,7 +117,7 @@ impl Step {
 trait Engine: Send {
     /// Decodes some of `input` into `out`, which is never empty.
     fn step(&mut self, input: &[u8], out: &mut [u8]) -> Result<Step, DecodeError>;
-    /// Whether the coded stream has ended cleanly, so a body ending now is complete.
+    /// Returns `true` if and only if the coded stream has ended cleanly, so a body ending now is complete.
     fn is_complete(&self) -> bool;
 }
 
@@ -124,13 +134,14 @@ pub struct ResponseDecoder {
     out: Zeroizing<Vec<u8>>,
     /// The part of the fed chunk the engine has not used yet.
     pending: Bytes,
-    /// Whether a fed chunk still has output to pull: the engine may hold output after it has used all its input.
+    /// `true` if and only if a fed chunk may still have output to pull: the engine can hold output after it has used all
+    /// its input.
     active: bool,
     failed: Option<DecodeError>,
 }
 
 impl ResponseDecoder {
-    /// A decoder for one response body in `coding`.
+    /// Creates a decoder for one response body in `coding`.
     pub fn new(coding: ContentCoding) -> Self {
         let engine: Box<dyn Engine> = match coding {
             ContentCoding::Gzip => Box::new(gzip::Gzip::new()),

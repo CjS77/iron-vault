@@ -1,11 +1,14 @@
-//! The three content-coding decisions of spec §11, each a pure function so the handler only applies them: which coding
-//! the upstream used, which coding the caller needs the response in, and which headers no longer describe the body.
+//! The three content-coding decisions of [spec §11][s11], each a pure function so the handler only applies them: which
+//! coding the upstream used, which coding the caller needs the response in, and which headers no longer describe the
+//! body.
 //!
 //! The service decodes a response so the scrubber can screen it, and re-encodes it only when the caller's
 //! `Accept-Encoding` leaves no other choice ("recompress only when required").
 //!
-//! Stacked codings (`gzip, br`) and repeated `Content-Encoding` headers are refused rather than decoded layer by layer:
-//! they are rare, and an unsupported layer would leave an opaque body the scrubber cannot read.
+//! Stacked codings (`gzip, br`) and repeated `Content-Encoding` headers are refused, not decoded layer by layer: they
+//! are rare, and an unsupported layer would leave an opaque body the scrubber cannot read.
+//!
+//! [s11]: ../../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing
 
 // reqwest's re-export of the `http` header types, which hyper shares, so these decisions build where hyper is absent.
 use reqwest::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, ETAG, HeaderMap, HeaderName, HeaderValue, VARY};
@@ -32,7 +35,7 @@ const TIE_ORDER: [ContentCoding; 3] = [ContentCoding::Gzip, ContentCoding::Br, C
 #[error("response uses a content coding the service does not decode")]
 pub struct UnsupportedCoding;
 
-/// The coding the upstream applied to the response body: `None` when it sent none (absent or `identity`).
+/// Returns the coding the upstream applied to the response body: `None` when it sent none (absent or `identity`).
 ///
 /// Anything but one lone supported coding is refused: an unknown coding, a stacked list, repeated headers or an empty value.
 pub fn parse_content_encoding(headers: &HeaderMap) -> Result<Option<ContentCoding>, UnsupportedCoding> {
@@ -50,7 +53,7 @@ pub fn parse_content_encoding(headers: &HeaderMap) -> Result<Option<ContentCodin
     }
 }
 
-/// The supported coding a lowercase token names.
+/// Returns the supported coding a lowercase token names.
 fn coding_named(token: &str) -> Option<ContentCoding> {
     match token {
         "gzip" | "x-gzip" => Some(ContentCoding::Gzip),
@@ -60,9 +63,10 @@ fn coding_named(token: &str) -> Option<ContentCoding> {
     }
 }
 
-/// The coding to send the caller: `None` (identity) unless its `Accept-Encoding` rules identity out, then the supported
-/// coding it prefers most. When it accepts nothing we can produce, identity is sent anyway, which RFC 9110 §12.5.3
-/// permits, rather than a `406`. A missing or malformed header accepts anything.
+/// Chooses the coding to send the caller: `None` (identity) unless its `Accept-Encoding` rules identity out, then the
+/// supported coding it prefers most. When it accepts nothing the service can produce, identity is sent anyway, which
+/// [RFC 9110 §12.5.3](https://www.rfc-editor.org/rfc/rfc9110#section-12.5.3) permits, instead of a `406`. A missing or
+/// malformed header accepts anything.
 pub fn choose_emitted(accept_encoding: Option<&HeaderValue>) -> Option<ContentCoding> {
     let preferences = accept_encoding.and_then(Preferences::parse).unwrap_or_default();
     if preferences.accepts_identity() {
@@ -89,7 +93,7 @@ struct Preferences {
 }
 
 impl Preferences {
-    /// The preferences in `value`, or `None` when it is malformed.
+    /// Parses the preferences in `value`, returning `None` when it is malformed.
     fn parse(value: &HeaderValue) -> Option<Self> {
         value
             .to_str()
@@ -112,7 +116,8 @@ impl Preferences {
             })
     }
 
-    /// Identity is acceptable unless it, or a `*` that names it implicitly, has quality 0.
+    /// Returns `true` if and only if identity is acceptable: neither `identity` nor, when that is absent, `*` has
+    /// quality 0.
     fn accepts_identity(&self) -> bool {
         self.identity.or(self.any).unwrap_or(1000) > 0
     }
@@ -127,7 +132,7 @@ impl Preferences {
     }
 }
 
-/// One list member as its lowercase coding name and quality, or `None` when malformed.
+/// Parses one list member into its lowercase coding name and quality, returning `None` when it is malformed.
 fn parse_member(member: &str) -> Option<(String, u16)> {
     let (name, params) = match member.split_once(';') {
         Some((name, params)) => (name, Some(params)),
@@ -137,7 +142,8 @@ fn parse_member(member: &str) -> Option<(String, u16)> {
     Some((name.trim().to_ascii_lowercase(), quality))
 }
 
-/// The thousandths in a `q=0.5` parameter (RFC 9110 §12.4.2: at most three decimals, at most 1).
+/// Parses a `q=0.5` parameter into thousandths
+/// ([RFC 9110 §12.4.2](https://www.rfc-editor.org/rfc/rfc9110#section-12.4.2): at most three decimals, at most 1).
 fn parse_quality(param: &str) -> Option<u16> {
     let (key, value) = param.split_once('=')?;
     if !key.trim().eq_ignore_ascii_case("q") {

@@ -1,17 +1,24 @@
-//! Response encoders: recompress a scrubbed body for a caller whose `Accept-Encoding` forbids `identity` (spec §11, Q-6).
+//! Response encoders: recompress a scrubbed body for a caller whose `Accept-Encoding` forbids `identity`
+//! ([spec §11][s11], [Q-6][i22]).
 //!
 //! A [`ResponseEncoder`] is push-based like the [`ResponseDecoder`](super::ResponseDecoder). Every
 //! [`push`](ResponseEncoder::push) ends in a sync flush, so the bytes returned so far decode to exactly the bytes pushed
 //! so far. That keeps a streamed response (SSE) streaming: an encoder that waited for a full block would hold events back
-//! and defeat the scrubber's minimal hold-back (implementation spec §3). The price is a few bytes of framing per chunk.
+//! and defeat the scrubber's minimal hold-back ([implementation spec §3][i3]). The price is a few bytes of framing per chunk.
 //!
 //! The encoder's input is already scrubbed, so it holds no secret material. Its buffers are not wiped and it must not be
-//! added to the secret tables in `design/secret-handling.md`.
+//! added to the secret tables in [secret handling][sh].
 //!
-//! `deflate` is the zlib format of RFC 1950, as the decoder reads it. Compression levels are moderate because the work is
+//! `deflate` is the zlib format of [RFC 1950][rfc1950], as the decoder reads it. Compression levels are moderate because the work is
 //! per request on the hot path: gzip and deflate use level 6, zlib's own default and the usual ratio/speed balance, and
 //! brotli uses quality 4, which compresses text well at a fraction of the cost of the default quality 11. Brotli's
 //! window is 2^18 bytes, which bounds the encoder's memory per response.
+//!
+//! [s11]: ../../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing
+//! [i22]: ../../../../design/implementation-specification.md#22-product-decisions-and-resulting-behavior
+//! [i3]: ../../../../design/implementation-specification.md#3-implementation-gates-and-unresolved-details
+//! [sh]: ../../../../design/secret-handling.md#inventory
+//! [rfc1950]: https://www.rfc-editor.org/rfc/rfc1950
 
 use std::io::{self, Write};
 
@@ -85,13 +92,13 @@ impl Writer {
 /// of the body. After an error the encoder is unusable and the response must be aborted.
 pub struct ResponseEncoder {
     writer: Writer,
-    /// Set by the first error. The brotli writer panics if used after a failure, so a failed encoder refuses all later
-    /// calls rather than reaching it.
+    /// Set by the first error. The brotli writer panics if used after a failure, so a failed encoder refuses every later
+    /// call instead of reaching it.
     failed: bool,
 }
 
 impl ResponseEncoder {
-    /// An encoder for one response body in `coding`.
+    /// Creates an encoder for one response body in `coding`.
     pub fn new(coding: ContentCoding) -> Self {
         Self {
             writer: Writer::new(coding),

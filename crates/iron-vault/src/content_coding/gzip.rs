@@ -1,7 +1,9 @@
-//! The gzip engine (RFC 1952): members back to back, each a header, a raw deflate stream and a CRC-32 and length trailer.
+//! The gzip engine ([RFC 1952][rfc1952]): members back to back, each a header, a raw deflate stream and a CRC-32 and length trailer.
 //!
 //! flate2's own gzip decoders are pull-based readers; this one parses the framing byte by byte so it can be fed any
 //! split of the stream, and leaves only the deflate stream to flate2's low-level API.
+//!
+//! [rfc1952]: https://www.rfc-editor.org/rfc/rfc1952
 
 use flate2::Crc;
 
@@ -34,7 +36,8 @@ enum Stage {
 }
 
 impl Stage {
-    /// The first optional field at or after position `from` in header order whose flag is set; `None` ends the header.
+    /// Returns the first optional field at or after position `from` in header order whose flag is set; `None` ends the
+    /// header.
     fn optional(flags: u8, from: usize) -> Option<Stage> {
         [
             (FEXTRA, Stage::ExtraLen(0, 0)),
@@ -55,7 +58,7 @@ struct Header {
     flags: u8,
     /// Over the header bytes, for the optional CRC-16.
     crc: Crc,
-    /// Whether an earlier member ended, so a wrong magic is trailing data rather than a corrupt first member.
+    /// `true` if and only if an earlier member ended, so a wrong magic is trailing data, not a corrupt first member.
     after_member: bool,
 }
 
@@ -69,7 +72,8 @@ impl Header {
         }
     }
 
-    /// Reads header bytes from `input` until the header ends; returns how many it used and whether it ended.
+    /// Reads header bytes from `input` until the header ends. Returns how many it used, and `true` if and only if the
+    /// header ended.
     fn feed(&mut self, input: &[u8]) -> Result<(usize, bool), DecodeError> {
         for (used, &byte) in input.iter().enumerate() {
             if self.byte(byte)? {
@@ -79,7 +83,7 @@ impl Header {
         Ok((input.len(), false))
     }
 
-    /// Reads one header byte; true when it was the header's last.
+    /// Reads one header byte. Returns `true` if and only if it was the header's last.
     fn byte(&mut self, byte: u8) -> Result<bool, DecodeError> {
         // The CRC-16 covers every header byte before itself. Hashing a long name byte by byte is wasted without the flag.
         if matches!(self.stage, Stage::Fixed(_)) || (self.flags & FHCRC != 0 && !matches!(self.stage, Stage::Check(..))) {
@@ -139,7 +143,8 @@ impl Header {
         Ok(at + 1 == FIXED_HEADER_LEN && self.advance(0))
     }
 
-    /// Moves to the next optional field at or after `from`; true when there is none and the header is complete.
+    /// Moves to the next optional field at or after `from`. Returns `true` if and only if there is none, so the header
+    /// is complete.
     fn advance(&mut self, from: usize) -> bool {
         Stage::optional(self.flags, from).map(|stage| self.stage = stage).is_none()
     }

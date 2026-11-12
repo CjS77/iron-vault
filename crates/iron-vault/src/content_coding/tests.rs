@@ -72,7 +72,7 @@ const FEXTRA: u8 = 0x04;
 const FNAME: u8 = 0x08;
 const FCOMMENT: u8 = 0x10;
 
-/// Decodes `chunks` in turn and ends the body, checking every piece against the size bound.
+/// Decodes `chunks` one after another and ends the body, checking every piece against the size bound.
 fn decode(coding: ContentCoding, chunks: &[&[u8]]) -> Result<Vec<u8>, DecodeError> {
     let mut decoder = ResponseDecoder::new(coding);
     let mut out = Vec::new();

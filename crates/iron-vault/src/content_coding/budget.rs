@@ -1,4 +1,9 @@
-//! The decompression budget: how much a single response may decode to (spec §11, §15, implementation spec §3).
+//! The decompression budget: how much a single response may decode to ([spec §11][s11], [§15][s15],
+//! [implementation spec §3][i3]). A response over budget fails instead of growing without bound in memory.
+//!
+//! [s11]: ../../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing
+//! [s15]: ../../../../design/iron-vault-specification.md#15-service-states-and-errors
+//! [i3]: ../../../../design/implementation-specification.md#3-implementation-gates-and-unresolved-details
 
 use iron_vault_policy::Limits;
 
@@ -36,14 +41,14 @@ pub enum BudgetExceeded {
 pub struct DecompressionBudget {
     max_decoded: u64,
     max_ratio: u64,
-    /// False for an `identity` body, which has no compressed size to compare against.
+    /// `false` for an `identity` body, which has no compressed size to compare against.
     check_ratio: bool,
     compressed: u64,
     decoded: u64,
 }
 
 impl DecompressionBudget {
-    /// A budget for a content-coded body under `limits`.
+    /// Creates a budget for a content-coded body under `limits`.
     pub fn new(limits: &Limits) -> Self {
         Self {
             max_decoded: limits.max_decompressed_response_bytes(),
@@ -54,8 +59,8 @@ impl DecompressionBudget {
         }
     }
 
-    /// A budget for an `identity` body: bounded by size alone, because the size limit bounds what the scrubber processes
-    /// whether or not anything was decompressed.
+    /// Creates a budget for an `identity` body, bounded by size alone: the size limit bounds what the scrubber processes
+    /// even when nothing was decompressed.
     pub fn identity(limits: &Limits) -> Self {
         Self {
             check_ratio: false,
@@ -63,7 +68,7 @@ impl DecompressionBudget {
         }
     }
 
-    /// The decoded bytes recorded so far.
+    /// Returns the decoded bytes recorded so far.
     pub fn decoded(&self) -> u64 {
         self.decoded
     }
