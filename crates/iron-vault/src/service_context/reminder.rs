@@ -1,4 +1,5 @@
-//! The recovery reminder schedule's side of the service context (`design/recovery.md`, "Reminders").
+//! Runs the recovery reminder schedule ([recovery: Reminders](../../../../design/recovery.md#reminders)), which
+//! writes `recovery.reminder` when the owner has not proved the recovery key for longer than the configured interval.
 //!
 //! An evaluation runs at startup, after each unlock and every 24 hours, in every state. It reads the recovery check
 //! record without the service-wide lock, since the record is replaced by rename and a read sees the old bytes or the
@@ -39,12 +40,13 @@ impl ReminderSchedule {
         self.interval = interval;
     }
 
-    /// A successful recovery check starts a new interval, so its next reminder is never held back by one for the last.
+    /// Forgets when the last reminder was written. A successful recovery check calls it to start a new interval, so
+    /// that interval's reminder is never held back by the spacing after the last one.
     pub(super) fn clear_spacing(&mut self) {
         self.last_reminded = None;
     }
 
-    /// Decides, and when a reminder is due remembers that it is being written.
+    /// Decides whether a reminder is due, and when one is, remembers that it is being written.
     fn due(&mut self, record: &RecordState, now: UtcSecond) -> Option<Due> {
         let since_last_reminder = self.last_reminded.map(|at| at.elapsed());
         let due = reminder_due(record, self.interval, since_last_reminder, now)?;
@@ -53,7 +55,8 @@ impl ReminderSchedule {
     }
 }
 
-/// The schedule shared with the tasks that change it: activation sets the interval, a recovery check clears the spacing.
+/// The schedule shared with the tasks that change it: activation sets the interval, a recovery check clears the
+/// spacing.
 pub(super) type SharedSchedule = Arc<Mutex<ReminderSchedule>>;
 
 /// Runs `change` on the schedule. Nothing a panic could leave half-changed is kept in it, so a poisoned lock is used.
@@ -85,10 +88,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         }
     }
 
-    /// What `status` reports of the recovery check record. It reads `recovery.toml` on the blocking pool without the
-    /// service-wide lock and writes nothing, so a missing record stays missing until the schedule creates it. The due flag
-    /// ignores the 7-day spacing, which limits log lines, not what `status` may say. A record that cannot be read gives
-    /// `unknown`, never an error.
+    /// Returns what `status` reports of the recovery check record. It reads `recovery.toml` on the blocking pool
+    /// without the service-wide lock and writes nothing, so a missing record stays missing until the schedule creates
+    /// it. The due flag ignores the 7-day spacing, which limits log lines, not what `status` may say. A record that
+    /// cannot be read gives `unknown`, never an error.
     pub async fn recovery_status(&self) -> RecoveryStatus {
         // A clock outside 1970 to 9999 reads as the epoch, which makes every day count zero and so never raises a reminder.
         let now = self.clock.now().unwrap_or(UtcSecond::EPOCH);
@@ -107,8 +110,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         }
     }
 
-    /// The record's state, creating the first record when the vault has none. `None` when there is no vault or the
-    /// read did not finish.
+    /// Returns the record's state, creating the first record when the vault has none. Returns `None` when there is no
+    /// vault or the read did not finish.
     async fn schedule_record(&self, now: UtcSecond) -> Option<RecordState> {
         let loaded = match self.on_pool(|locks, fs| load(locks, fs)).await? {
             Loaded::Missing => self.create_first_record(now).await?,
@@ -135,7 +138,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         .await
     }
 
-    /// Runs `work` on the blocking pool; `None` when the task ended without a result.
+    /// Runs `work` on the blocking pool. Returns `None` when the task ended without a result.
     async fn on_pool<T: Send + 'static>(&self, work: impl FnOnce(&ServiceLocks, &F) -> T + Send + 'static) -> Option<T> {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         tokio::task::spawn_blocking(move || work(&locks, &setup.fs)).await.ok()
@@ -169,7 +172,7 @@ fn write_first(locks: &ServiceLocks, fs: &impl StoreFs, now: UtcSecond) -> Recor
     written.map_or_else(RecordState::Unusable, |()| RecordState::NeverChecked(now))
 }
 
-/// The report for what [`load`] found; `None` is a read task that ended without a result.
+/// Builds the `status` report for what [`load`] found; `None` is a read task that ended without a result.
 fn recovery_status_of(loaded: Option<Loaded>, interval: ReminderInterval, now: UtcSecond) -> RecoveryStatus {
     let unknown = |detail: &str, due: bool| RecoveryStatus::Unknown {
         detail: detail.to_owned(),
