@@ -1,4 +1,6 @@
-//! Upstream trust: the trust anchors an upstream's certificate must chain to (specification §10).
+//! Upstream trust: the trust anchors an upstream's certificate must chain to
+//! ([spec §10](../../../../design/iron-vault-specification.md#10-outbound-tls-and-environment)). The upstream client
+//! builds its TLS config from an [`UpstreamTrust`], so this module decides which certificates the service accepts.
 //!
 //! The outbound client trusts the webpki roots compiled into this binary or, for a route that names one, the CA
 //! certificates in an administrator-installed pinned CA file. It builds its own rustls config over exactly those roots,
@@ -105,8 +107,8 @@ impl UpstreamTrust {
         PinnedCa::from_pem(path, pem).map(Self::Pinned)
     }
 
-    /// The outbound rustls config: the default protocol versions (TLS 1.2 and 1.3) and a WebPKI verifier over exactly
-    /// these trust anchors.
+    /// Builds the outbound rustls config: the default protocol versions (TLS 1.2 and 1.3) and a WebPKI verifier over
+    /// exactly these trust anchors.
     ///
     /// It presents no client certificate, and its key log stays rustls's default, which logs nothing, so
     /// `SSLKEYLOGFILE` never takes effect. ALPN is left for the HTTP client to set.
@@ -121,7 +123,7 @@ impl UpstreamTrust {
         Ok(Arc::new(config))
     }
 
-    /// The certificate and hostname verifier [`client_config`](Self::client_config) installs.
+    /// Builds the certificate and hostname verifier [`client_config`](Self::client_config) installs.
     fn verifier(&self, provider: &Arc<CryptoProvider>) -> Result<Arc<WebPkiServerVerifier>, ClientConfigError> {
         WebPkiServerVerifier::builder_with_provider(self.roots(), Arc::clone(provider))
             .build()
@@ -164,8 +166,8 @@ impl PinnedCa {
 /// Selects the trust for a route: its pinned CA when `ca_file` is set, else the built-in roots.
 ///
 /// A pinned CA changes only which certificates verify, never where the credential may go: the final outgoing-request
-/// check ([`iron_vault_policy::final_check`]) still compares the upstream host with the credential record's permitted
-/// origins, whatever CA the route pins.
+/// check ([`final_check`](fn@iron_vault_policy::final_check)) still compares the upstream host with the credential
+/// record's permitted origins.
 pub fn trust_for(route: &RouteConfig, profile: DeploymentProfile, owner: ExpectedOwner) -> Result<UpstreamTrust, PinnedCaError> {
     select(route, |path| UpstreamTrust::pinned(path, profile, owner))
 }

@@ -1,4 +1,5 @@
-//! The upstream client: the only way the service reaches an upstream (specification §8 step 9, §10, implementation spec §1).
+//! The upstream client: the only way the service reaches an upstream ([spec §8][s8] step 9, [§10][s10],
+//! [implementation spec §1][i1]).
 //!
 //! [`UpstreamClient::new`] is the one constructor. It hands reqwest the rustls config built from an [`UpstreamTrust`],
 //! turns off proxies, redirects, retries and the `Referer` header, and refuses cleartext. `clippy.toml` refuses every
@@ -6,6 +7,10 @@
 //! [`UpstreamClient::send`] takes a [`CheckedRequest`] and a [`UpstreamBody`], so nothing reaches the network without
 //! passing the final outgoing-request check. It sends exactly that request's method, URL and headers, plus the body,
 //! which the final check never reads.
+//!
+//! [s8]: ../../../../design/iron-vault-specification.md#8-request-flow
+//! [s10]: ../../../../design/iron-vault-specification.md#10-outbound-tls-and-environment
+//! [i1]: ../../../../design/implementation-specification.md#1-implementation-structure
 
 use std::fmt;
 use std::pin::Pin;
@@ -31,8 +36,7 @@ const ALPN_PROTOCOLS: [&[u8]; 2] = [b"h2", b"http/1.1"];
 
 /// How long the client waits on an upstream before giving up with [`TransportError::Timeout`].
 ///
-/// The defaults are placeholders until the request pipeline (EP-18) and the operational limits of implementation spec §3 are
-/// published.
+/// `serve` builds every client with [`TransportLimits::default`]. The request deadline still bounds the whole request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransportLimits {
     /// The time allowed to open the TCP connection and complete the TLS handshake.
@@ -44,8 +48,8 @@ pub struct TransportLimits {
 }
 
 impl Default for TransportLimits {
-    /// 10 seconds to connect and 300 seconds until the response headers arrive: a language model may take minutes
-    /// before it answers a non-streamed request. Both are placeholders until implementation spec §3 publishes the limits.
+    /// Returns 10 seconds to connect and 300 seconds until the response headers arrive: a language model may take
+    /// minutes before it answers a non-streamed request.
     fn default() -> Self {
         Self {
             connect: Duration::from_secs(10),
@@ -71,7 +75,10 @@ pub enum ClientBuildError {
 /// credential included. The service holds the pool only through this value: it is not `Clone` and never hands out its
 /// reqwest client, so dropping it, which a lock does with the serving snapshot, closes every idle connection, or, if
 /// hyper-util is still running a background connect (which holds the pool strongly), when that connect ends, at most
-/// `TransportLimits::connect` later (`design/secret-handling.md`, "Upstream connections close with their snapshot").
+/// `TransportLimits::connect` later
+/// ([secret handling: Upstream connections close with their snapshot][close]).
+///
+/// [close]: ../../../../design/secret-handling.md#upstream-connections-close-with-their-snapshot
 pub struct UpstreamClient {
     client: Client,
     limits: TransportLimits,
@@ -93,10 +100,12 @@ impl UpstreamClient {
     /// but `https`, never adds `Referer`, keeps no cookies and adds no default header of its own choosing.
     ///
     /// It never retries: one checked request is one send. reqwest's default policy would re-send a request an HTTP/2
-    /// upstream refused with `GOAWAY` or `REFUSED_STREAM`, which the final check (implementation spec §1) and rate limits (§8) never see,
-    /// and which repeats a non-idempotent request the upstream may have acted on. Whether to try again is the caller's
-    /// call. `never()` alone still lets reqwest clone every request, credential included, for a retry it will not make;
-    /// a limit of zero retries stops that copy too.
+    /// upstream refused with `GOAWAY` or `REFUSED_STREAM`. The final check
+    /// ([implementation spec §1](../../../../design/implementation-specification.md#1-implementation-structure)) and
+    /// the rate limits ([§8](../../../../design/iron-vault-specification.md#8-request-flow)) would never see that
+    /// second send, and it repeats a non-idempotent request the upstream may have acted on. The caller decides whether
+    /// to try again. `never()` alone still lets reqwest clone every request, credential included, for a retry it will
+    /// not make; a limit of zero retries stops that copy too.
     // clippy.toml refuses `Client::builder` and `ClientBuilder::retry` everywhere else; this is the one constructor it
     // exists to protect.
     #[allow(clippy::disallowed_methods)]
@@ -118,16 +127,17 @@ impl UpstreamClient {
     ///
     /// The request carries the checked method, URL and headers, plus `body`, and nothing else. `Host` is never set here: reqwest
     /// derives it, or HTTP/2's `:authority`, from the URL, whose host the final check proved is
-    /// [`CheckedRequest::host`], and TLS verifies that same name, so all three name the checked upstream (§9).
+    /// [`CheckedRequest::host`], and TLS verifies that same name, so all three name the checked upstream
+    /// ([§9](../../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
     /// reqwest adds `Accept: */*` when the request has no `Accept`, and its builder offers no way to stop it.
     ///
     /// `body` is forwarded chunk by chunk, never buffered whole and never inspected. It is framed by its declared
     /// length when [`UpstreamBody::stream`] was given one, and as chunked (HTTP/1.1) otherwise; the caller's own framing
     /// headers were already dropped by `sanitize`. If the body stream fails, the upstream request is aborted, not
-    /// completed with a short body, and `send` returns a [`TransportError`], which is a 502 whatever its class.
+    /// completed with a short body, and `send` returns a [`TransportError`], which is answered `502`.
     ///
-    /// There is no retry, and a streamed body could not be replayed if there were: its chunks are gone once sent, so
-    /// whether to try again is the caller's call, with a new body.
+    /// There is no retry, and a streamed body could not be replayed if there were: its chunks are gone once sent. A
+    /// caller that tries again sends a new body.
     ///
     /// The response-headers deadline starts when sending starts, so it also bounds how long the body may take to upload.
     ///
@@ -168,12 +178,13 @@ impl UpstreamResponse {
         self.response.headers()
     }
 
-    /// The next chunk of the body as it arrived, or `None` at its end.
+    /// Waits for the next chunk of the body as it arrived; `None` at its end.
     pub async fn chunk(&mut self) -> Result<Option<Bytes>, TransportError> {
         self.response.chunk().await.map_err(TransportError::classify)
     }
 
-    /// The status, the headers and the body still streaming, taken apart so the headers move rather than being copied.
+    /// Splits the response into its status, its headers and its body still streaming, so the headers move without a
+    /// copy.
     pub fn into_parts(self) -> (StatusCode, HeaderMap, ResponseChunks) {
         let status = self.response.status();
         let mut response = self.response;
@@ -230,14 +241,14 @@ impl fmt::Debug for UpstreamResponse {
     }
 }
 
-/// `trust`'s rustls config with ALPN set; reqwest leaves a preconfigured config's ALPN as it is.
+/// Builds `trust`'s rustls config with ALPN set; reqwest leaves a preconfigured config's ALPN as it is.
 fn tls_config(trust: &UpstreamTrust) -> Result<ClientConfig, ClientConfigError> {
     let mut config = Arc::unwrap_or_clone(trust.client_config()?);
     config.alpn_protocols = ALPN_PROTOCOLS.iter().map(|protocol| protocol.to_vec()).collect();
     Ok(config)
 }
 
-/// The reqwest request for `checked`: its method, URL and headers, with no body.
+/// Converts `checked` into a reqwest request: its method, URL and headers, with no body.
 ///
 /// The URL is moved, not cloned, because it may hold a filled query slot that `url::Url` cannot wipe. The policy's
 /// header values are wiped when `headers` drops at the end of this function, leaving reqwest's copies.
@@ -252,7 +263,7 @@ fn to_reqwest(checked: CheckedRequest) -> Result<Request, TransportError> {
     Ok(request)
 }
 
-/// `request` with `body` attached.
+/// Attaches `body` to `request`.
 ///
 /// reqwest's streamed body has no length of its own, so a declared length goes in as a `Content-Length` header, which
 /// both hyper's HTTP/1.1 and HTTP/2 clients frame by; without one the body is chunked. A declared length of zero is
@@ -288,12 +299,13 @@ fn method(method: Method) -> reqwest::Method {
 }
 
 /// The policy's header names are RFC 9110 tokens, which `http` always accepts; a refusal would be a construction
-/// defect, so the request is refused rather than sent without the header.
+/// defect, so the request is refused instead of sent without the header.
 fn header_name(name: &HeaderName) -> Result<header::HeaderName, TransportError> {
     header::HeaderName::from_bytes(name.as_str().as_bytes()).map_err(|_| TransportError::Protocol)
 }
 
-/// The value marked sensitive, so HTTP/2's HPACK never adds it to the dynamic table and `http`'s `Debug` hides it.
+/// Converts a header value and marks it sensitive, so HTTP/2's HPACK never adds it to the dynamic table and `http`'s
+/// `Debug` hides it.
 ///
 /// The policy's header values already exclude every byte `http` refuses; a refusal is treated as in [`header_name`].
 fn sensitive_value(value: &HeaderValue) -> Result<header::HeaderValue, TransportError> {

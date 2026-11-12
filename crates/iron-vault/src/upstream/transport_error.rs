@@ -1,4 +1,6 @@
-//! Why an upstream exchange failed, with nothing from the failure itself (specification §15).
+//! Why an upstream exchange failed, with nothing from the failure itself
+//! ([spec §15](../../../../design/iron-vault-specification.md#15-service-states-and-errors)). The proxy handler answers
+//! each class with a fixed status and the request event records its label.
 //!
 //! A `reqwest::Error` formats the request URL, whose query may hold a query-slot credential, and its source chain
 //! carries hyper and rustls diagnostics. So an error is classified only through its predicates and its source types,
@@ -31,7 +33,7 @@ pub enum TransportError {
 }
 
 impl TransportError {
-    /// The status the request interface returns for this failure: `504` for a timeout, `502` for the rest.
+    /// Returns the status the request interface answers this failure with: `504` for a timeout, `502` for the rest.
     pub fn status(self) -> StatusCode {
         match self {
             Self::Timeout => StatusCode::GATEWAY_TIMEOUT,
@@ -39,7 +41,7 @@ impl TransportError {
         }
     }
 
-    /// The class's error kind label, for a log record's `error_kind`.
+    /// Returns the class's error kind label, for a log record's `error_kind`.
     pub fn label(self) -> &'static str {
         match self {
             Self::Timeout => "timeout",
@@ -55,7 +57,7 @@ impl TransportError {
         Self::of(&error)
     }
 
-    /// The class of `error`, read only through its predicates and source types.
+    /// Classifies `error` through its predicates and source types only, without formatting it.
     ///
     /// The timeout check comes first, since a connect timeout is also a connect error, and the TLS check before the
     /// connect check, since reqwest reports a failed handshake as a connect error.
@@ -74,7 +76,7 @@ impl TransportError {
     }
 }
 
-/// Whether a rustls error is anywhere in `error`'s source chain.
+/// Returns `true` if and only if a rustls error is somewhere in `error`'s source chain.
 ///
 /// tokio-rustls wraps a handshake failure in an `io::Error`, and hyper wraps that in another; an `io::Error`'s
 /// `source` skips the error it wraps, so the walk steps into each one instead.
@@ -84,7 +86,7 @@ fn has_tls_source(error: &(dyn Error + 'static)) -> bool {
     std::iter::successors(Some(error), |&error| next_cause(error)).any(|error| error.is::<rustls::Error>())
 }
 
-/// The error inside `error` if it is an `io::Error` wrapping one, else its source.
+/// Returns the error inside `error` if it is an `io::Error` wrapping one, and its source otherwise.
 fn next_cause<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a (dyn Error + 'static)> {
     match error.downcast_ref::<io::Error>().and_then(io::Error::get_ref) {
         Some(inner) => Some(inner),

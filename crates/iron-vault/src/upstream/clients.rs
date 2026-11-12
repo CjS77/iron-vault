@@ -1,4 +1,6 @@
-//! The upstream clients for one active policy: one per upstream trust its routes use (specification §10).
+//! The upstream clients for one active policy: one per upstream trust its routes use
+//! ([spec §10](../../../../design/iron-vault-specification.md#10-outbound-tls-and-environment)). The serving snapshot
+//! holds them, and the proxy handler picks a request's client by route.
 //!
 //! Built once when a policy is activated, so a request never builds a client or reads a CA file. Routes with the
 //! built-in roots share one client, and routes that pin the same CA file share that file's client.
@@ -57,10 +59,11 @@ impl UpstreamClients {
     ///
     /// Only the built-in client failing is an error here, since no route could then be served. A pinned CA that fails
     /// gives its routes a [`RouteClientError::PinnedCa`] and leaves every other route its client. That makes only those
-    /// routes unavailable, like a damaged credential record (§12): the config check passes them to
-    /// [`mark_unusable_routes`](Self::mark_unusable_routes) before the policy serves, so a request to one is refused
-    /// before it reaches [`for_route`](Self::for_route). A route already unavailable through its credential is tried
-    /// too, so it reports both causes.
+    /// routes unavailable, like a damaged credential record
+    /// ([§12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)): the config check
+    /// passes them to [`mark_unusable_routes`](Self::mark_unusable_routes) before the policy serves, so a request to
+    /// one is refused before it reaches [`for_route`](Self::for_route). A route already unavailable through its
+    /// credential is tried too, so it reports both causes.
     pub fn new(
         policy: &ActivePolicy,
         profile: DeploymentProfile,
@@ -82,7 +85,7 @@ impl UpstreamClients {
         Self::build(policy, limits, load_pinned)
     }
 
-    /// The client for `route`.
+    /// Returns the client for `route`, or why it has none.
     pub fn for_route(&self, route: &RouteName) -> Result<&UpstreamClient, RouteClientError> {
         match self.routes.get(route) {
             None => Err(RouteClientError::NotAvailable(route.clone())),
@@ -104,7 +107,8 @@ impl UpstreamClients {
             .filter_map(|(route, client)| client.as_ref().err().map(|error| (route, error)))
     }
 
-    /// `policy` with every route whose pinned CA gave no client also unavailable for that cause, each logged at WARN.
+    /// Returns `policy` with every route whose pinned CA gave no client marked unavailable for that cause, each logged
+    /// at WARN.
     ///
     /// The event names the route and the `ca_file` field, never the path, the PEM bytes or the load error.
     pub fn mark_unusable_routes(&self, policy: ActivePolicy) -> ActivePolicy {
@@ -162,7 +166,7 @@ fn pinned_client(
     Ok(UpstreamClient::new(&trust, limits)?)
 }
 
-/// A route's entry: its CA path, or a copy of the error its CA's client failed with. A pinned route never falls back
+/// Returns a route's entry: its CA path, or a copy of the error its CA's client failed with. A pinned route never falls back
 /// to the built-in roots.
 fn route_entry(
     path: Option<&Path>,

@@ -1,7 +1,12 @@
-//! The body of an upstream request: the caller's bytes, forwarded as they arrive (specification §8 step 9, §9, implementation spec §3).
+//! The body of an upstream request: the caller's bytes, forwarded as they arrive ([spec §8][s8] step 9, [§9][s9],
+//! [implementation spec §3][i3]).
 //!
 //! The body is not part of a [`CheckedRequest`](iron_vault_policy::CheckedRequest). The final check never inspects it,
 //! because no credential goes into a caller's body, and keeping it apart makes that visible.
+//!
+//! [s8]: ../../../../design/iron-vault-specification.md#8-request-flow
+//! [s9]: ../../../../design/iron-vault-specification.md#9-url-header-and-slot-rules
+//! [i3]: ../../../../design/implementation-specification.md#3-implementation-gates-and-unresolved-details
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -34,12 +39,13 @@ pub(super) enum Kind {
 }
 
 impl UpstreamBody {
-    /// No body: the request carries no body framing of its own, neither a `Content-Length` nor a `Transfer-Encoding`.
+    /// Creates an absent body: the request carries no body framing of its own, neither a `Content-Length` nor a
+    /// `Transfer-Encoding`.
     pub fn empty() -> Self {
         Self { kind: Kind::Empty }
     }
 
-    /// A body read from `chunks` as the upstream accepts it.
+    /// Creates a body read from `chunks` as the upstream accepts it.
     ///
     /// `length` is the `Content-Length` the caller declared, if any. It is sent as `Content-Length` and the body is
     /// not chunked; with `None` the transport frames the body as chunked (HTTP/1.1) or by stream end (HTTP/2).
@@ -107,7 +113,8 @@ impl Counted {
         }
     }
 
-    /// The source ended: a short count fails; otherwise the held chunk, if any, is released and the stream then ends.
+    /// Handles the end of the source: a short count fails; otherwise the held chunk, if any, is released and the stream
+    /// then ends.
     fn end(&mut self) -> Poll<Option<Result<Bytes, UpstreamBodyError>>> {
         if self.seen < self.declared {
             return self.fail(UpstreamBodyError);
