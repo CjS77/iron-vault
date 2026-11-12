@@ -1,10 +1,18 @@
-//! Vault writes through the running service (specification §6, §13, §15): `add` here, and `replace` and `rm`
-//! in [`plan`].
+//! Writes credential records through the running service: `add` here, and `replace` and `rm` in [`plan`]
+//! ([specification §6](../../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [§13](../../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
+//! [§15](../../../../design/iron-vault-specification.md#15-service-states-and-errors)).
+//!
+//! ```text
+//!   serving snapshot ── open vault (read only, serves requests)
+//!   add / replace / rm ── service-wide lock ── fresh Vault from the kept vault identity ── write ── drop
+//! ```
 //!
 //! The open vault lives inside the immutable serving snapshot, so a write never goes through it. It opens a fresh
-//! [`Vault`] from the kept vault identity under the service-wide lock and the context's mutex, writes through that and
-//! drops it, all on the blocking pool. The serving snapshot is left alone: activation refuses a route whose credential
-//! the manifest lacked, so no active route can use the new record, and the next config check opens the vault from disk.
+//! [`Vault`](iron_vault_store::Vault) from the kept vault identity under the service-wide lock and the context's
+//! mutex, writes through that and drops it, all on the blocking pool. The serving snapshot is left alone: activation
+//! refuses a route whose credential the manifest lacked, so no active route can use the new record, and the next
+//! config check opens the vault from disk.
 
 mod plan;
 
@@ -51,8 +59,9 @@ pub enum VaultChangeRefusal {
         /// Each failing route with the rule it would break.
         routes: Vec<AffectedRoute>,
     },
-    /// The vault change check failed for an `rm`: routes of the active config use the name. The vault still holds it, so
-    /// the message names the routes rather than each one's activation error, which would say the credential is unknown.
+    /// The vault change check failed for an `rm`: routes of the active config use the name. The message names the
+    /// routes alone, since each route's activation error would say the credential is unknown while the vault still
+    /// holds it.
     #[error("credential {name} is used by {}; approve a config without {}, then run `rm` again", used_by(.routes), them(.routes))]
     UsedByRoutes {
         /// The credential to remove.
@@ -66,11 +75,11 @@ pub enum VaultChangeRefusal {
     /// The write failed before its commit point, or was refused before writing: the vault is unchanged.
     #[error("the vault write failed and nothing changed: {0}")]
     Failed(String),
-    /// The manifest was renamed into place but the state directory fsync failed. `present` is whether the reopened vault
-    /// lists the record, `None` when it could not be reopened.
+    /// The manifest was renamed into place but the state directory fsync failed, so the commit may not be durable.
     #[error("{}", uncertain_message(*.present))]
     Uncertain {
-        /// Whether the reopened vault lists the new record.
+        /// `Some(true)` if the reopened vault lists the new record, `Some(false)` if it does not, and `None` when it
+        /// could not be reopened.
         present: Option<bool>,
     },
     /// A `replace` or `rm` committed, but the config check after it failed, so the service no longer serves.
@@ -96,11 +105,13 @@ enum Written {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Adds a credential record named `name`, refusing a name the manifest lists (§6). Only a Ready service writes.
+    /// Adds a credential record named `name`, refusing a name the manifest lists
+    /// ([specification §6](../../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
+    /// Only a Ready service writes.
     ///
-    /// It fails at once with [`VaultChangeRefusal::Busy`] while an approval or a reload holds the service-wide lock, so a
-    /// pending approval never sees the catalog change under it. On success, and on an uncertain commit the reopened
-    /// vault shows, `status` lists the name as healthy at once; routes use it only from the next approval.
+    /// It fails at once with [`VaultChangeRefusal::Busy`] while an approval or a reload holds the service-wide lock,
+    /// so a pending approval never sees the catalog change under it. On success, and on an uncertain commit the
+    /// reopened vault shows, `status` lists the name as healthy at once; routes use it only from the next approval.
     pub async fn add_credential(
         &self,
         name: CredentialName,
@@ -149,9 +160,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 }
 
-/// Records a committed `replace` or `rm` as its audit event (design/audit-logging.md), from the summary the owner
-/// approved, which alone holds the old record with the new kind and origins. The planned change decides the event: a
-/// planned replace commits only as a replace, so it never logs a removal.
+/// Records a committed `replace` or `rm` as its audit event ([audit logging](../../../../design/audit-logging.md)),
+/// from the summary the owner approved, which alone holds the old record with the new kind and origins. The planned
+/// change decides the event: a planned replace commits only as a replace, so it never logs a removal.
 fn log_committed(summary: &VaultChangeSummary, changed: &CredentialChanged) {
     match (summary.change(), changed) {
         (PlannedChange::Remove(name), _) => log_removed(name, summary.current().record_id),
@@ -179,7 +190,7 @@ fn log_removed(name: &CredentialName, record_id: RecordId) {
     .emit();
 }
 
-/// Only a healthy old record's kind and origins are known.
+/// Logs a committed `replace`. Only a healthy old record's kind and origins are known, so only those are logged.
 fn log_replaced(name: &CredentialName, old: &CurrentRecord, record_id: RecordId, kind: &CredentialKind, origins: &PermittedOrigins) {
     let origins = origins.iter().cloned().collect::<Vec<_>>();
     CredentialReplaced {
@@ -248,7 +259,7 @@ fn add_record(
     }
 }
 
-/// The record ID a vault reopened from disk lists for `name`, if any; `None` when it cannot be reopened.
+/// Returns the record ID a vault reopened from disk lists for `name`, if any; `None` when it cannot be reopened.
 fn listed_after_reopen(
     locks: &ServiceLocks,
     fs: &impl StoreFs,
@@ -298,7 +309,7 @@ fn kind_of(material: &CredentialMaterial) -> CredentialKind {
     }
 }
 
-/// Each affected route's reason, which names the route, separated by `; `.
+/// Joins each affected route's reason, which names the route, with `; `.
 fn in_use(routes: &[AffectedRoute]) -> String {
     routes
         .iter()
@@ -307,7 +318,8 @@ fn in_use(routes: &[AffectedRoute]) -> String {
         .join("; ")
 }
 
-/// `route a` or `routes a, b`. Route names follow the name rule (`[a-z0-9_-]`), so none needs escaping.
+/// Formats `routes` as `route a` or `routes a, b`. Route names follow the name rule (`[a-z0-9_-]`), so none needs
+/// escaping.
 fn used_by(routes: &[RouteName]) -> String {
     let names = routes.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
     match routes {

@@ -1,21 +1,30 @@
-//! `replace` and `rm`'s side of the service context (design/credential-commands.md, "Order of steps").
+//! Runs the service's part of `replace` and `rm`
+//! ([credential commands: Order of steps](../../../../../design/credential-commands.md#order-of-steps)).
+//!
+//! ```text
+//!   plan_vault_change      steps 2-4   service-wide lock, manifest lookup, vault change check     ─┐
+//!   (exchange)             steps 5-7   summary, owner presence (prove_presence), secret prompts   │ VaultChangePlan
+//!   change_credential      step 8      still Ready at the check generation; replace or remove     │ holds the lock
+//!                          step 9      config check from Ready through ServiceEvent::VaultChanged ─┘
+//! ```
 //!
 //! [`ServiceContext::plan_vault_change`] takes the service-wide lock and runs steps 2 to 4: the lock, the manifest
-//! lookup and the vault change check. The [`VaultChangePlan`] it returns holds that lock until the change is written or
-//! abandoned, prompts included, so the check stays true until the write and owner presence authorizes exactly the change
-//! the check passed. Like an approval's review, the plan keeps no vault identity and no serving snapshot, so a `lock`
-//! while the owner is at a prompt leaves no copy of either behind.
+//! lookup and the vault change check. The [`VaultChangePlan`] it returns holds that lock until the change is written
+//! or abandoned, prompts included, so the check stays true until the write and owner presence authorizes exactly the
+//! change the check passed. Like an approval's review, the plan keeps no vault identity and no serving snapshot, so a
+//! `lock` while the owner is at a prompt leaves no copy of either behind.
 //!
 //! A `lock` cancels a plan still at a prompt: [`VaultChangePlan::lock_requested`] completes once a `lock` waits for the
 //! service-wide lock, and the prompt ends the change. Every config check waits for that lock too. As a backstop, the
 //! plan records the check generation, and the write refuses unless the service is still Ready at it.
 //!
-//! [`VaultChangePlan::change_credential`] runs steps 8 and 9: the write through a fresh [`Vault`] opened from the kept
-//! identity, then the config check from Ready through [`ServiceEvent::VaultChanged`]. A task of its own owns the context
-//! mutex guard and the service-wide guard and runs both, as an approval's commit does, so a dropped caller never leaves
-//! the service in Checking and nothing else changes the vault until the check has settled. The write and the check share
-//! the one task, rather than the check running through `check_and_settle_detached`, because a caller dropped between
-//! them would leave a committed write unchecked, its removed or replaced secret still served.
+//! [`VaultChangePlan::change_credential`] runs steps 8 and 9: the write through a fresh
+//! [`Vault`](iron_vault_store::Vault) opened from the kept identity, then the config check from Ready through
+//! [`ServiceEvent::VaultChanged`]. A task of its own owns the context mutex guard and the service-wide guard and runs
+//! both, as an approval's commit does, so a dropped caller never leaves the service in Checking and nothing else
+//! changes the vault until the check has settled. The write and the check share the one task, and the check does not
+//! go through `check_and_settle_detached`: a caller dropped between them would leave a committed write unchecked, its
+//! removed or replaced secret still served.
 
 use std::sync::Arc;
 
@@ -36,8 +45,8 @@ use crate::standing::{CredentialStanding, RecordSummary, Standing};
 use crate::vault_change_check::{AffectedRoute, PlannedChange, vault_change_check};
 use crate::vault_change_summary::VaultChangeSummary;
 
-/// Steps 2 to 4 of a `replace` or `rm` done: the service-wide lock is held and the vault change check passed. See the
-/// module docs.
+/// A `replace` or `rm` past steps 2 to 4: the service-wide lock is held and the vault change check passed. See the
+/// module documentation.
 pub struct VaultChangePlan<'a, F> {
     service: &'a ServiceContext<F>,
     /// Owned, so [`VaultChangePlan::change_credential`] can hand it to the task that writes and checks.
@@ -50,13 +59,14 @@ pub struct VaultChangePlan<'a, F> {
     summary: VaultChangeSummary,
 }
 
-/// The record a `replace` or `rm` acts on, as the vault change summary describes it (design/credential-commands.md,
-/// "Vault change summary"). Read under the service-wide lock, so it stays true until the write.
+/// The record a `replace` or `rm` acts on, as the
+/// [vault change summary](../../../../../design/credential-commands.md#vault-change-summary) describes it. Read under
+/// the service-wide lock, so it stays true until the write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CurrentRecord {
     /// The record's ID, which the write supersedes or removes.
     pub record_id: RecordId,
-    /// Whether the record loaded.
+    /// Whether the record loaded, as healthy or damaged.
     pub standing: Standing,
     /// The record's kind and permitted origins; `None` for a damaged record, whose origins cannot be trusted.
     pub summary: Option<RecordSummary>,
@@ -99,9 +109,9 @@ enum Written {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Takes the service-wide lock, refusing at once with [`VaultChangeRefusal::Busy`] while another holds it, and runs
-    /// the checks a `replace` or `rm` makes before any prompt: the service is Ready, the manifest lists the name (healthy
-    /// or damaged), and the vault change check passes on the served config.
+    /// Takes the service-wide lock, refusing at once with [`VaultChangeRefusal::Busy`] while another holds it, and
+    /// runs the checks a `replace` or `rm` makes before any prompt: the service is Ready, the manifest lists the name
+    /// (healthy or damaged), and the vault change check passes on the served config.
     pub async fn plan_vault_change(&self, change: PlannedChange) -> Result<VaultChangePlan<'_, F>, VaultChangeRefusal> {
         let service_wide = Arc::clone(&self.service_wide)
             .try_lock_owned()
@@ -126,8 +136,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 }
 
-/// The refusal for a failed vault change check. A removal fails only because routes use the name, so it names them; a
-/// replacement names the rule each route would break with the new record.
+/// Returns the refusal for a failed vault change check. A removal fails only because routes use the name, so it names
+/// them; a replacement names the rule each route would break with the new record.
 fn in_use(change: &PlannedChange, routes: Vec<AffectedRoute>) -> VaultChangeRefusal {
     let name = change.name().clone();
     match change {
@@ -141,24 +151,26 @@ fn in_use(change: &PlannedChange, routes: Vec<AffectedRoute>) -> VaultChangeRefu
 }
 
 impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
-    /// The vault change summary the owner reads before owner presence, true until the write.
+    /// Returns the vault change summary the owner reads before owner presence, true until the write.
     pub fn summary(&self) -> &VaultChangeSummary {
         &self.summary
     }
 
-    /// Completes once a `lock` is waiting for the service-wide lock this plan holds, so a prompt can end the change
-    /// rather than make the `lock` wait for the owner (design/credential-commands.md, "Order of steps").
+    /// Completes once a `lock` is waiting for the service-wide lock this plan holds. A prompt ends the change when it
+    /// completes, so the `lock` does not wait for the owner to answer
+    /// ([credential commands: Order of steps](../../../../../design/credential-commands.md#order-of-steps)).
     pub async fn lock_requested(&self) {
         self.service.lock_requested().await;
     }
 
-    /// The pinned approvers in approver order: owner presence asks the first and lets the owner switch to the rest.
+    /// Returns the pinned approvers in approver order: owner presence asks the first and lets the owner switch to the
+    /// rest.
     pub fn approvers(&self) -> &[PinnedApprover] {
         &self.approvers
     }
 
-    /// Owner presence (design/credential-commands.md): opens `approver`'s own key with
-    /// `secret` and drops the signer at once. Nothing is reserved, signed or written.
+    /// Proves [owner presence](../../../../../design/credential-commands.md#owner-presence): opens `approver`'s own
+    /// key with `secret` and drops the signer at once. Nothing is reserved, signed or written.
     pub async fn prove_presence(
         &self,
         secret: impl Into<ApproverSecret>,
@@ -177,10 +189,11 @@ impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
     ///
     /// A write that failed cleanly runs no check. A committed one answers success only when the check settles in
     /// Ready, on a new serving snapshot; requests admitted earlier finish on the old one, whose vault, and the secret
-    /// replaced or removed with it, drops when the last of them ends (§14).
+    /// replaced or removed with it, drops when the last of them ends
+    /// ([specification §14](../../../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)).
     ///
     /// Cancel-safe as an approval's commit is: a task of its own owns both guards and runs the write and the check to
-    /// their end, and one that ends without a result fails closed through its [`SettleGuard`].
+    /// their end, and one that ends without a result fails closed through its `SettleGuard`.
     pub async fn change_credential(
         self,
         material: Option<CredentialMaterial>,
@@ -222,7 +235,7 @@ impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
     }
 }
 
-/// The record `open` holds under `name`, healthy or damaged, with its full standing.
+/// Returns the record `open` holds under `name`, healthy or damaged, with its full standing.
 fn current_record<'a>(open: &'a OpenVault, name: &CredentialName) -> Option<(CurrentRecord, &'a CredentialStanding)> {
     let standing = open.credentials.iter().find(|standing| &standing.name == name)?;
     let current = CurrentRecord {
@@ -234,8 +247,8 @@ fn current_record<'a>(open: &'a OpenVault, name: &CredentialName) -> Option<(Cur
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
-    /// Steps 8 and 9 under `inner`, which the caller's task owns: the write, then the config check unless the write
-    /// failed cleanly.
+    /// Runs steps 8 and 9 under `inner`, which the caller's task owns: the write, then the config check unless the
+    /// write failed cleanly.
     async fn run_vault_change(
         &self,
         inner: &mut Inner,
@@ -274,8 +287,8 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
     }
 }
 
-/// The write for `change` with `material`, which must be present for a replace, of the planned kind, and absent for a
-/// remove.
+/// Builds the write for `change` with `material`, which must be present for a replace, of the planned kind, and
+/// absent for a remove.
 fn write_of(change: PlannedChange, material: Option<CredentialMaterial>) -> Result<Write, VaultChangeRefusal> {
     match (change, material) {
         (PlannedChange::Remove(name), None) => Ok(Write::Remove(name)),
