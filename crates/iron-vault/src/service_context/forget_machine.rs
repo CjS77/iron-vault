@@ -1,7 +1,9 @@
-//! The `forget-machine` side of the service context (`design/forget-machine.md`, "What it checks").
+//! Runs the service's part of `forget-machine`
+//! ([forget machine: What it checks](../../../../design/forget-machine.md#what-it-checks)), which checks that a
+//! retired machine's recipient key no longer opens the vault.
 //!
-//! It reads the recipient inventory and the recovery check record and writes nothing of its own. It runs no process: the TPM
-//! belongs to the host, and the administrator runs every step the command prints.
+//! It reads the recipient inventory and the recovery check record and writes nothing of its own. It runs no process:
+//! the TPM belongs to the host, and the administrator runs every step the command prints.
 
 use iron_vault_store::{RecipientEntry, RecipientKey, StoreFs};
 
@@ -16,7 +18,8 @@ pub enum ForgetCheck {
     Enrolled(RecipientEntry),
     /// The key is not a recipient.
     Forgotten {
-        /// The sentence for the part of the independence rule the inventory as it stands fails; `None` when it holds.
+        /// The sentence naming the part of the independence rule the current inventory fails; `None` when the rule
+        /// holds.
         independence: Option<String>,
         /// The recovery check record; a due reminder means the owner has not lately proved the recovery key.
         recovery: RecoveryStatus,
@@ -24,10 +27,10 @@ pub enum ForgetCheck {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Whether `key` is still a recipient, and if not, the facts the decommission guidance depends on.
+    /// Checks whether `key` is still a recipient, and if not, gathers the facts the decommission guidance depends on.
     ///
-    /// Like `recipient list` it needs Ready and answers [`RecipientRefusal::Busy`] at once while another operation holds the
-    /// service-wide lock, and its inventory check may settle a staged recipient change.
+    /// Like `recipient list` it needs Ready and answers [`RecipientRefusal::Busy`] at once while another operation
+    /// holds the service-wide lock, and its inventory check may settle a staged recipient change.
     pub async fn check_forgotten(&self, key: &RecipientKey) -> Result<ForgetCheck, RecipientRefusal> {
         let inventory = self.recipient_inventory().await?;
         if let Some(entry) = inventory.get(key) {
