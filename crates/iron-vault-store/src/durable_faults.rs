@@ -1,9 +1,9 @@
 //! Fault-injection and power-loss tests for durable replace and durable remove, run against [`FaultFs`].
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::fault_fs::{FaultFs, FsCall, FsOp};
+use crate::fault_fs::{FaultFs, FsCall, FsOp, assert_trace_properties};
 use crate::test_dir::TestDir;
 use crate::{StateDirLock, StateFileName, WriteError, WriteStep, durable_remove, durable_replace, sweep_stale_temps};
 
@@ -55,32 +55,6 @@ fn clean_trace(setup: &Setup, old: Option<&[u8]>, op: impl Fn(&Setup, &FaultFs) 
     let fs = setup.fs(old);
     op(setup, &fs).unwrap();
     fs.trace()
-}
-
-fn parent(path: &Path) -> PathBuf {
-    path.parent().unwrap().to_path_buf()
-}
-
-/// Every rename and unlink is followed by an fsync of its directory, and every write is fsynced before the temp file
-/// is renamed.
-pub(crate) fn assert_trace_properties(trace: &[FsCall]) {
-    let synced_dir_after = |i: usize, path: &Path| trace[i..].contains(&FsCall::SyncDir(parent(path)));
-    trace.iter().enumerate().for_each(|(i, call)| match call {
-        FsCall::Rename { to, .. } => assert!(synced_dir_after(i, to), "rename at {i} has no directory fsync: {trace:?}"),
-        FsCall::RemoveFile(path) => assert!(synced_dir_after(i, path), "unlink at {i} has no directory fsync: {trace:?}"),
-        FsCall::WriteAll(path) => {
-            let rename = trace[i..]
-                .iter()
-                .position(|c| matches!(c, FsCall::Rename { from, .. } if from == path))
-                .map(|j| i + j);
-            let sync = trace[i..].iter().position(|c| *c == FsCall::SyncFile(path.clone())).map(|j| i + j);
-            assert!(
-                matches!((sync, rename), (Some(s), Some(r)) if s < r),
-                "write at {i} is not fsynced before rename: {trace:?}"
-            );
-        }
-        _ => {}
-    });
 }
 
 fn write_step(op: FsOp) -> WriteStep {

@@ -172,7 +172,8 @@ The approver commands' own release checks are in [approval-signers.md](approval-
 | `replace` repairs a damaged name | `crates/iron-vault-store/src/vault/write_tests.rs::a_damaged_name_is_taken_and_replace_repairs_it` | `cargo test` |
 | Every rename syncs its directory, in the store's durable writes | `crates/iron-vault-store/src/durable_faults.rs::trace_properties_hold`, `crates/iron-vault-store/src/durable_faults.rs::trace_properties_catch_a_missing_directory_fsync`, `crates/iron-vault-store/src/config_dir_faults.rs::writes_follow_the_durable_discipline` | `cargo test` |
 | Write commands beside a damaged record leave healthy files byte-identical | **gap**: K-366 | `cargo test` |
-| Every rename in a whole session syncs its directory, export included | **gap**: K-367 | `cargo test` |
+| Every rename, link and unlink in a whole session syncs its directory before the step reports success: init, unlock, add, replace, rm, config approve, lock, approver add and remove, recipient add and remove, recovery check, export with its bundle file, import into a second vault, reset | `crates/iron-vault/tests/lifecycle/session_dir_sync.rs::every_rename_and_unlink_in_a_whole_session_syncs_its_directory` | `cargo test` |
+| The fault filesystem links like the real one, and the trace check skips only failed calls | `crates/iron-vault-store/src/fault_fs.rs::hard_link_refuses_an_existing_name_and_needs_a_dir_sync`, `crates/iron-vault-store/src/fault_fs.rs::succeeded_since_leaves_out_failed_calls` | `cargo test` |
 
 ## 10. Export and import
 

@@ -63,6 +63,10 @@ impl StoreFs for SharedFs {
         self.with(|fs| fs.remove_file(path))
     }
 
+    fn hard_link(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.with(|fs| fs.hard_link(from, to))
+    }
+
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {
         self.with(|fs| fs.sync_dir(dir))
     }

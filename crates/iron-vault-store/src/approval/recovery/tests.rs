@@ -99,7 +99,7 @@ fn assert_recovered_new(setup: &Setup, fs: &FaultFs, state: &ApprovalState, reco
 fn assert_state_untouched(setup: &Setup, fs: &FaultFs, base: usize) {
     let state_dir = setup.state_path().parent().unwrap().to_path_buf();
     let touched = fs.trace()[base..].iter().any(|c| match c {
-        FsCall::Rename { from, to } => from.starts_with(&state_dir) || to.starts_with(&state_dir),
+        FsCall::Rename { from, to } | FsCall::HardLink { from, to } => from.starts_with(&state_dir) || to.starts_with(&state_dir),
         FsCall::CreatePrivate(p)
         | FsCall::WriteAll(p)
         | FsCall::SyncFile(p)

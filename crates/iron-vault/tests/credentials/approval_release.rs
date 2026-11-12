@@ -507,6 +507,7 @@ fn describe(call: &FsCall) -> String {
         FsCall::SyncFile(path) => format!("fsync {}", file_name(path)),
         FsCall::Rename { from, to } => format!("rename {} -> {}", file_name(from), file_name(to)),
         FsCall::RemoveFile(path) => format!("unlink {}", file_name(path)),
+        FsCall::HardLink { from, to } => format!("link {} -> {}", file_name(from), file_name(to)),
         FsCall::SyncDir(dir) => format!("fsync dir {}", file_name(dir)),
         FsCall::ListDir(dir) => format!("list dir {}", file_name(dir)),
         FsCall::ReadBounded(path) => format!("read {}", file_name(path)),

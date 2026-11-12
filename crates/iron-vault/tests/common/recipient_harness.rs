@@ -18,7 +18,7 @@ use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::Capabilities;
-use iron_vault_store::{OsFs, RecipientEntry};
+use iron_vault_store::{OsFs, RecipientEntry, StoreFs};
 use tokio::net::UnixStream;
 use zeroize::Zeroizing;
 
@@ -53,16 +53,21 @@ impl Fixture {
 
     /// [`start`](Self::start) with `upstream` settings, such as a pinned test CA for a mock upstream.
     pub fn start_with(&self, upstream: UpstreamSettings) -> Arc<ServiceContext> {
-        Arc::new(self.context(upstream))
+        Arc::new(self.context(upstream, OsFs))
+    }
+
+    /// [`start_with`](Self::start_with), with every vault and config file going through `fs`.
+    pub fn start_on<F: StoreFs + Send + Sync + 'static>(&self, upstream: UpstreamSettings, fs: F) -> Arc<ServiceContext<F>> {
+        Arc::new(self.context(upstream, fs))
     }
 
     /// [`start`](Self::start) with the `tpm` approver kind offered through the helper socket at `socket`.
     pub fn start_offering_tpm(&self, socket: &Path) -> Arc<ServiceContext> {
         let upstream = UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap(), TransportLimits::default());
-        Arc::new(self.context(upstream).with_tpm_socket(socket.to_owned()))
+        Arc::new(self.context(upstream, OsFs).with_tpm_socket(socket.to_owned()))
     }
 
-    fn context(&self, upstream: UpstreamSettings) -> ServiceContext {
+    fn context<F: StoreFs + Send + Sync + 'static>(&self, upstream: UpstreamSettings, fs: F) -> ServiceContext<F> {
         let paths = ServicePaths {
             profile: DeploymentProfile::Development,
             owner: invoking_user().unwrap(),
@@ -71,11 +76,11 @@ impl Fixture {
             runtime_dir: Some(self.dir.path().to_path_buf()),
         };
         let locks = super::approval_harness::service_locks(&paths);
-        let provisional = locks.unverified_listeners(&OsFs);
+        let provisional = locks.unverified_listeners(&fs);
         let setup = ServiceSetup {
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
             paths,
-            fs: OsFs,
+            fs,
             capabilities: Capabilities::default(),
             upstream,
             hardening: HardeningReport {
@@ -100,7 +105,11 @@ impl Fixture {
 
 /// Sends `request` and answers the prompts in turn with `answers`; the notices and reveals are not needed here, except
 /// that the recovery key shown by `init` is returned.
-pub async fn exchange(service: &Arc<ServiceContext>, request: AdminRequest, answers: &[&[u8]]) -> (AdminResponse, Vec<String>) {
+pub async fn exchange<F: StoreFs + Send + Sync + 'static>(
+    service: &Arc<ServiceContext<F>>,
+    request: AdminRequest,
+    answers: &[&[u8]],
+) -> (AdminResponse, Vec<String>) {
     let (path, stop, task) = spawn_admin(service);
     let mut stream = UnixStream::connect(path).await.unwrap();
     send(&mut stream, &Frame::Request(request)).await;
@@ -123,7 +132,7 @@ pub async fn exchange(service: &Arc<ServiceContext>, request: AdminRequest, answ
 }
 
 /// Initializes the vault and returns the recovery key shown.
-pub async fn init(service: &Arc<ServiceContext>) -> String {
+pub async fn init<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) -> String {
     let (vault, approval) = (VAULT_PASSPHRASE.as_bytes(), APPROVAL_PASSPHRASE.as_bytes());
     let (response, reveals) = exchange(
         service,
@@ -135,7 +144,7 @@ pub async fn init(service: &Arc<ServiceContext>) -> String {
     reveals.into_iter().next().unwrap()
 }
 
-pub async fn unlock(service: &Arc<ServiceContext>) {
+pub async fn unlock<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) {
     let (response, _) = exchange(service, AdminRequest::Unlock, &[VAULT_PASSPHRASE.as_bytes()]).await;
     assert!(matches!(response, AdminResponse::Unlock { .. }), "{response:?}");
 }

@@ -5,8 +5,7 @@ use std::io;
 use std::path::PathBuf;
 
 use crate::ConfigFileName::{Active, ActiveSignature, Pending, StagedSignature};
-use crate::durable_faults::assert_trace_properties;
-use crate::fault_fs::{FaultFs, FsCall, FsOp};
+use crate::fault_fs::{FaultFs, FsCall, FsOp, assert_trace_properties};
 use crate::test_dir::TestDir;
 use crate::{
     ConfigDirLock, ConfigFileName, ConfigWriteError, PublishSet, RemoveStagingError, StoreFs, WriteStep, publish,

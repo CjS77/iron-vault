@@ -29,6 +29,8 @@ pub enum FsOp {
     Rename,
     /// [`StoreFs::remove_file`].
     RemoveFile,
+    /// [`StoreFs::hard_link`].
+    HardLink,
     /// [`StoreFs::sync_dir`].
     SyncDir,
     /// [`StoreFs::list_dir`].
@@ -55,6 +57,13 @@ pub enum FsCall {
     },
     /// The file at this path was unlinked.
     RemoveFile(PathBuf),
+    /// A file was given a second name.
+    HardLink {
+        /// The existing name.
+        from: PathBuf,
+        /// The new name.
+        to: PathBuf,
+    },
     /// This directory was fsynced.
     SyncDir(PathBuf),
     /// This directory was listed.
@@ -72,6 +81,7 @@ impl FsCall {
             Self::SyncFile(_) => FsOp::SyncFile,
             Self::Rename { .. } => FsOp::Rename,
             Self::RemoveFile(_) => FsOp::RemoveFile,
+            Self::HardLink { .. } => FsOp::HardLink,
             Self::SyncDir(_) => FsOp::SyncDir,
             Self::ListDir(_) => FsOp::ListDir,
             Self::ReadBounded(_) => FsOp::ReadBounded,
@@ -100,6 +110,8 @@ struct State {
     visible: BTreeMap<PathBuf, usize>,
     durable: BTreeMap<PathBuf, usize>,
     trace: Vec<FsCall>,
+    /// The indices in `trace` of the calls that failed, ascending.
+    failed: Vec<usize>,
     faults: Vec<Fault>,
     power_cut_at: Option<usize>,
 }
@@ -196,6 +208,17 @@ impl FaultFs {
         self.state.borrow().trace.clone()
     }
 
+    /// The calls from number `from` on that succeeded, in order: what [`assert_trace_properties`] checks, since a
+    /// failed rename or unlink, such as one of a file that is not there, changed nothing a directory fsync must keep.
+    pub fn succeeded_since(&self, from: usize) -> Vec<FsCall> {
+        let st = self.state.borrow();
+        let succeeded = |i: &usize| st.failed.binary_search(i).is_err();
+        (from..st.trace.len())
+            .filter(succeeded)
+            .filter_map(|i| st.trace.get(i).cloned())
+            .collect()
+    }
+
     /// The visible contents of the file at `path`, without recording a call.
     pub fn contents(&self, path: &Path) -> Option<Vec<u8>> {
         let st = self.state.borrow();
@@ -208,10 +231,14 @@ impl FaultFs {
         let index = st.trace.len();
         let op = call.op();
         st.trace.push(call);
-        match st.take_fault(index, op) {
+        let result = match st.take_fault(index, op) {
             Some(kind) => Err(io::Error::new(kind, format!("injected fault at call {index}"))),
             None => apply(&mut st),
+        };
+        if result.is_err() {
+            st.failed.push(index);
         }
+        result
     }
 }
 
@@ -308,6 +335,23 @@ impl StoreFs for FaultFs {
         })
     }
 
+    fn hard_link(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.call(
+            FsCall::HardLink {
+                from: from.to_path_buf(),
+                to: to.to_path_buf(),
+            },
+            |st| {
+                let inode = st.inode_at(from)?;
+                if st.visible.contains_key(to) {
+                    return Err(io::Error::new(io::ErrorKind::AlreadyExists, "file exists"));
+                }
+                st.visible.insert(to.to_path_buf(), inode);
+                Ok(())
+            },
+        )
+    }
+
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {
         self.call(FsCall::SyncDir(dir.to_path_buf()), |st| {
             st.durable.retain(|path, _| path.parent() != Some(dir));
@@ -342,6 +386,35 @@ impl StoreFs for FaultFs {
             }
         })
     }
+}
+
+/// Asserts the durable-write rules on a call trace: every rename, hard link and unlink is followed by an fsync of its
+/// directory, and every write is fsynced before its file is renamed or linked into place.
+///
+/// A failed call changed nothing, so pass a trace without them: [`FaultFs::succeeded_since`], or the trace of a run in
+/// which every call succeeded.
+pub fn assert_trace_properties(trace: &[FsCall]) {
+    let synced_dir_after = |i: usize, path: &Path| {
+        path.parent()
+            .is_some_and(|dir| trace[i..].iter().any(|c| matches!(c, FsCall::SyncDir(d) if d == dir)))
+    };
+    trace.iter().enumerate().for_each(|(i, call)| match call {
+        FsCall::Rename { to, .. } => assert!(synced_dir_after(i, to), "rename at {i} has no directory fsync: {trace:?}"),
+        FsCall::HardLink { to, .. } => assert!(synced_dir_after(i, to), "hard link at {i} has no directory fsync: {trace:?}"),
+        FsCall::RemoveFile(path) => assert!(synced_dir_after(i, path), "unlink at {i} has no directory fsync: {trace:?}"),
+        FsCall::WriteAll(path) => {
+            let placed = trace[i..]
+                .iter()
+                .position(|c| matches!(c, FsCall::Rename { from, .. } | FsCall::HardLink { from, .. } if from == path))
+                .map(|j| i + j);
+            let sync = trace[i..].iter().position(|c| *c == FsCall::SyncFile(path.clone())).map(|j| i + j);
+            assert!(
+                matches!((sync, placed), (Some(s), Some(p)) if s < p),
+                "write at {i} is not fsynced before its rename or link: {trace:?}"
+            );
+        }
+        _ => {}
+    });
 }
 
 #[cfg(test)]
@@ -436,6 +509,35 @@ mod tests {
         fs.crash();
         assert!(fs.contents(&p("/d/a")).is_none());
         fs.create_private(&p("/d/b")).unwrap();
+    }
+
+    #[test]
+    fn hard_link_refuses_an_existing_name_and_needs_a_dir_sync() {
+        let fs = FaultFs::new()
+            .with_durable_file(&p("/d/a"), b"new")
+            .with_durable_file(&p("/d/c"), b"other");
+        assert_eq!(
+            fs.hard_link(&p("/d/a"), &p("/d/c")).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        fs.hard_link(&p("/d/a"), &p("/d/b")).unwrap();
+        assert_eq!(fs.contents(&p("/d/b")).unwrap(), b"new");
+        fs.crash();
+        assert_eq!(fs.contents(&p("/d/b")), None);
+        fs.hard_link(&p("/d/a"), &p("/d/b")).unwrap();
+        fs.sync_dir(&p("/d")).unwrap();
+        fs.crash();
+        assert_eq!(fs.contents(&p("/d/b")).unwrap(), b"new");
+    }
+
+    #[test]
+    fn succeeded_since_leaves_out_failed_calls() {
+        let fs = FaultFs::new().with_durable_file(&p("/d/a"), b"");
+        fs.remove_file(&p("/d/x")).unwrap_err();
+        fs.remove_file(&p("/d/a")).unwrap();
+        fs.sync_dir(&p("/d")).unwrap();
+        assert_eq!(fs.succeeded_since(0), [FsCall::RemoveFile(p("/d/a")), FsCall::SyncDir(p("/d"))]);
+        assert_eq!(fs.succeeded_since(2), [FsCall::SyncDir(p("/d"))]);
     }
 
     #[test]

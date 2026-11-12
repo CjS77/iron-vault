@@ -16,3 +16,4 @@ mod migration_prompt;
 mod migration_rejection;
 mod migration_tpm_pin;
 mod reset;
+mod session_dir_sync;
