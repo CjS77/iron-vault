@@ -288,7 +288,7 @@ fn commit_first(fixture: &Fixture, fs: &FaultFs, _: &mut Vault, approval: &mut A
     let _ = approval.commit(&fixture.lock, fs, &identity(), ApprovalVersion::FIRST, ConfigDigest::of(b"config"));
 }
 
-/// A way to cut a write short at file-system call `n`.
+/// A way to cut a write short at filesystem call `n`.
 type Cut = fn(&FaultFs, usize);
 
 fn fail_at(fs: &FaultFs, n: usize) {
@@ -401,7 +401,8 @@ fn an_approval_state_write_refuses_a_restored_manifest_and_touches_no_file() {
     assert_eq!((mutations(&fs, calls), &approval), (vec![], &before));
 }
 
-/// An approval state has existed, so creating one again would reset its version counters (spec §12).
+/// An approval state has existed, so creating one again would reset its version counters
+/// ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
 #[test]
 fn creating_an_approval_state_the_manifest_records_is_refused_and_touches_no_file() {
     let fixture = Fixture::new("restore-approval-create");
@@ -461,7 +462,7 @@ fn deleting_an_approval_state_of_a_vault_that_never_held_a_credential_is_refused
     assert_deletion_refused(&fixture, &fs, &mut vault, behind(StateFileName::approval_state(), Some(2), None));
 }
 
-/// The number of file-system calls `Vault::create_approval_state` makes on a new vault before its manifest step, and
+/// The number of filesystem calls `Vault::create_approval_state` makes on a new vault before its manifest step, and
 /// in it.
 fn creation_calls(fixture: &Fixture) -> (usize, usize) {
     let fs = FaultFs::new();

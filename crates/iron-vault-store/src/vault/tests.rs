@@ -31,7 +31,8 @@ impl AccountDirectory for NoAccounts {
     }
 }
 
-/// The §6 example, with a real digest standing in for its `blake2b:...` placeholder.
+/// The [spec §6](../../../../design/iron-vault-specification.md#6-credential-records-and-configuration) example config,
+/// with a real digest in place of its `blake2b:...` placeholder.
 const SPEC_EXAMPLE: &str = r#"schema_version = 1
 
 [listeners.local]

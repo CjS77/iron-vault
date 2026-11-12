@@ -1,4 +1,4 @@
-//! Vault writes end to end, and under an injected failure or a power cut at every file-system step.
+//! Vault writes end to end, and under an injected failure or a power cut at every filesystem step.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -22,7 +22,7 @@ use iron_vault_kinds::{SecretField, ShortSecret};
 /// The credentials every vault under test starts with.
 const SEEDED: [&str; 2] = ["keep", "target"];
 
-/// Credential name to stored key: what a reopened vault holds, compared across crash points whatever the record IDs.
+/// Credential name to stored key: what a reopened vault holds, compared across crash points independent of the record IDs.
 type State = BTreeMap<String, String>;
 
 /// One vault write under test, run against a vault seeded with [`SEEDED`].
@@ -647,7 +647,7 @@ fn approver() -> PinnedApprover {
     PinnedApprover::from_seed(1)
 }
 
-/// Durably writes `state` as the approval state, whatever its state generation, the way only a test can.
+/// Durably writes `state` as the approval state at any state generation, which only a test can do.
 fn plant_approval(setup: &Setup, fs: &impl StoreFs, state: &ApprovalState) {
     durable_replace(
         &setup.lock,

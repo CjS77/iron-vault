@@ -1,4 +1,4 @@
-//! Loading one record file and classifying it against its manifest entry.
+//! Loading the record files the manifest lists, each classified against its manifest entry as healthy or damaged.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -11,7 +11,7 @@ use crate::{
     VaultManifest, decode, open, read_state_file, record_digest,
 };
 
-/// The largest record file accepted, in bytes on disk; a longer file is damaged and is never read in full.
+/// The largest record file accepted, in bytes on disk. A longer file is damaged and is never read in full.
 ///
 /// A v0 record holds a name of at most 64 bytes, a handful of permitted origins of at most 263 bytes each, and a
 /// static key or a Basic username and password. Real provider keys and passwords are well under 1 KiB, so a record is
@@ -20,7 +20,7 @@ use crate::{
 pub const MAX_RECORD_FILE_LEN: u64 = 64 * 1024;
 
 /// The largest record payload accepted. An `age` file is never shorter than its plaintext, so a file within
-/// [`MAX_RECORD_FILE_LEN`] never reaches this; it bounds decryption on its own all the same.
+/// [`MAX_RECORD_FILE_LEN`] never reaches this, but it bounds decryption without relying on the file limit.
 const MAX_RECORD_PLAINTEXT: usize = 64 * 1024;
 
 /// Why one record did not load: the reported damage, and the kind of the read failure when reading the file failed.
@@ -68,8 +68,8 @@ pub(super) fn load_records(
     })
 }
 
-/// Reads the record file `entry` vouches for, checks its digest, and only then decrypts, decodes and checks it is the
-/// record the entry names.
+/// Reads the record file `entry` vouches for and checks its digest. Only then does it decrypt and decode the file, and
+/// check that it is the record the entry names.
 ///
 /// Anyone with the vault's public key can write a well-formed, validly encrypted record file, so the manifest digest is
 /// the only proof that a file is the one the vault wrote. A file whose digest differs is reported as substituted and is

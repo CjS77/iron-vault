@@ -1,4 +1,5 @@
-//! What opening the vault found besides its healthy records.
+//! What opening or writing the vault found besides its healthy records and its change: the reports the service shows
+//! in `status` and writes to the audit log.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -8,12 +9,13 @@ use iron_vault_policy::CredentialName;
 
 use crate::{ErrorKindLabel, RecordId, StateFileName};
 
-/// Why a record the manifest lists did not load (spec §13).
+/// Why a record the manifest lists did not load
+/// ([spec §13](../../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RecordDamage {
     /// The record file does not exist.
     Missing,
-    /// The file is not the one the manifest vouches for: its digest differs (it is then never decrypted), or it decrypts
+    /// The file is not the one the manifest vouches for: its digest differs, and it is never decrypted, or it decrypts
     /// to a record with another record ID or name.
     Substituted,
     /// The file could not be read or is too large, or its digest matches but it does not decrypt or decode.
@@ -21,7 +23,7 @@ pub enum RecordDamage {
 }
 
 impl RecordDamage {
-    /// What an administrator should do about this damage.
+    /// Returns what an administrator should do about this damage.
     pub fn remediation(self) -> &'static str {
         match self {
             Self::Missing => "restore the file from a backup of this vault, or re-enter the credential with `iron-vault replace`",
@@ -48,7 +50,8 @@ impl fmt::Display for RecordDamage {
     }
 }
 
-/// One record the manifest lists that did not load: what the audit log needs to find and fix it, and nothing from the file.
+/// One record the manifest lists that did not load: what the audit log needs to find and fix it, and nothing from the
+/// file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DamagedRecord {
     /// The credential the manifest names for the record.
@@ -84,8 +87,9 @@ impl OpenReport {
         }
     }
 
-    /// Whether `approval.age` exists but the manifest does not record it: an approval state creation was interrupted
-    /// before its manifest write. The service finishes it with `Vault::record_approval_state`.
+    /// Returns `true` if and only if `approval.age` exists but the manifest does not record it: an approval state
+    /// creation was interrupted before its manifest write. The service finishes it with
+    /// [`Vault::record_approval_state`](super::Vault::record_approval_state).
     pub fn approval_state_unrecorded(&self) -> bool {
         self.approval_state_unrecorded
     }
@@ -95,7 +99,8 @@ impl OpenReport {
         &self.damaged
     }
 
-    /// Each record the manifest lists that did not load, with its ID, file and the kind of its read failure, in record ID order.
+    /// Each record the manifest lists that did not load, with its ID, file and the kind of its read failure, in record
+    /// ID order.
     pub fn damaged_records(&self) -> &[DamagedRecord] {
         &self.damaged_records
     }
@@ -136,7 +141,8 @@ impl WriteReport {
         &self.short_secrets
     }
 
-    /// The unindexed record files the write removed before it changed anything: left by an interrupted write, or planted.
+    /// The unindexed record files the write removed before it changed anything: left by an interrupted write, or
+    /// planted.
     pub fn removed_unindexed(&self) -> &BTreeSet<StateFileName> {
         &self.removed_unindexed
     }

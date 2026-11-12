@@ -1,4 +1,4 @@
-//! Creating an empty vault: the manifest that every later write builds on.
+//! Creating an empty vault for `init`: the first manifest, which every later write builds on.
 
 use std::collections::BTreeMap;
 
@@ -14,18 +14,21 @@ impl Vault {
     /// refuses a state directory that already holds a manifest or any record file, and never overwrites either.
     ///
     /// It also refuses `approval.age` without a manifest: approval counters start at zero only when a vault is created
-    /// and are never reset (spec §12), so a new vault ID beside an earlier vault's counters would be a reset. The
-    /// envelope files `identity.age`, `recipients.age`, `operational.age` and `approver-<approver ID>.age` do not block
-    /// creation, because initialization writes them around this call and a retried initialization must still create. Initialization must
-    /// write `identity.age` durably before the first record is sealed (EP-24).
+    /// and are never reset
+    /// ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)), so a new
+    /// vault ID beside an earlier vault's counters would be a reset. The envelope files `identity.age`,
+    /// `recipients.age`, `operational.age` and `approver-<approver ID>.age` do not block creation, because `init`
+    /// writes them around this call and a retried `init` must still create. `init` must write `identity.age` durably
+    /// before the first record is sealed (EP-24).
     ///
     /// A [`VaultError::CommitUncertain`] means the manifest may not survive power loss: open the vault to see whether
-    /// it exists. The caller has already authorized initialization; this performs it.
+    /// it exists. The caller has already authorized `init`; this performs it.
     pub fn create(lock: &StateDirLock, fs: &impl StoreFs, identity: VaultIdentity) -> Result<Vault, VaultError> {
         Self::create_with_id(lock, fs, identity, VaultId::new_random())
     }
 
-    /// [`Vault::create`] for a vault ID chosen beforehand, so a file written before the manifest can name the vault.
+    /// Runs [`Vault::create`] for a vault ID chosen beforehand, so a file written before the manifest can name the
+    /// vault.
     pub fn create_with_id(lock: &StateDirLock, fs: &impl StoreFs, identity: VaultIdentity, vault_id: VaultId) -> Result<Vault, VaultError> {
         refuse_existing_vault(&list_state_dir(lock, fs)?)?;
         let manifest = VaultManifest::first(vault_id).map_err(VaultError::NextManifest)?;

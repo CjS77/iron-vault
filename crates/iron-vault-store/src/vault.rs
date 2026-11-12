@@ -1,12 +1,30 @@
-//! Opening the vault: the manifest, then every record it lists, with damaged records isolated (spec §13, §15).
+//! The open vault: the store's view of the credential records, which the service opens at `unlock` and writes for
+//! `add`, `replace` and `rm`
+//! ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
+//! [spec §15](../../../design/iron-vault-specification.md#15-service-states-and-errors)).
+//!
+//! An open reads the manifest, then every record it lists, and isolates damaged records:
+//!
+//! ```text
+//! list state dir ─→ read manifest ─→ read approval.age ─→ pair check ─→ load each listed record
+//!                        │                  │                  │                  │
+//!                   damaged: whole     damaged: whole     partial restore:   damaged: that record
+//!                   vault refused      vault refused      vault refused      only, others load
+//! ```
 //!
 //! The manifest is shared state: if it cannot be trusted, no record can be told from a planted one, so the whole vault
-//! is unavailable. So is the approval state, whose state generation the manifest records: a pair of the two that no
-//! sequence of writes leaves together is a partial restore, and refused. A record is not shared: a damaged one takes
-//! down only the routes that use it, and the others load.
+//! is unavailable. So is the approval state, whose state generation the manifest records. A manifest and approval state
+//! that no sequence of writes leaves together are a partial restore, and refused. A record is not shared: a damaged one
+//! takes down only the routes that use it.
 //!
-//! Vault writes (spec §6, §13) make the durable replace of the manifest their single commit point: a new record file
-//! is written before it and a superseded one removed after it, so a crash at any step leaves the old or the new vault.
+//! Vault writes ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)) make the durable
+//! replace of the manifest their one commit point. A new record file is written before it and a superseded one removed
+//! after it, so a crash at any step leaves the old or the new vault:
+//!
+//! ```text
+//! write record-<new>.age ─→ replace manifest.age  ← commit ─→ remove record-<old>.age
+//! ```
 
 mod create;
 mod load;
@@ -44,8 +62,10 @@ pub enum VaultError {
     /// There is no manifest, no record file and no approval state: no vault has been created in this state directory.
     #[error("the vault is not initialized: the state directory holds no manifest and no credential records")]
     NotInitialized,
-    /// Shared state cannot be trusted (spec §13, §15). An open refuses the whole vault, and a write refuses to change
-    /// it and touches no file.
+    /// Shared state cannot be trusted
+    /// ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
+    /// [spec §15](../../../design/iron-vault-specification.md#15-service-states-and-errors)). An open refuses the whole
+    /// vault, and a write refuses to change it and touches no file.
     #[error("vault shared state file {file} is damaged ({damage}); the vault is unavailable and may require recovery")]
     SharedStateDamaged {
         /// The damaged file.
@@ -62,7 +82,8 @@ pub enum VaultError {
     /// A vault cannot be created where a manifest already exists.
     #[error("the vault is already initialized: the state directory holds a manifest")]
     AlreadyInitialized,
-    /// `add` refuses a name the manifest already lists, whether its record is healthy or damaged (spec §6).
+    /// `add` refuses a name the manifest already lists, whether its record is healthy or damaged
+    /// ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
     #[error("credential {0} already exists; replacing it requires an explicit replace")]
     NameTaken(CredentialName),
     /// `replace` and `remove` need a name the manifest lists.
@@ -116,7 +137,8 @@ pub enum SharedStateDamage {
     #[error("it is missing, but credential record files exist")]
     MissingWithRecords,
     /// The manifest is gone but approval state remains, so a vault existed here and was damaged or half removed;
-    /// creating a new one would reset its approval counters (spec §12).
+    /// creating a new one would reset its approval counters
+    /// ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
     #[error("it is missing, but approval.age from an earlier vault remains; recover or reset the vault rather than initialize")]
     MissingWithApprovalState,
     /// The file could not be read, or is over its size limit.
@@ -129,7 +151,9 @@ pub enum SharedStateDamage {
     #[error(transparent)]
     ApprovalState(ApprovalStateError),
     /// The manifest and the approval state are not a pair any sequence of writes leaves: the named file was restored
-    /// from an older copy or deleted. It is never repaired automatically (spec §12); the owner recovers or resets.
+    /// from an older copy or deleted. It is never repaired automatically
+    /// ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)); the owner
+    /// recovers or resets.
     #[error(transparent)]
     PartialRestore(PartialRestore),
 }
@@ -138,8 +162,8 @@ pub enum SharedStateDamage {
 ///
 /// The identity may be shared with other holders; its key bytes are cleared when the last holder drops it.
 ///
-/// Records the manifest lists but that failed to load are known by name only, so their routes can be refused rather
-/// than reported as unknown. `Debug` shows credential names, never material.
+/// Records the manifest lists but that failed to load are known by name only, so their routes are refused as unusable,
+/// not reported as unknown. `Debug` shows credential names, never material.
 pub struct Vault {
     /// The state directory the vault was opened or created in; a write refuses any other directory's lock.
     dir: PathBuf,
@@ -159,7 +183,7 @@ impl Vault {
     /// The manifest and the approval state must be a pair some sequence of writes leaves together: a manifest or
     /// approval state restored alone from an older copy, or an approval state deleted, fails the open as a partial
     /// restore before any record is read. Restoring both together is not detected here: that needs an anchor outside
-    /// the state directory (spec §12).
+    /// the state directory ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
     ///
     /// An approval state the manifest does not yet record, left by a crash inside [`Vault::create_approval_state`], is
     /// a valid pair: the open succeeds, flags it in the [`OpenReport`], and writes nothing.
@@ -198,7 +222,7 @@ impl Vault {
         ApprovalState::load(lock, fs, &self.identity, self.manifest.vault_id())
     }
 
-    /// The vault identity, lent to the approval transaction that initialization runs on a vault it just created.
+    /// Lends the vault identity to the approval transaction that `init` runs on a vault it just created.
     pub(crate) fn identity(&self) -> &VaultIdentity {
         &self.identity
     }
@@ -208,15 +232,15 @@ impl Vault {
         &self.manifest
     }
 
-    /// The secret material of the healthy record named `name`; `None` for a damaged or absent one.
+    /// Returns the secret material of the healthy record named `name`, or `None` for a damaged or absent one.
     pub fn material(&self, name: &CredentialName) -> Option<&CredentialMaterial> {
         self.healthy.get(name).map(CredentialRecord::material)
     }
 
-    /// The healthy record named `name`; `None` for a damaged or absent one.
+    /// Returns the healthy record named `name`, or `None` for a damaged or absent one.
     ///
     /// Resolving through the record keeps its permitted origins with the value it produced, which
-    /// [`material`](Self::material) alone cannot (glossary: *Resolved credential*).
+    /// [`material`](Self::material) alone cannot ([glossary: *Resolved credential*](../../../design/glossary.md#terms)).
     pub fn record(&self, name: &CredentialName) -> Option<&CredentialRecord> {
         self.healthy.get(name)
     }
@@ -247,12 +271,13 @@ impl fmt::Debug for Vault {
     }
 }
 
-/// The UTF-8 names in the state directory; no store file has any other kind of name.
+/// Lists the UTF-8 names in the state directory; no store file has any other kind of name.
 fn list_state_dir(lock: &StateDirLock, fs: &impl StoreFs) -> Result<Vec<String>, VaultError> {
     let names = fs.list_dir(lock.dir()).map_err(|e| VaultError::ListStateDir { kind: e.kind() })?;
     Ok(names.into_iter().filter_map(|name| name.into_string().ok()).collect())
 }
 
+/// Reads and opens the manifest. A missing one means no vault, unless other files show a vault existed here.
 fn read_manifest(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity, files: &[String]) -> Result<VaultManifest, VaultError> {
     let file = StateFileName::manifest();
     let damaged = |damage| VaultError::SharedStateDamaged {
@@ -270,8 +295,8 @@ fn read_manifest(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentit
     }
 }
 
-/// The approval state's state generation and peer generation on disk, or `None` while `approval.age` does not exist.
-/// An approval state that cannot be read or opened as this vault's is damaged shared state.
+/// Returns the approval state's state generation and peer generation on disk, or `None` while `approval.age` does not
+/// exist. An approval state that cannot be read or opened as this vault's is damaged shared state.
 fn approval_generations(
     lock: &StateDirLock,
     fs: &impl StoreFs,
@@ -300,7 +325,7 @@ fn refuse_partial_restore(manifest: &VaultManifest, approval: Option<(StateGener
     })
 }
 
-/// Why a state directory without a manifest is damaged shared state, or `None` when it holds no vault at all.
+/// Returns why a state directory without a manifest is damaged shared state, or `None` when it holds no vault at all.
 fn classify_missing_manifest(files: &[String]) -> Option<SharedStateDamage> {
     let approval = StateFileName::approval_state();
     if files.iter().any(|f| is_record_file_name(f)) {
@@ -312,8 +337,8 @@ fn classify_missing_manifest(files: &[String]) -> Option<SharedStateDamage> {
     }
 }
 
-/// Every `record-*.age` name the manifest does not list. A name that is not a valid state file name is left out: the
-/// service could neither have written it nor remove it.
+/// Returns every `record-*.age` name the manifest does not list. A name that is not a valid state file name is left
+/// out: the service could neither have written it nor remove it.
 fn unindexed_files(manifest: &VaultManifest, files: &[String]) -> BTreeSet<StateFileName> {
     let indexed: BTreeSet<StateFileName> = manifest.entries().keys().map(StateFileName::record).collect();
     let candidates = files
@@ -323,7 +348,7 @@ fn unindexed_files(manifest: &VaultManifest, files: &[String]) -> BTreeSet<State
     candidates.filter(|name| !indexed.contains(name)).collect()
 }
 
-/// Whether `name` has the shape of a record file name, whatever sits between the prefix and the suffix.
+/// Returns `true` if and only if `name` starts with `record-` and ends with `.age`, with anything between.
 pub(crate) fn is_record_file_name(name: &str) -> bool {
     name.starts_with("record-") && name.ends_with(".age")
 }
