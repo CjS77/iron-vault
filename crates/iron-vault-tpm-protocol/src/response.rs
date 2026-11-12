@@ -1,5 +1,8 @@
-//! The helper response `IVTR` v1: a status byte, then the fields that status carries (`design/tpm-approval-signer.md`
-//! "Helper protocol").
+//! Encodes and decodes the helper response `IVTR` v1: a status byte, then the fields that status carries
+//! (`design/tpm-approval-signer.md` "Helper protocol").
+//!
+//! The helper writes exactly one response per connection, and the service turns each status into what it tells the
+//! owner, such as a wrong PIN or a wait before the TPM accepts another try.
 
 use crate::frame::framed;
 use crate::request::{put_key, read_key};
@@ -9,11 +12,12 @@ use crate::{PUBLIC_KEY_LEN, ProtocolError, SIGNATURE_LEN, TpmKeyParts};
 const MAGIC: [u8; 4] = *b"IVTR";
 const VERSION: u8 = 1;
 
-/// The helper's one answer to a request.
+/// Answers one helper request.
 ///
-/// A refusal that needs no authorization ([`NotThisTpm`](Self::NotThisTpm), [`KeyMismatch`](Self::KeyMismatch),
-/// [`WeakDaSettings`](Self::WeakDaSettings), [`RefusedMessage`](Self::RefusedMessage), [`Malformed`](Self::Malformed))
-/// is given before any authorized command, so it spends no dictionary-attack try.
+/// The helper sends each refusal that needs no authorization ([`NotThisTpm`](Self::NotThisTpm),
+/// [`KeyMismatch`](Self::KeyMismatch), [`WeakDaSettings`](Self::WeakDaSettings), [`RefusedMessage`](Self::RefusedMessage),
+/// [`Malformed`](Self::Malformed)) before it runs any authorized TPM command, so these refusals spend no
+/// dictionary-attack try.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Response {
     /// `00`: the key exists.
@@ -53,7 +57,7 @@ pub enum Response {
 }
 
 impl Response {
-    /// The status byte.
+    /// Returns the status byte that opens the encoded response.
     pub fn status(&self) -> u8 {
         match self {
             Response::Created { .. } => 0x00,
@@ -69,7 +73,7 @@ impl Response {
         }
     }
 
-    /// The response as a frame, refused when it is over the frame limit.
+    /// Encodes the response as a frame, refusing one over the frame limit.
     pub fn encode(&self) -> Result<Vec<u8>, ProtocolError> {
         let mut body = MAGIC.to_vec();
         body.extend([VERSION, self.status()]);
@@ -86,7 +90,7 @@ impl Response {
         framed(&body).map(|frame| frame.to_vec())
     }
 
-    /// The response a frame body holds, accepted only in its one encoding.
+    /// Decodes a frame body, accepting only the response's one encoding.
     pub fn decode(body: &[u8]) -> Result<Self, ProtocolError> {
         let mut reader = Reader::with_header(body, MAGIC, VERSION)?;
         let response = match reader.u8()? {

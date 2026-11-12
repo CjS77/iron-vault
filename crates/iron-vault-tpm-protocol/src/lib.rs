@@ -1,8 +1,22 @@
-//! The TPM signing helper's wire protocol, the TPM key blob, and the TPM approval PIN with the authorization value
-//! derived from it (`design/tpm-approval-signer.md`).
+//! The shared language between the service and the TPM signing helper: the helper's wire protocol, the TPM key blob,
+//! and the TPM approval PIN with the authorization value derived from it (`design/tpm-approval-signer.md`).
 //!
-//! Both the service and `iron-vault-tpm-signer` use this crate, so it has no TPM dependency: the service never links
-//! `tpm2-tss`. It checks framing only; the TPM structures inside a key blob are the helper's to parse.
+//! The service (`iron-vault`) and the helper (`iron-vault-tpm-signer`) both depend on this crate, so it has no TPM
+//! dependency: the service never links `tpm2-tss` and never opens the TPM. Each approval signature is one exchange on
+//! the helper socket:
+//!
+//! ```text
+//! service                                               TPM signing helper (one process per connection)
+//!    │ read approver-<approver ID>.tpm ─▶ TpmKeyBlob
+//!    │ derive TpmAuthValue from the PIN the owner typed
+//!    │── Request::Sign { auth, key, pinned_key, message } ──▶ │ decode; refuse what needs no TPM try
+//!    │                                                        │ load the key, check it, sign with the TPM
+//!    │◀──────────── Response::Signed { signature } ───────────│ or WrongPin, LockedOut, NotThisTpm, ...
+//!    └ connection closes
+//! ```
+//!
+//! Enrollment is the same shape with [`Request::Create`] and [`Response::Created`]; the service then writes the key's
+//! parts to the blob. This crate checks framing only: the TPM structures inside a blob are the helper's to parse.
 
 mod blob;
 mod frame;
@@ -26,8 +40,9 @@ pub const SIGNATURE_LEN: usize = 64;
 /// The length of an approver ID.
 pub const APPROVER_ID_LEN: usize = 16;
 
-/// The three parts of a TPM approval key the TPM hands back at creation, which every signature needs again. None is
-/// secret: the private area is wrapped by the parent and loads only on the TPM that made it.
+/// Holds the three parts of a TPM approval key that the TPM returns at creation and that every signature needs again.
+///
+/// None is secret: the parent wraps the private area, and it loads only on the TPM that made it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TpmKeyParts {
     /// The transient primary's name: its `nameAlg` and the digest of its public area.
@@ -38,7 +53,7 @@ pub struct TpmKeyParts {
     pub private: Vec<u8>,
 }
 
-/// Why bytes are not a well-formed helper frame, request, response or key blob.
+/// Says why bytes are not a well-formed helper frame, request, response or key blob.
 #[derive(Debug, thiserror::Error)]
 pub enum ProtocolError {
     /// The frame or blob is longer than its limit; nothing past the length was read.

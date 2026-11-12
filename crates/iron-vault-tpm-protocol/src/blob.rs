@@ -1,5 +1,13 @@
-//! The TPM key blob `IVTK` v1, kept as `approver-<approver ID>.tpm` (`design/tpm-approval-signer.md` "The TPM key
-//! blob").
+//! Encodes and decodes the TPM key blob `IVTK` v1, which the store keeps as `approver-<approver ID>.tpm`
+//! (`design/tpm-approval-signer.md` "The TPM key blob").
+//!
+//! The blob holds what the helper needs to load a TPM approval key again: the parent's name and the key's public and
+//! private areas. The service writes it after enrollment and sends its parts in each sign request.
+//!
+//! ```text
+//! "IVTK" | version 01 | approver ID (16 bytes) | primary name | public area | private area
+//!                                                 └──────── each a u64 length, then the bytes ────────┘
+//! ```
 
 use crate::request::{put_key, read_key};
 use crate::wire::Reader;
@@ -11,7 +19,7 @@ const VERSION: u8 = 1;
 /// The longest key blob written or read, checked before anything is read.
 pub const MAX_TPM_KEY_BLOB_LEN: usize = 4096;
 
-/// A TPM approval key's parts as the service keeps them, bound to its approver ID.
+/// Holds a TPM approval key's parts as the service keeps them, bound to its approver ID.
 ///
 /// The service checks only the framing and the approver ID; the TPM structures are the helper's to parse.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,22 +29,22 @@ pub struct TpmKeyBlob {
 }
 
 impl TpmKeyBlob {
-    /// The blob for approver `approver_id`'s key.
+    /// Binds `key` to approver `approver_id`.
     pub fn new(approver_id: [u8; APPROVER_ID_LEN], key: TpmKeyParts) -> Self {
         Self { approver_id, key }
     }
 
-    /// The approver the key belongs to.
+    /// Returns the approver the key belongs to.
     pub fn approver_id(&self) -> &[u8; APPROVER_ID_LEN] {
         &self.approver_id
     }
 
-    /// The key's parts, for a sign request.
+    /// Returns the key's parts, for a sign request.
     pub fn key(&self) -> &TpmKeyParts {
         &self.key
     }
 
-    /// The blob's bytes, refused when they are over [`MAX_TPM_KEY_BLOB_LEN`].
+    /// Encodes the blob, refusing a result over [`MAX_TPM_KEY_BLOB_LEN`].
     pub fn encode(&self) -> Result<Vec<u8>, ProtocolError> {
         let mut out = MAGIC.to_vec();
         out.push(VERSION);
@@ -46,8 +54,9 @@ impl TpmKeyBlob {
         Ok(out)
     }
 
-    /// The blob `bytes` hold, accepted only in its one encoding and only for approver `expected`, the ID in the
-    /// blob's file name.
+    /// Decodes a blob, accepting only its one encoding and only for approver `expected`, the ID in the blob's file name.
+    ///
+    /// The ID check stops a blob copied under another approver's file name from being used for that approver.
     pub fn decode(bytes: &[u8], expected: &[u8; APPROVER_ID_LEN]) -> Result<Self, ProtocolError> {
         check_len(bytes.len())?;
         let mut reader = Reader::with_header(bytes, MAGIC, VERSION)?;

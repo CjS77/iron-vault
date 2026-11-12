@@ -1,5 +1,13 @@
-//! The TPM approval PIN and the authorization value the service derives from it (`design/tpm-approval-signer.md`
-//! "The approval PIN").
+//! Checks the TPM approval PIN and derives the authorization value the TPM approval key is created under
+//! (`design/tpm-approval-signer.md` "The approval PIN").
+//!
+//! The service reads the PIN at a prompt, derives the value at once and drops the PIN; only the value crosses the
+//! helper socket:
+//!
+//! ```text
+//! PIN typed by the owner ──▶ TpmApprovalPin ──derive(approver ID)──▶ TpmAuthValue ──helper socket──▶ TPM
+//!                             (dropped at once)                       (held for one exchange)
+//! ```
 
 use std::fmt;
 
@@ -17,11 +25,13 @@ const AUTH_VALUE_PERSONA: &[u8] = b"iv-tpm-pin-v1";
 /// The length of an authorization value: the SHA-256 `nameAlg` digest length, the most a TPM accepts for the key.
 pub const AUTH_VALUE_LEN: usize = 32;
 
-/// The fewest Unicode scalar values a TPM approval PIN has at enrollment: the TPM's dictionary-attack lockout, not the
-/// PIN's length, limits guessing, so the minimum is short enough to type at every approval.
+/// The fewest Unicode scalar values a TPM approval PIN has at enrollment.
+///
+/// The TPM's dictionary-attack lockout, not the PIN's length, limits guessing, so the minimum is short enough to type
+/// at every approval.
 pub const MIN_PIN_SCALARS: usize = 6;
 
-/// Why the two entries of a new TPM approval PIN do not make one. No variant carries what was typed.
+/// Says why the two entries of a new TPM approval PIN do not make a valid PIN. No variant carries what was typed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PinRuleError {
     /// The entry and its repeat differ.
@@ -35,27 +45,33 @@ pub enum PinRuleError {
     TooShort,
 }
 
-/// The secret that authorizes a TPM approval key, as the owner typed it: never trimmed or normalized.
+/// Holds the TPM approval PIN exactly as the owner typed it, never trimmed or normalized.
 ///
-/// Its text is cleared on drop and never shown by `Debug`. The service turns it into a [`TpmAuthValue`] at once and
-/// drops it.
+/// The service turns it into a [`TpmAuthValue`] at once and drops it. Its text is cleared on drop and never shown by
+/// `Debug`.
 pub struct TpmApprovalPin(Zeroizing<String>);
 
 impl TpmApprovalPin {
-    /// The PIN the owner typed. The PIN rules are checked at enrollment, not here; a prompt answer goes through
+    /// Wraps text the owner typed, without checking the PIN rules.
+    ///
+    /// Enrollment checks the rules through [`from_entries`](Self::from_entries), and a prompt answer goes through
     /// [`answered`](Self::answered).
     pub fn new(text: String) -> Self {
         Self(Zeroizing::new(text))
     }
 
-    /// The PIN typed at a prompt, or `None` when it is shorter than [`MIN_PIN_SCALARS`] scalar values (empty included).
+    /// Accepts a PIN typed at a prompt, or returns `None` when it is shorter than [`MIN_PIN_SCALARS`] scalar values,
+    /// empty included.
+    ///
     /// Enrollment refuses such a PIN, so it can never be right, and asking the TPM would only spend a lockout try.
     pub fn answered(text: &str) -> Option<Self> {
         (text.chars().count() >= MIN_PIN_SCALARS).then(|| Self::new(text.to_owned()))
     }
 
-    /// The PIN a new TPM approver is enrolled with, from the owner's two entries: equal (compared in constant time),
-    /// UTF-8, and at least [`MIN_PIN_SCALARS`] scalar values. Nothing is trimmed or normalized.
+    /// Builds a new TPM approver's PIN from the owner's two entries.
+    ///
+    /// The entries must be equal (compared in constant time), UTF-8, and at least [`MIN_PIN_SCALARS`] scalar values.
+    /// Nothing is trimmed or normalized, so `" 1234 "` is a valid six-character PIN with two spaces.
     pub fn from_entries(entry: &[u8], repeated: &[u8]) -> Result<Self, PinRuleError> {
         if !bool::from(entry.ct_eq(repeated)) {
             return Err(PinRuleError::Differ);
@@ -74,17 +90,17 @@ impl fmt::Debug for TpmApprovalPin {
     }
 }
 
-/// The 32-byte authorization value of a TPM approval key: BLAKE2b-256, personalized, of the approver ID's 16 bytes
+/// Holds the 32-byte authorization value of a TPM approval key: personalized BLAKE2b-256 of the approver ID's 16 bytes
 /// followed by the PIN's UTF-8 bytes.
 ///
-/// Binding the approver ID gives two keys with one PIN different values. A fast hash is enough: nothing derived from
-/// the PIN is written anywhere, a salted session keeps it off the TPM bus, and the TPM's lockout limits guessing.
-/// Cleared on drop and never shown by `Debug`.
+/// Hashing in the approver ID gives two keys that share a PIN different values. A fast hash is enough: nothing derived
+/// from the PIN is written anywhere, a salted session keeps the value off the TPM bus, and the TPM's lockout limits
+/// guessing. The value is cleared on drop and never shown by `Debug`.
 #[derive(Clone)]
 pub struct TpmAuthValue(Zeroizing<[u8; AUTH_VALUE_LEN]>);
 
 impl TpmAuthValue {
-    /// The authorization value for approver `approver_id` under `pin`.
+    /// Derives the authorization value for approver `approver_id` under `pin`.
     pub fn derive(approver_id: &[u8; APPROVER_ID_LEN], pin: &TpmApprovalPin) -> Self {
         let mut value = Zeroizing::new([0; AUTH_VALUE_LEN]);
         let mut hasher = Blake2b256::new_customized(AUTH_VALUE_PERSONA);
@@ -94,12 +110,12 @@ impl TpmAuthValue {
         Self(value)
     }
 
-    /// The value as it crossed the helper socket.
+    /// Wraps a value the helper read from the socket.
     pub fn from_bytes(bytes: [u8; AUTH_VALUE_LEN]) -> Self {
         Self(Zeroizing::new(bytes))
     }
 
-    /// The value's bytes, for the TPM.
+    /// Returns the value's bytes, to send to the helper or hand to the TPM.
     pub fn as_bytes(&self) -> &[u8; AUTH_VALUE_LEN] {
         &self.0
     }

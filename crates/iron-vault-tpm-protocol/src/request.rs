@@ -1,4 +1,12 @@
-//! The helper request `IVTQ` v1 (`design/tpm-approval-signer.md` "Helper protocol").
+//! Encodes and decodes the helper request `IVTQ` v1, the one message the service sends on each helper connection
+//! (`design/tpm-approval-signer.md` "Helper protocol").
+//!
+//! ```text
+//! "IVTQ" | version 01 | 01 create | auth value (32 bytes)
+//! "IVTQ" | version 01 | 02 sign   | auth value (32 bytes) | primary name | public | private | pinned key (65) | message
+//! ```
+//!
+//! The primary name, public area, private area and message are each a `u64` length, then the bytes.
 
 use zeroize::Zeroizing;
 
@@ -11,7 +19,7 @@ const VERSION: u8 = 1;
 const CREATE: u8 = 0x01;
 const SIGN: u8 = 0x02;
 
-/// One request to the TPM signing helper; one per connection.
+/// Asks the TPM signing helper to create or use a TPM approval key. Each connection carries exactly one request.
 #[derive(Debug)]
 pub enum Request {
     /// `01`: create a TPM approval key under this authorization value.
@@ -23,7 +31,7 @@ pub enum Request {
     Sign(SignRequest),
 }
 
-/// The fields of a sign request.
+/// Carries what the helper needs to load a TPM approval key, check it and sign one message.
 #[derive(Debug)]
 pub struct SignRequest {
     /// The key's authorization value.
@@ -32,14 +40,16 @@ pub struct SignRequest {
     pub key: TpmKeyParts,
     /// The pinned approver's public key, which the loaded key must be.
     pub pinned_key: [u8; PUBLIC_KEY_LEN],
-    /// The message to sign. The helper signs only the three it recognises, and decoding does not judge it, so a
-    /// request with any other message still decodes and gets its own refusal.
+    /// The message to sign. The helper signs only the three payloads it recognises. Decoding does not judge the
+    /// message, so a request with any other message still decodes and gets its own refusal,
+    /// [`Response::RefusedMessage`](crate::Response::RefusedMessage).
     pub message: Vec<u8>,
 }
 
 impl Request {
-    /// The request as a frame, refused when it is over the frame limit. Zeroized on drop: it holds the authorization
-    /// value.
+    /// Encodes the request as a frame, refusing one over the frame limit.
+    ///
+    /// The frame is zeroized on drop because it holds the authorization value.
     pub fn encode(&self) -> Result<Zeroizing<Vec<u8>>, ProtocolError> {
         let mut body = Zeroizing::new(MAGIC.to_vec());
         body.push(VERSION);
@@ -59,7 +69,7 @@ impl Request {
         framed(&body)
     }
 
-    /// The request a frame body holds, accepted only in its one encoding.
+    /// Decodes a frame body, accepting only the request's one encoding.
     pub fn decode(body: &[u8]) -> Result<Self, ProtocolError> {
         let mut reader = Reader::with_header(body, MAGIC, VERSION)?;
         let request = match reader.u8()? {

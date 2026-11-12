@@ -1,4 +1,6 @@
-//! One frame per message: a `u32` big-endian length, at most [`MAX_FRAME_LEN`], then the body.
+//! Frames each helper message: a `u32` big-endian length, at most [`MAX_FRAME_LEN`], then the body.
+//!
+//! The length comes first so a reader can refuse an oversized message before it allocates or reads the body.
 
 use std::io::Read;
 
@@ -21,7 +23,7 @@ pub fn read_frame(reader: &mut impl Read) -> Result<Zeroizing<Vec<u8>>, Protocol
     Ok(body)
 }
 
-/// `body` with its length prefix, refused when it is over [`MAX_FRAME_LEN`].
+/// Prepends the length prefix to `body`, refusing a body over [`MAX_FRAME_LEN`].
 pub(crate) fn framed(body: &[u8]) -> Result<Zeroizing<Vec<u8>>, ProtocolError> {
     let len = checked_len(body.len())?;
     let mut out = Zeroizing::new(Vec::with_capacity(4 + len));
