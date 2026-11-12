@@ -1,4 +1,5 @@
-//! The OS account a `peer` caller must connect as (spec §7).
+//! The OS account a `peer` caller must connect as
+//! ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
 //!
 //! A caller on a peer listener is recognised by the uid of the connecting process. The config names the account, for
 //! example `user = "alice"`; activation looks up its uid on the host, and caller identification compares that uid with

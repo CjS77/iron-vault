@@ -1,5 +1,6 @@
-//! A `[listeners.<name>]` section: a Unix socket or TCP address where callers reach the request interface (spec §6,
-//! §7).
+//! A `[listeners.<name>]` section: a Unix socket or TCP address where callers reach the request interface
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [§7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
 
 use std::net::SocketAddr;
 
@@ -29,10 +30,12 @@ pub const DEFAULT_TOKEN_HEADER: &str = "proxy-authorization";
 /// token_header = "X-Iron-Vault-Token"
 /// ```
 ///
-/// A TCP listener on a non-loopback address must have TLS (§7), but a `ListenerConfig` does not guarantee it: the
-/// error must name the listener, so [`ValidatedConfig`](crate::ValidatedConfig) enforces the rule, and an unsafe
-/// configuration is never approved. The listeners from [`ParsedConfig::listeners`](crate::ParsedConfig) are
-/// unchecked, so code that opens one of those must test [`plain_off_loopback`](Self::plain_off_loopback) first.
+/// A TCP listener on a non-loopback address must have TLS
+/// ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)), but a
+/// `ListenerConfig` does not guarantee it: the error must name the listener, so
+/// [`ValidatedConfig`](crate::ValidatedConfig) enforces the rule, and an unsafe configuration is never approved. The
+/// listeners from [`ParsedConfig::listeners`](crate::ParsedConfig) are unchecked, so code that opens one of those must
+/// test [`plain_off_loopback`](Self::plain_off_loopback) first.
 ///
 /// Whether the callers on a listener may use `isolated-network` or `peer` authentication depends on every caller
 /// section, so [`ValidatedConfig`](crate::ValidatedConfig) checks that too.
@@ -46,14 +49,15 @@ pub struct ListenerConfig {
 /// Where a listener accepts connections.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Endpoint {
-    /// A Unix domain socket. Any local account may connect; the caller's peer account (`auth = "peer"`) or caller
-    /// token decides what it may use (spec §7).
+    /// A Unix domain socket. Any local account may connect; the caller's peer account (`auth = "peer"`) or caller token
+    /// decides what it may use
+    /// ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
     UnixSocket(ConfigPath),
     /// A TCP address, with TLS required unless the address is loopback.
     Tcp {
-        /// The address to listen on; its port is never 0.
+        /// The address to listen on; its port is never `0`.
         address: SocketAddr,
-        /// The server certificate and key, if configured.
+        /// The server certificate and key, or `None` for plain HTTP.
         tls: Option<TlsFiles>,
     },
 }
@@ -92,7 +96,7 @@ pub enum ListenerError {
         /// The rejected address, escaped so control characters never reach a log raw.
         address: String,
     },
-    /// `address` uses port 0, which would bind a random port no caller is configured for.
+    /// `address` uses port `0`, which would bind a random port no caller is configured for.
     #[error("listener address {address} uses port 0")]
     ZeroPort {
         /// The rejected address.
@@ -119,10 +123,12 @@ impl ListenerConfig {
     }
 
     /// Returns the address of a plain-HTTP TCP listener that is not on loopback, which would carry caller tokens in
-    /// clear text (spec §7). Returns `None` for a Unix socket, a TLS listener, or a loopback address.
+    /// clear text ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
+    /// Returns `None` for a Unix socket, a TLS listener, or a loopback address.
     ///
-    /// Loopback is `127.0.0.0/8` or `::1`. An IPv4-mapped address such as `::ffff:127.0.0.1` is deliberately not loopback:
-    /// whether a dual-stack socket on it stays on the host depends on platform settings this crate cannot see.
+    /// Loopback is `127.0.0.0/8` or `::1`. An IPv4-mapped address such as `::ffff:127.0.0.1` does not count as
+    /// loopback: whether a dual-stack socket on it stays on the host depends on platform settings this crate cannot
+    /// see.
     pub fn plain_off_loopback(&self) -> Option<SocketAddr> {
         match &self.endpoint {
             Endpoint::Tcp { address, tls: None } if !address.ip().is_loopback() => Some(*address),
@@ -190,7 +196,8 @@ fn tcp_endpoint(text: &str, tls: Option<TlsFiles>) -> Result<Endpoint, ListenerE
 
 /// Rejects a reserved header as the caller-token header.
 ///
-/// Reserved headers carry framing, hop-by-hop or forwarding meaning (spec §9), which an intermediary may add,
+/// Reserved headers carry framing, hop-by-hop or forwarding meaning
+/// ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)), which an intermediary may add,
 /// rewrite or drop, so a token placed in one could be lost or replaced in transit. [`CALLER_TOKEN_HEADERS`] are the
 /// exceptions: `Proxy-Authorization` is the default, and `X-Iron-Vault-Token` is the dedicated header, which is
 /// reserved only so that no listener forwards it.

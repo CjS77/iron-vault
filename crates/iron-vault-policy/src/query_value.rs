@@ -1,11 +1,13 @@
-//! Encodes a credential for a query slot, and decodes caller query parameters to compare with the slot's name (spec §9).
+//! Encodes a credential for a query slot, and decodes caller query parameters to compare with the slot's name
+//! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!
 //! Slot filling and response scrubbing both use [`encode_query_value`], so the scrubber looks for exactly the bytes
 //! that were sent. For example, the key `a b*c` is sent as `access_key=a%20b%2Ac`.
 //!
 //! `url::form_urlencoded::byte_serialize` is not used for the value: it writes a space as `+` and leaves `*` bare,
-//! which an upstream that decodes with RFC 3986 rules rather than form rules would read differently. Encoding every
-//! byte outside the RFC 3986 unreserved set reads back the same under both rules.
+//! which an upstream that decodes with [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-2.1) rules instead of
+//! form rules would read differently. Encoding every byte outside the RFC 3986 `unreserved` set reads back the same
+//! under both rules.
 
 use std::borrow::Cow;
 
@@ -13,7 +15,9 @@ use url::form_urlencoded;
 
 use crate::escape::{is_unreserved, push_uppercase_escape};
 
-/// Percent-encodes every byte of `value` outside the RFC 3986 unreserved set (`A-Z a-z 0-9 - . _ ~`) as uppercase `%XX`.
+/// Percent-encodes every byte of `value` outside the
+/// [RFC 3986 §2.3](https://www.rfc-editor.org/rfc/rfc3986#section-2.3) `unreserved` set (`A-Z a-z 0-9 - . _ ~`) as
+/// uppercase `%XX`.
 ///
 /// This is the only encoding a credential gets in a query slot, so response scrubbing computes its URL-encoded
 /// pattern by calling this same function: the pattern then matches exactly the bytes that were sent.
@@ -39,8 +43,8 @@ fn push_encoded(out: &mut String, byte: u8) {
 /// parsers do.
 ///
 /// Comparing decoded names is what stops `access%5Fkey` from surviving beside `access_key` when both decode to the
-/// slot name. Returns `None` for an empty parameter, as between `&&`. Invalid UTF-8 decodes to U+FFFD, which a slot name
-/// cannot contain (slot names are ASCII unreserved characters), so a lossy decode can never make a name match.
+/// slot name. Returns `None` for an empty parameter, as between `&&`. Invalid UTF-8 decodes to U+FFFD, which a slot
+/// name cannot contain (slot names are ASCII unreserved characters), so a lossy decode can never make a name match.
 pub(crate) fn decode_param(param: &str) -> Option<(Cow<'_, str>, Cow<'_, str>)> {
     form_urlencoded::parse(param.as_bytes()).next()
 }

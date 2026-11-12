@@ -1,5 +1,6 @@
-//! The fixed config and the hostile request-path generators that the property-test files share (specification §9;
-//! implementation spec §2).
+//! The fixed config and the hostile request-path generators that the property-test files share
+//! ([spec §9](../../../../design/iron-vault-specification.md#9-url-header-and-slot-rules);
+//! [implementation spec §2](../../../../design/implementation-specification.md#2-verification-and-deferred-security-work)).
 
 // Each test binary compiles its own copy of this module and uses a different part of it, so the rest is dead code in
 // that binary.
@@ -25,7 +26,7 @@ use proptest::test_runner::{Config, TestRunner};
 /// with `/fx` so only whole-segment matching tells them apart, and the upstream base paths are zero, one and two
 /// segments deep. `fx` and `fxa` differ only in host, and `basic` shares `fx`'s host on another port, written with a
 /// trailing dot that the one host conversion removes. Every slot shape appears: query, header with and without a
-/// format, and Basic.
+/// format, and `Basic`.
 pub const CONFIG: &str = r#"schema_version = 1
 
 [listeners.local]
@@ -108,7 +109,7 @@ pub const DECOY_PREFIXES: &[&str] = &[
 /// Queries, which must never influence the path.
 pub const QUERIES: &[&str] = &["", "?", "?a=1", "?x=%2e%2E&y=/?%25"];
 
-/// Bytes whose escapes are traversal, a separator, a cut-short path, or a second decoding pass in waiting.
+/// Bytes whose escapes are traversal, a separator, a cut-short path, or a `%` that a second decoding pass would read.
 pub const HOSTILE_BYTES: &[u8] = &[b'.', b'/', b'\\', 0, b'%', b'?', b'#', b';', b'\n', 0x7f];
 
 /// Bytes whose escapes are harmless: unreserved characters, sub-delimiters, and characters that stay encoded.
@@ -119,7 +120,8 @@ pub const RAW_SPECIALS: &[&str] = &[
     "\\", "\0", "\t", "\x7f", " ", ";", ";x=1", "%", "%2", "%zz", "%+f", "?", "#", "//", "\u{e9}", "\u{FF0E}", "%c3%a9", "%C0%AE",
 ];
 
-/// Unicode look-alikes and the ASCII text an upstream that folds Unicode (NFKC or a best-fit code page) turns them into.
+/// Unicode look-alikes and the ASCII text an upstream that folds Unicode (NFKC or a best-fit code page) turns them
+/// into.
 pub const FOLDS: &[(char, &str)] = &[
     ('\u{FF0E}', "."),
     ('\u{2024}', "."),
@@ -169,7 +171,7 @@ pub fn route_origins(config: &ValidatedConfig) -> BTreeSet<(Host, Port)> {
         .collect()
 }
 
-/// The one credential of the Basic kind, used by the `basic` route's Basic slot.
+/// The one credential of the `basic` kind, used by the `basic` route's `Basic` slot.
 const BASIC_CREDENTIAL: &str = "basic_login";
 
 /// Permits every credential on the same origins, each of the kind its route's slot needs.

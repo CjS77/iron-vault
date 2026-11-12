@@ -1,4 +1,6 @@
-//! Token hashes: the form in which a config stores a caller token (spec §6, §7).
+//! Token hashes: the form in which a config stores a caller token
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [§7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
 //!
 //! The owner runs `iron-vault caller-token`, keeps the token for the caller and puts only its hash in the config:
 //! `token_hash = "blake2b:<64 hex digits>"`. Caller identification hashes each presented token and compares.
@@ -62,8 +64,9 @@ impl TokenHash {
         Self(Blake2b256::digest(token.text().as_bytes()).into())
     }
 
-    /// Returns whether `token` hashes to this digest. The comparison runs in constant time, so response timing does
-    /// not reveal how many leading bytes of a guess's digest were right (spec §7).
+    /// Returns `true` if and only if `token` hashes to this digest. The comparison runs in constant time, so response
+    /// timing does not reveal how many leading bytes of a guess's digest were right
+    /// ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
     pub fn matches(&self, token: &CallerToken) -> bool {
         self.0.as_slice().ct_eq(Self::of(token).0.as_slice()).into()
     }

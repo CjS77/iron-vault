@@ -1,19 +1,23 @@
-//! A route's owner-confirmation policy: whether each request needs fresh owner confirmation (spec §6).
+//! A route's owner-confirmation policy: whether each request needs fresh owner confirmation
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 //!
 //! v0 has no confirmation provider, so reading a config refuses `confirm = "touch"`.
 
 use serde::Deserialize;
 use serde::de::{Deserializer, Error as _};
 
-/// The refusal for `confirm = "touch"`, which v0 names but cannot honour (spec §6).
+/// The refusal for `confirm = "touch"`, which v0 names but cannot honour
+/// ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 const TOUCH_NOT_YET_AVAILABLE: &str = r#"confirm = "touch" is not yet available: v0 has no touch confirmation provider"#;
 
-/// Says whether a request on a route needs fresh owner confirmation before its credential is used.
+/// Says if a request on a route needs fresh owner confirmation before its credential is used.
 ///
-/// TOML form: `confirm = "none"`, which is also the value when `confirm` is omitted. `touch` is named but refused when
-/// the config is read: a later phase adds per-request touch on a hardware key (`book/src/cookbook/roadmap/yubikey.md`),
-/// and until a confirmation provider exists a touch route could never serve, so it is a mistake caught before any
-/// approval prompt rather than a route left unavailable (spec §6).
+/// TOML form: `confirm = "none"`, which is also the value when `confirm` is omitted. Reading the config refuses
+/// `confirm = "touch"`: per-request touch on a hardware key arrives in a later phase
+/// ([future spec §2.1](../../../design/future-specifications.md#21-hardware-key-recipients-signers-and-touch-confirmation),
+/// [roadmap](../../../book/src/cookbook/roadmap/yubikey.md)). Until a confirmation provider exists a touch route
+/// could never serve, so the refusal comes before any approval prompt
+/// ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Confirmation {
     /// No confirmation; the route's other restrictions still apply.

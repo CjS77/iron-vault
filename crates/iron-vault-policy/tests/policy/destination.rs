@@ -1,9 +1,12 @@
-//! Property tests for the destination invariant (specification §6, §9; implementation spec §2).
+//! Property tests for the destination invariant
+//! ([spec §6](../../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [§9](../../../../design/iron-vault-specification.md#9-url-header-and-slot-rules);
+//! [implementation spec §2](../../../../design/implementation-specification.md#2-verification-and-deferred-security-work)).
 //!
 //! The destination invariant: a credential leaves only for its route upstream's host and port, only when its
 //! credential record permits that pair, only inside the upstream base path, and only in the route's one slot. Each case
 //! runs a hostile caller request through every policy step, from [`RequestTarget::parse`] to [`final_check`], and the
-//! properties hold for whatever comes out.
+//! properties hold for every result.
 //!
 //! Most cases wire the steps as the service does: the selected route's upstream builds the URL and the selected route's
 //! slot is filled. The rest build the URL or fill the slot from another route of the config, as a construction defect
@@ -221,9 +224,9 @@ struct Case {
 /// A case that reached the final check.
 struct Run {
     authorized: AuthorizedRequest,
-    /// Whether the selected route's upstream built the URL.
+    /// `true` if and only if the selected route's upstream built the URL.
     own_upstream: bool,
-    /// Whether the selected route's slot and credential filled the request.
+    /// `true` if and only if the selected route's slot and credential filled the request.
     own_slot: bool,
     checked: Result<CheckedRequest, FinalCheckError>,
 }
@@ -310,7 +313,8 @@ fn hostile_query() -> impl Strategy<Value = String> {
     ]
 }
 
-/// An origin-form target under a route prefix, decoy or none, sometimes behind an absolute-form or authority-form start.
+/// An origin-form target under a route prefix, decoy or none, sometimes behind an absolute-form or authority-form
+/// start.
 fn destination_target() -> impl Strategy<Value = String> {
     let lead = prop_oneof![12 => Just(""), 1 => select(LEADS)];
     (lead, prefix(), vec(destination_segment(), 0..4), any::<bool>(), hostile_query())

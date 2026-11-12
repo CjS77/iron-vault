@@ -10,7 +10,8 @@ use thiserror::Error;
 /// A non-zero TCP port.
 ///
 /// An omitted HTTPS port is stored as [`Port::HTTPS`] rather than left implicit, so the configured upstream, the
-/// credential record and the final outgoing-request check always compare two explicit numbers (§9).
+/// credential record and the final outgoing-request check always compare two explicit numbers
+/// ([§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "u16")]
 pub struct Port(NonZeroU16);
@@ -44,8 +45,8 @@ impl TryFrom<u16> for Port {
     }
 }
 
-/// Accepts only canonical decimal text. A URL parser would read `0443` or `+443` as 443, and a port that does not look
-/// like the number it means is an odd form worth refusing.
+/// Accepts only canonical decimal text. A URL parser would read `0443` or `+443` as 443; refusing them means the
+/// configured text always reads as the port it is.
 impl FromStr for Port {
     type Err = PortError;
 

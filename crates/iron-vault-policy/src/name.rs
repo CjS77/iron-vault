@@ -1,7 +1,8 @@
 //! Names for callers, routes, listeners and credentials, valid on construction.
 //!
 //! Names reach logs and audit events, so every name type shares one strict rule that leaves no room for log
-//! injection: 1 to [`MAX_NAME_LEN`] bytes of ASCII `[a-z0-9_-]`, starting with a lowercase letter (spec §18).
+//! injection: 1 to [`MAX_NAME_LEN`] bytes of ASCII `[a-z0-9_-]`, starting with a lowercase letter
+//! ([spec §18](../../../design/iron-vault-specification.md#18-logging)).
 
 use std::fmt;
 use std::str::FromStr;
@@ -134,25 +135,31 @@ macro_rules! name_type {
 }
 
 name_type!(
-    /// The configured name of a caller, the authenticated program identity granted named routes (spec §6, §7).
+    /// The configured name of a caller, the authenticated program identity granted named routes
+    /// ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+    /// [§7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
     CallerName,
     "caller"
 );
 
 name_type!(
-    /// The configured name of a route, which a caller is granted by name (spec §6).
+    /// The configured name of a route, which a caller is granted by name
+    /// ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
     RouteName,
     "route"
 );
 
 name_type!(
-    /// The configured name of a listener, the endpoint a caller connects through (spec §6, §7).
+    /// The configured name of a listener, the endpoint a caller connects through
+    /// ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+    /// [§7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
     ListenerName,
     "listener"
 );
 
 name_type!(
-    /// The unique name of a credential, which routes reference to select it (spec §6).
+    /// The unique name of a credential, which routes reference to select it
+    /// ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
     CredentialName,
     "credential"
 );

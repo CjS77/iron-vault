@@ -1,11 +1,13 @@
-//! Turns a caller's headers into [`OutgoingHeaders`] (spec §9).
+//! Turns a caller's headers into [`OutgoingHeaders`]
+//! ([spec §9](../../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!
 //! For example, a caller that sends `Proxy-Authorization: Bearer ivt_…`, `X-Forwarded-For: 10.0.0.1` and
 //! `Accept: application/json` reaches the upstream with only `Accept: application/json`.
 //!
 //! Every caller header is untrusted. Forwarding and method-override headers would let an upstream apply a different
-//! route policy than Iron Vault checked (§9), a forwarded caller token would leak it, and conflicting framing
-//! headers would let Iron Vault and the upstream disagree about where the body ends.
+//! route policy than Iron Vault checked
+//! ([§9](../../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)), a forwarded caller token would
+//! leak it, and conflicting framing headers would let Iron Vault and the upstream disagree about where the body ends.
 
 use thiserror::Error;
 
@@ -14,7 +16,8 @@ use crate::header_name::HeaderName;
 use crate::header_value::HeaderValue;
 use crate::reserved_headers::is_reserved;
 
-/// Why a caller's headers were rejected; the request interface answers every variant with `400` (§15).
+/// Why a caller's headers were rejected; the request interface answers every variant with `400`
+/// ([§15](../../../../design/iron-vault-specification.md#15-service-states-and-errors)).
 ///
 /// The text names the header, never its value, because values can carry tokens.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -85,7 +88,8 @@ fn content_length(value: &[u8]) -> Result<u64, SanitizeError> {
         .ok_or(SanitizeError::InvalidContentLength)
 }
 
-/// Collects the names listed in every `Connection` header (RFC 9110 §7.6.1); those headers describe this connection
+/// Collects the names listed in every `Connection` header
+/// ([RFC 9110 §7.6.1](https://www.rfc-editor.org/rfc/rfc9110#section-7.6.1)); those headers describe this connection
 /// only, so sanitizing removes them.
 ///
 /// A list member that is not a valid header name is skipped: no caller header can carry that name, so there is
@@ -98,7 +102,8 @@ fn connection_names(caller: &[(HeaderName, HeaderValue)]) -> Vec<HeaderName> {
         .collect()
 }
 
-/// Trims leading and trailing optional whitespace (spaces and tabs, RFC 9110 §5.6.3) from `bytes`.
+/// Trims leading and trailing optional whitespace (spaces and tabs,
+/// [RFC 9110 §5.6.3](https://www.rfc-editor.org/rfc/rfc9110#section-5.6.3)) from `bytes`.
 fn trim_ows(bytes: &[u8]) -> &[u8] {
     let is_ows = |b: &u8| *b == b' ' || *b == b'\t';
     let start = bytes.iter().position(|b| !is_ows(b)).unwrap_or(bytes.len());

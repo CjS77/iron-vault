@@ -2,9 +2,8 @@
 //!
 //! This crate is the policy bounded context. It parses and checks the configuration, identifies callers, selects and
 //! authorizes routes, charges rate limits, builds the upstream URL, fills the route's slot and makes the final
-//! outgoing-request check. The `iron-vault` service calls it at each step and does the I/O itself. This crate performs
-//! no I/O: every decision is a pure function of its inputs, so policy can be tested exhaustively and no adapter can
-//! bypass it.
+//! outgoing-request check. The `iron-vault` service calls it at each step and does the I/O itself. Every decision is a
+//! pure function of its inputs, so policy can be tested exhaustively and no adapter can bypass it.
 //!
 //! A configuration becomes the policy that requests are served under in three steps:
 //!
@@ -12,11 +11,12 @@
 //! config.toml bytes ──ParsedConfig::from_toml──▶ ParsedConfig        each section's own rules (config)
 //!                   ──ValidatedConfig::try_from─▶ ValidatedConfig    rules across sections (validated)
 //!                   ──activate──────────────────▶ ActivePolicy       facts from the running service (activation):
-//!                                                                    credential records, capabilities, peer uids
+//!                                                                    credential records, peer uids
 //! ```
 //!
-//! Each request then passes through these steps (spec §8). Between rate limiting and URL building, the store resolves
-//! the route's credential through its kind (`iron-vault-kinds`):
+//! Each request then passes through these steps
+//! ([spec §8](../../../design/iron-vault-specification.md#8-request-flow)). Between rate limiting and URL building,
+//! the store resolves the route's credential through its kind (`iron-vault-kinds`):
 //!
 //! ```text
 //! RequestTarget::parse        origin-form target, normalized path          (request_target)

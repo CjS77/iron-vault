@@ -1,4 +1,6 @@
-//! The header list an upstream request carries (spec §9). [`sanitize()`] builds it from the caller's headers.
+//! The header list an upstream request carries
+//! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)). [`sanitize()`] builds it
+//! from the caller's headers.
 //!
 //! [`OutgoingHeaders`] can never hold a reserved header, so `Host`, framing, forwarding, override and caller
 //! authentication headers cannot reach an upstream through it: the transport sets authority and framing itself.
@@ -53,7 +55,7 @@ impl OutgoingHeaders {
         self.entries.iter().filter(move |(n, _)| n == name).map(|(_, v)| v)
     }
 
-    /// Removes every field called `name`, whatever its case.
+    /// Removes every field called `name`, compared case-insensitively.
     pub fn remove_all(&mut self, name: &HeaderName) {
         self.entries.retain(|(n, _)| n != name);
     }

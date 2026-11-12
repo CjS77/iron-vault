@@ -1,4 +1,5 @@
-//! The `[logging] destination` setting: where the approved config sends the service's log (spec §18).
+//! The `[logging] destination` setting: where the approved config sends the service's log
+//! ([spec §18](../../../design/iron-vault-specification.md#18-logging)).
 //!
 //! This is the setting as written and checked for shape. Opening the directory and verifying its owner and mode is the
 //! service's job (`TrustedPathRule::LogDir`), as is choosing the destination at runtime.
@@ -52,7 +53,7 @@ pub enum LogDestinationError {
 }
 
 impl LogDestinationSetting {
-    /// The log directory, or none for stdout.
+    /// The log directory, or `None` for stdout.
     pub fn directory(&self) -> Option<&Path> {
         match self {
             Self::Stdout => None,

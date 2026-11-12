@@ -1,8 +1,10 @@
-//! Route selection and request authorization (spec §8 steps 3–4, §9, §15).
+//! Route selection and request authorization ([spec §8](../../../design/iron-vault-specification.md#8-request-flow)
+//! steps 3–4, [§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules),
+//! [§15](../../../design/iron-vault-specification.md#15-service-states-and-errors)).
 //!
 //! [`authorize`] decides, once, which route an authenticated caller's request belongs to and whether the caller may use
-//! it with this method and path. Its result, an [`AuthorizedRequest`], is the immutable request plan that rate limiting,
-//! credential resolution and URL construction consume without deciding any of this again.
+//! it with this method and path. Its result, an [`AuthorizedRequest`], is the immutable request plan that rate
+//! limiting, credential resolution and URL construction consume without deciding any of this again.
 //!
 //! The checks run in this order, so a caller learns no more than its grants allow:
 //!
@@ -58,7 +60,8 @@ impl AuthorizedRequest {
         &self.upstream_segments
     }
 
-    /// Whether the upstream path ends in `/` after its last segment; never true for the root path.
+    /// Returns `true` if and only if the upstream path ends in `/` after its last segment; never `true` for the root
+    /// path.
     pub fn has_trailing_slash(&self) -> bool {
         self.trailing_slash
     }
@@ -69,7 +72,8 @@ impl AuthorizedRequest {
     }
 }
 
-/// Why a request was not authorized; each variant names the status the request interface returns (spec §15).
+/// Why a request was not authorized. Each variant names the status the request interface returns
+/// ([spec §15](../../../design/iron-vault-specification.md#15-service-states-and-errors)).
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum AuthzError {
     /// No route's prefix matches the path: `404`.
@@ -85,8 +89,8 @@ pub enum AuthzError {
         /// Which check failed.
         reason: Refusal,
     },
-    /// The caller is granted the route, but the route is unavailable (its credential record is unusable or its pinned CA
-    /// could not be loaded): `503`, while other routes keep serving.
+    /// The caller is granted the route, but the route is unavailable (its credential record is unusable or its pinned
+    /// CA could not be loaded): `503`, while other routes keep serving.
     #[error("route {route} is unavailable")]
     Unavailable {
         /// The unavailable route.
@@ -112,9 +116,10 @@ pub enum Refusal {
 ///
 /// Checks run in an order that discloses as little as possible: a caller learns that a route is unavailable only after
 /// its grant to that route is confirmed, so an ungranted caller gets `Forbidden` whether or not the route is available.
-/// Path patterns match the request segments after the route prefix, which is the path below the upstream base path
-/// and the path the provider documents; the base path is prepended by `plan` only after the match. The query is
-/// carried through unchecked, because patterns never see it (§6).
+/// Path patterns match the request segments after the route prefix, which is the path below the upstream base path and
+/// the path the provider documents; `plan` prepends the base path only after the match. The query is carried through
+/// unchecked, because patterns never see it
+/// ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 pub fn authorize(
     policy: &ActivePolicy,
     caller: &CallerName,
@@ -143,8 +148,9 @@ pub fn authorize(
 
 /// Finds the route whose prefix covers the leading complete segments of `path`, available or not.
 ///
-/// Whole-segment comparison is what keeps `/fx` from matching `/fx.evil.example` or `/fx@evil.example` (§9).
-/// Validation guarantees that no two prefixes overlap, so at most one route matches.
+/// Whole-segment comparison keeps `/fx` from matching `/fx.evil.example` or `/fx@evil.example`
+/// ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)). Validation guarantees that no
+/// two prefixes overlap, so at most one route matches.
 fn select_route<'a>(policy: &'a ActivePolicy, path: &NormalizedPath) -> Option<&'a RouteName> {
     let routes = policy.config().routes().iter();
     routes
@@ -153,7 +159,7 @@ fn select_route<'a>(policy: &'a ActivePolicy, path: &NormalizedPath) -> Option<&
         .next()
 }
 
-/// Returns whether `caller` lists `route` among its grants; an unknown caller has none.
+/// Returns `true` if and only if `caller` lists `route` among its grants. An unknown caller has none.
 fn is_granted(policy: &ActivePolicy, caller: &CallerName, route: &RouteName) -> bool {
     policy
         .config()
@@ -165,7 +171,8 @@ fn is_granted(policy: &ActivePolicy, caller: &CallerName, route: &RouteName) -> 
 /// Iterates over the request segments after the route prefix.
 ///
 /// Authorization matches path patterns against these and forwarding appends them to the upstream base path, so both
-/// must read the same segments (§6).
+/// must read the same segments
+/// ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 fn below_prefix<'a>(route: &RouteConfig, path: &'a NormalizedPath) -> impl Iterator<Item = &'a String> {
     path.segments().iter().skip(route.prefix().segments().len())
 }
@@ -203,7 +210,9 @@ mod tests {
     use crate::test_accounts::FakeAccounts;
     use crate::validated::ValidatedConfig;
 
-    /// Permits every §6 credential on its route's upstream, except those named as unusable.
+    /// Permits every credential of the
+    /// [spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) example on its
+    /// route's upstream, except those named as unusable.
     struct Catalog(&'static [&'static str]);
 
     impl CredentialCatalog for Catalog {

@@ -1,8 +1,10 @@
-//! Parses the configuration document: listeners, callers, routes and limits, from TOML bytes (spec §6).
+//! Parses the configuration document: listeners, callers, routes and limits, from TOML bytes
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 //!
 //! Parsing takes bytes the caller already holds, so this crate stays free of I/O and approval can hash exactly the
-//! bytes that were parsed (spec §12). Only section-local rules are checked here; references between sections are
-//! resolved by [`ValidatedConfig`](crate::ValidatedConfig).
+//! bytes that were parsed ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
+//! Only section-local rules are checked here; [`ValidatedConfig`](crate::ValidatedConfig) resolves references between
+//! sections.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -26,9 +28,9 @@ pub const SCHEMA_VERSION: i64 = 1;
 
 /// A configuration document whose every section passed its own validation.
 ///
-/// Sections are held in [`BTreeMap`]s so iteration, and anything derived from it, follows name order rather than
-/// file or hash order (implementation spec §1). An omitted `[listeners]`, `[callers]` or `[routes]` table is empty; an omitted
-/// `[limits]` table means the default limits.
+/// Sections are held in [`BTreeMap`]s so iteration, and anything derived from it, follows name order
+/// ([implementation spec §1](../../../design/implementation-specification.md#1-implementation-structure)). An omitted
+/// `[listeners]`, `[callers]` or `[routes]` table is empty; an omitted `[limits]` table means the default limits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedConfig {
     listeners: BTreeMap<ListenerName, ListenerConfig>,
@@ -132,7 +134,7 @@ impl ParsedConfig {
     }
 
     /// The `[recovery] reminder_days` as written; `None` when the table or key is absent, which is not the same config as
-    /// an explicit 90.
+    /// an explicit `90`.
     pub fn recovery_reminder(&self) -> Option<ReminderInterval> {
         self.recovery_reminder
     }
@@ -204,7 +206,7 @@ struct RawRecovery {
     reminder_days: Option<ReminderInterval>,
 }
 
-/// Just the version key, read before the rest of the document is interpreted.
+/// The `schema_version` key alone, read before the rest of the document is interpreted.
 #[derive(Deserialize)]
 struct SchemaProbe {
     schema_version: Option<toml::Spanned<i64>>,
@@ -285,7 +287,8 @@ mod tests {
         );
     }
 
-    /// The spec example with the `key = ...` line removed from the `[routes.fx]` table only.
+    /// The [spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) example with the
+    /// `key = ...` line removed from the `[routes.fx]` table only.
     fn fx_without(key: &str) -> String {
         let fx = SPEC_EXAMPLE.find("[routes.fx]").unwrap();
         let start = fx + SPEC_EXAMPLE[fx..].find(&format!("\n{key} =")).unwrap();

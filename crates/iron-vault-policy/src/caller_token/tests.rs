@@ -6,7 +6,7 @@ use secrecy::ExposeSecret;
 
 use super::*;
 
-/// The bytes 0x00 to 0x1f.
+/// The bytes `0x00` to `0x1f`.
 pub(crate) const KAT_BYTES: [u8; CALLER_TOKEN_BYTES] = {
     let mut bytes = [0u8; CALLER_TOKEN_BYTES];
     let mut i = 0;

@@ -1,5 +1,7 @@
-//! Charges each authorized request against its route's and its caller's rate limits, safely under concurrency (spec §8,
-//! §15, §19).
+//! Charges each authorized request against its route's and its caller's rate limits, safely under concurrency
+//! ([spec §8](../../../design/iron-vault-specification.md#8-request-flow),
+//! [§15](../../../design/iron-vault-specification.md#15-service-states-and-errors),
+//! [§19](../../../design/iron-vault-specification.md#19-v0-user-acceptance)).
 //!
 //! Each route has one [`TokenBucket`] shared by all its callers, and a caller may also have a stricter bucket on that
 //! route. A request passes only if both allow it, and it takes a token from both or from neither: otherwise a request
@@ -19,13 +21,14 @@ use crate::validated::ValidatedConfig;
 
 /// The token buckets for one [`ActivePolicy`], shared by every thread that serves requests.
 ///
-/// The service charges a request after authorizing it and before confirmation or credential resolution (spec §8
-/// step 5). Each route's buckets sit behind their own lock, so requests on different routes never contend, and a
-/// charge locks exactly one route, so there is no lock ordering to get wrong.
+/// The service charges a request after authorizing it and before confirmation or credential resolution
+/// ([spec §8](../../../design/iron-vault-specification.md#8-request-flow) step 5). Each route's buckets sit behind their
+/// own lock, so requests on different routes never contend, and a charge locks exactly one route, so there is no lock
+/// ordering to get wrong.
 ///
-/// **Reload.** A new policy gets a new limiter, and like a restart every bucket starts empty. Levels are deliberately
-/// not carried over: an empty bucket never grants more than the old one held, so neither a reload nor a restart can
-/// replenish an allowance instantly.
+/// **Reload.** A new policy gets a new limiter, and like a restart every bucket starts empty. Levels are not carried
+/// over: an empty bucket never grants more than the old one held, so neither a reload nor a restart can replenish an
+/// allowance instantly.
 #[derive(Debug)]
 pub struct RateLimiter {
     routes: BTreeMap<RouteName, Mutex<RouteBuckets>>,
@@ -49,7 +52,8 @@ pub enum ExhaustedLimit {
     Both,
 }
 
-/// A request refused because a rate limit is exhausted; the service answers `429` (spec §15).
+/// A request refused because a rate limit is exhausted; the service answers `429`
+/// ([spec §15](../../../design/iron-vault-specification.md#15-service-states-and-errors)).
 ///
 /// It names only the requesting caller's own limit or the route's aggregate one, never another caller's usage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -95,7 +99,8 @@ pub enum ChargeError {
 }
 
 impl RateLimiter {
-    /// Creates every bucket for `policy`, all empty and accounting for time from `now` (spec §8).
+    /// Creates every bucket for `policy`, all empty and accounting for time from `now`
+    /// ([spec §8](../../../design/iron-vault-specification.md#8-request-flow)).
     ///
     /// Routes that are unavailable get buckets too; authorization keeps requests off them, and a limiter whose routes
     /// match the configuration needs no rebuild rule of its own.
@@ -199,7 +204,9 @@ mod tests {
     use crate::spec_example::SPEC_EXAMPLE;
     use crate::test_accounts::FakeAccounts;
 
-    /// A vault where every §6 credential is usable at its route's upstream.
+    /// A vault where every credential of the
+    /// [spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) example is usable at
+    /// its route's upstream.
     struct Healthy;
 
     impl CredentialCatalog for Healthy {

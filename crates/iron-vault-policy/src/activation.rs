@@ -1,9 +1,12 @@
-//! Checks a validated config against facts only the running service knows (spec §6, §7, §12). The service activates
+//! Checks a validated config against facts only the running service knows
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [§7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners),
+//! [§12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)). The service activates
 //! every config it checks or approves, and serves requests only under the [`ActivePolicy`] that results.
 //!
-//! The configuration cannot know which credential records exist, which hosts they permit, or which uid each peer account
-//! has. The service supplies those facts as a [`CredentialCatalog`] and an [`AccountDirectory`]; activation then either
-//! refuses the whole configuration or produces the [`ActivePolicy`] that requests are served under.
+//! The configuration cannot know which credential records exist, which hosts they permit, or which uid each peer
+//! account has. The service supplies those facts as a [`CredentialCatalog`] and an [`AccountDirectory`]; activation
+//! then either refuses the whole configuration or produces the [`ActivePolicy`] that requests are served under.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -27,11 +30,12 @@ pub trait CredentialCatalog {
     fn entry(&self, name: &CredentialName) -> CatalogEntry;
 }
 
-/// The host's local accounts, as activation needs them to resolve each peer caller's `user` (spec §7).
+/// The host's local accounts, as activation needs them to resolve each peer caller's `user`
+/// ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
 ///
 /// The service implements this over the host's account database, so this crate resolves accounts without reading it.
 pub trait AccountDirectory {
-    /// The uid of the account named `name`, or none when no such account exists.
+    /// The uid of the account named `name`, or `None` when no such account exists.
     fn uid(&self, name: &AccountName) -> Option<u32>;
 
     /// The uid the service runs as, which no peer caller may name.
@@ -47,15 +51,18 @@ pub trait AccountDirectory {
 pub enum CatalogEntry {
     /// No record has this name.
     Unknown,
-    /// A record has this name but is damaged or needs login, so its routes are unavailable (spec §12).
+    /// A record has this name but is damaged or needs login, so its routes are unavailable
+    /// ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
     ///
     /// It carries no origins: a damaged record cannot be trusted to report them.
     Unusable,
     /// A record has this name and can serve requests.
     Usable {
-        /// The kind the record declares, which decides the slots its routes may use (future spec §2.2).
+        /// The kind the record declares, which decides the slots its routes may use
+        /// ([future spec §2.2](../../../design/future-specifications.md#22-credential-kinds)).
         kind: CredentialKind,
-        /// The exact host and port pairs the record permits its secret to reach (spec §6).
+        /// The exact host and port pairs the record permits its secret to reach
+        /// ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
         origins: BTreeSet<(Host, Port)>,
     },
 }
@@ -75,21 +82,25 @@ pub struct ActivePolicy {
     peer_uids: BTreeMap<CallerName, u32>,
 }
 
-/// Why a route of an active policy serves no request (glossary: *Unavailable route*). A route may have both.
+/// Why a route of an active policy serves no request
+/// ([glossary: *Unavailable route*](../../../design/glossary.md#terms)). A route may have both.
 ///
-/// Neither cause refuses the policy: each is a fault local to its routes, which the owner fixes and then reloads (§12).
+/// Neither cause refuses the policy: each is a fault local to its routes, which the owner fixes and then reloads
+/// ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum UnavailableCause {
     /// The route's credential record is damaged or needs login.
     CredentialUnusable,
-    /// The route's pinned CA could not be loaded (§10).
+    /// The route's pinned CA could not be loaded
+    /// ([spec §10](../../../design/iron-vault-specification.md#10-outbound-tls-and-environment)).
     PinnedCaUnavailable,
 }
 
 /// Why a validated config cannot be activated.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ActivationError {
-    /// The route names a credential the vault does not hold, which invalidates the whole config (spec §12).
+    /// The route names a credential the vault does not hold, which invalidates the whole config
+    /// ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
     #[error("route {route} uses credential {credential}, which the vault does not hold")]
     UnknownCredential {
         /// The route.
@@ -109,7 +120,8 @@ pub enum ActivationError {
         /// The route's upstream port.
         port: Port,
     },
-    /// The route's slot cannot be filled by its credential's kind, so every request to it would fail (future spec §2.2).
+    /// The route's slot cannot be filled by its credential's kind, so every request to it would fail
+    /// ([future spec §2.2](../../../design/future-specifications.md#22-credential-kinds)).
     #[error("route {route} uses a {} credential, {credential}, on a slot that kind cannot fill", .kind.as_str())]
     SlotMismatch {
         /// The route.
@@ -119,7 +131,8 @@ pub enum ActivationError {
         /// The credential's kind.
         kind: CredentialKind,
     },
-    /// The peer caller's `user` names no account on this host (spec §7).
+    /// The peer caller's `user` names no account on this host
+    /// ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
     #[error("caller {caller} names user {user}, which is not an account on this host")]
     UnknownAccount {
         /// The peer caller.
@@ -127,12 +140,14 @@ pub enum ActivationError {
         /// The account it names.
         user: AccountName,
     },
-    /// The peer caller's `user` resolves to root or to the service account, which are never peer accounts (spec §7).
+    /// The peer caller's `user` resolves to root or to the service account, which are never peer accounts
+    /// ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
     ///
-    /// Root is already a host administrator, outside the threat model (spec §2), so it needs no caller identity;
-    /// a program run as root to use a route holds far more than that route. The service account connecting to its own
-    /// request socket is never legitimate: a process doing so is the service misbehaving or something running with
-    /// its privileges.
+    /// Root is already a host administrator, outside the threat model
+    /// ([spec §2](../../../design/iron-vault-specification.md#2-security-promise-and-limits)), so it needs no caller
+    /// identity; a program run as root to use a route holds far more than that route. The service account connecting to
+    /// its own request socket is never legitimate: a process doing so is the service misbehaving or something running
+    /// with its privileges.
     #[error("caller {caller} names user {user}, which is root or the service account; neither may be a peer account")]
     PrivilegedAccount {
         /// The peer caller.
@@ -140,7 +155,8 @@ pub enum ActivationError {
         /// The account it names.
         user: AccountName,
     },
-    /// The peer caller's `user` resolves to the kernel's overflow uid, `nobody` by default (spec §7).
+    /// The peer caller's `user` resolves to the kernel's overflow uid, `nobody` by default
+    /// ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
     ///
     /// The kernel reports that uid for every peer whose uid has no mapping in the service's user namespace, so in a
     /// container or sandbox it would match many unrelated processes rather than one account.
@@ -152,7 +168,8 @@ pub enum ActivationError {
         user: AccountName,
     },
     /// Peer callers on one listener name accounts with the same uid, as `passwd` aliases can, so a connection from that
-    /// uid would identify more than one caller (spec §7).
+    /// uid would identify more than one caller
+    /// ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
     #[error("callers {} on listener {listener} name accounts with uid {uid}, so one account would identify more than one caller", joined(.callers))]
     SharedPeerAccount {
         /// The listener.
@@ -177,10 +194,10 @@ impl ActivePolicy {
         self.config.effective_recovery_reminder()
     }
 
-    /// The route named `route`, if it exists and is available.
+    /// The route named `route`, or `None` when it is missing or unavailable.
     ///
-    /// This is the lookup for serving a request, so an unavailable route, whatever its cause, can never be reached by
-    /// forgetting to check [`ActivePolicy::is_available`].
+    /// This is the lookup for serving a request, so an unavailable route can never be reached by forgetting to check
+    /// [`ActivePolicy::is_available`].
     pub fn route(&self, route: &RouteName) -> Option<&RouteConfig> {
         self.config.routes().get(route).filter(|_| !self.unavailable.contains_key(route))
     }
@@ -190,7 +207,7 @@ impl ActivePolicy {
         &self.unavailable
     }
 
-    /// Returns whether `route` is unavailable for `cause`, whatever other cause it also has.
+    /// Returns `true` if and only if `route` is unavailable for `cause`.
     pub fn is_unavailable_for(&self, route: &RouteName, cause: UnavailableCause) -> bool {
         self.unavailable.get(route).is_some_and(|causes| causes.contains(&cause))
     }
@@ -212,7 +229,7 @@ impl ActivePolicy {
         self
     }
 
-    /// Returns whether `route` exists and may serve requests.
+    /// Returns `true` if and only if `route` exists and may serve requests.
     pub fn is_available(&self, route: &RouteName) -> bool {
         self.route(route).is_some()
     }
@@ -223,7 +240,8 @@ impl ActivePolicy {
     }
 }
 
-/// Activates `config`, or returns every reason it cannot be: route errors in route name order, then peer account errors.
+/// Activates `config`, or returns every reason it cannot be: route errors in route name order, then peer account
+/// errors.
 ///
 /// The catalog is asked once per credential. An unusable record makes only its routes unavailable; activation runs
 /// again once the record is repaired, and checks its origins then. The directory is asked once per peer caller.
@@ -332,7 +350,9 @@ mod tests {
         }
     }
 
-    /// A catalog that permits each §6 route's upstream, with `overrides` replacing individual entries.
+    /// A catalog that permits the upstream of each route in the
+    /// [spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) example, with
+    /// `overrides` replacing individual entries.
     fn spec_catalog(overrides: &[(&str, CatalogEntry)]) -> FakeCatalog {
         let healthy = [
             ("fx_key", "api.fx.example"),
@@ -348,7 +368,8 @@ mod tests {
         ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap()
     }
 
-    /// The §6 example with the `[routes.fx]` line `from` replaced by `to`.
+    /// The [spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) example with
+    /// the `[routes.fx]` line `from` replaced by `to`.
     fn spec_with(from: &str, to: &str) -> ValidatedConfig {
         assert!(SPEC_EXAMPLE.contains(from), "{from}");
         config(&SPEC_EXAMPLE.replacen(from, to, 1))

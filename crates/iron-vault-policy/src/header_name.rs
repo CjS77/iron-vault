@@ -10,11 +10,11 @@ use thiserror::Error;
 
 use crate::display::quoted;
 
-/// An HTTP field name: a non-empty RFC 9110 `token`.
+/// An HTTP field name: a non-empty [RFC 9110 §5.6.2](https://www.rfc-editor.org/rfc/rfc9110#section-5.6.2) `token`.
 ///
-/// Field names are case-insensitive (RFC 9110 §5.1), so equality, hashing and ordering use the lowercase form. The
-/// configured spelling is kept for display, because operators recognise `X-Subscription-Token` faster than its
-/// lowercase form.
+/// Field names are case-insensitive ([RFC 9110 §5.1](https://www.rfc-editor.org/rfc/rfc9110#section-5.1)), so
+/// equality, hashing and ordering use the lowercase form. The configured spelling is kept for display, because
+/// operators recognise `X-Subscription-Token` faster than its lowercase form.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(try_from = "String")]
 pub struct HeaderName {
@@ -49,7 +49,8 @@ impl HeaderName {
         &self.lowercase
     }
 
-    /// Returns `Authorization`, the header a Basic slot writes. It skips parsing because a constant cannot fail to parse.
+    /// Returns `Authorization`, the header a [`Slot::Basic`](crate::Slot::Basic) writes. It skips parsing because a
+    /// constant cannot fail to parse.
     pub(crate) fn authorization() -> Self {
         Self {
             spelling: "Authorization".to_owned(),
@@ -76,7 +77,8 @@ impl HeaderName {
     }
 }
 
-/// Returns whether `c` is an RFC 9110 §5.6.2 `tchar`, the characters a field name may hold.
+/// Returns `true` if and only if `c` is an [RFC 9110 §5.6.2](https://www.rfc-editor.org/rfc/rfc9110#section-5.6.2)
+/// `tchar`, the characters a field name may hold.
 fn is_tchar(c: char) -> bool {
     c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c)
 }

@@ -11,7 +11,7 @@ use crate::test_accounts::{FakeAccounts, SERVICE_UID};
 use crate::token_hash::TokenHash;
 use crate::validated::ValidatedConfig;
 
-/// Reports every credential as unusable: identification never looks at routes, so their availability is irrelevant.
+/// Reports every credential as unusable, which is enough because identification never looks at routes.
 struct NoCredentials;
 
 impl CredentialCatalog for NoCredentials {
@@ -39,9 +39,9 @@ const DELTA: u8 = 4;
 const UNKNOWN: u8 = 9;
 
 /// One listener per mechanism: `sock` (peer caller `cli`, account `code`), `ops-sock` (peer caller `ops`, account
-/// `fx-other`), `net` (isolated network), `local` (two token callers on
-/// `Proxy-Authorization`), `dedicated` (a token caller on `X-Iron-Vault-Token`), `explicit` (a token caller whose
-/// listener names `Proxy-Authorization` as its `token_header`), and `empty` (no callers).
+/// `fx-other`), `net` (isolated network), `local` (two token callers on `Proxy-Authorization`), `dedicated` (a token
+/// caller on `X-Iron-Vault-Token`), `explicit` (a token caller whose listener names `Proxy-Authorization` as its
+/// `token_header`), and `empty` (no callers).
 fn policy() -> ActivePolicy {
     let doc = format!(
         r#"schema_version = 1

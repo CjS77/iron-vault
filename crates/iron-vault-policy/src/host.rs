@@ -4,7 +4,8 @@
 //! `xn--bcher-kva.example`.
 //!
 //! Every host comparison in Iron Vault (credential record, route upstream, final outgoing-request check) uses the
-//! [`Host`] produced here, so a host is converted exactly once and compared byte for byte afterwards (§9).
+//! [`Host`] produced here, so a host is converted exactly once and compared byte for byte afterwards
+//! ([§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 
 use std::fmt;
 use std::str::FromStr;
@@ -24,13 +25,13 @@ const MAX_LABEL_LEN: usize = 63;
 ///   non-ASCII labels become punycode (`xn--`). One trailing dot is removed. Every label must then be 1–63 letters,
 ///   digits or hyphens, not starting or ending with a hyphen.
 /// - **IPv4 literals** are accepted only in canonical dotted-decimal form (`192.0.2.1`). Shorthand, octal and hex
-///   forms such as `127.1`, `0x7f.1`, `010.0.0.1` or `2130706433` are rejected rather than reinterpreted, because the
-///   address they denote is not what a reader of the configuration would expect.
+///   forms such as `127.1`, `0x7f.1`, `010.0.0.1` or `2130706433` are rejected, because the address they denote
+///   is not what a reader of the configuration would expect.
 /// - **IPv6 literals** must be bracketed (`[2001:db8::1]`) and are stored in the `url` crate's compressed lowercase
 ///   serialization, brackets included, so the canonical form is exactly what appears in a URL authority.
 ///
-/// Equality is exact on the canonical form. There is deliberately no suffix or wildcard matching: `evil-api.example.com`
-/// and `api.example.com.evil` are simply different hosts.
+/// Equality is exact on the canonical form. There is no suffix or wildcard matching: `evil-api.example.com` and
+/// `api.example.com.evil` are different hosts.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub struct Host(String);

@@ -1,6 +1,9 @@
 //! Identifies which caller a request comes from, using the listener it arrived on and, on a peer listener, the
-//! connecting process's uid or, on a token listener, the caller token it presents (spec §7, §8 step 3, §15). The
-//! service's request handler calls [`identify_caller`] before anything else looks at the request.
+//! connecting process's uid or, on a token listener, the caller token it presents
+//! ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners),
+//! [§8](../../../design/iron-vault-specification.md#8-request-flow) step 3,
+//! [§15](../../../design/iron-vault-specification.md#15-service-states-and-errors)). The service's request handler
+//! calls [`identify_caller`] before anything else looks at the request.
 //!
 //! ```text
 //! listener kind        decided by                                   no match
@@ -16,8 +19,10 @@
 //! token hash the presented token matches; validation guarantees at most one does.
 //!
 //! Nothing here reaches the admin interface. The admin socket is a separate socket that accepts an admin principal by
-//! its peer credentials alone (§5), so neither a caller token nor a listener identity is ever an admin credential.
-//! Keep it that way: same-user malware can steal caller tokens (§7), and they must never grant admin access.
+//! its peer credentials alone ([spec §5](../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns)),
+//! so neither a caller token nor a listener identity is ever an admin credential. Keep it that way: same-user malware
+//! can steal caller tokens ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)),
+//! and they must never grant admin access.
 
 use thiserror::Error;
 
@@ -32,7 +37,8 @@ use crate::name::{CallerName, ListenerName};
 /// The `Proxy-Authorization` scheme and its single separating space, compared case-insensitively.
 const BEARER: &[u8] = b"Bearer ";
 
-/// The request's caller could not be identified; the request interface answers `401` (spec §15).
+/// The request's caller could not be identified; the request interface answers `401`
+/// ([spec §15](../../../design/iron-vault-specification.md#15-service-states-and-errors)).
 ///
 /// It carries nothing: no caller name, header or token, so no response or log built from it can disclose credential
 /// information. The response body must not name the authentication scheme, the token header or the listener's callers
@@ -53,8 +59,8 @@ pub struct Unauthenticated;
 /// is the token, or else from `Proxy-Authorization` as `Bearer <token>`. A missing, repeated or malformed header, an
 /// unknown token, or a listener with no callers is [`Unauthenticated`].
 ///
-/// A token sent to an `isolated-network` or peer listener is ignored rather than checked: the listener or the peer uid
-/// already decides the caller, and the header is reserved, so it is stripped before forwarding.
+/// A token sent to an `isolated-network` or peer listener is ignored: the listener or the peer uid already decides the
+/// caller, and the header is reserved, so it is stripped before forwarding.
 pub fn identify_caller(
     policy: &ActivePolicy,
     listener: &ListenerName,
@@ -83,9 +89,8 @@ pub fn identify_caller(
 
 /// Finds the peer caller in `callers` whose account resolved to `peer_uid` when `policy` was activated.
 ///
-/// A uid is not secret, since any local account can list them all in `/etc/passwd`, so a plain comparison that stops
-/// at the first match is fine; unlike [`token_holder`], timing here reveals nothing worth hiding. Activation refuses two
-/// callers on one listener with the same uid, so at most one matches.
+/// A uid is not secret: any local account can read them all in `/etc/passwd`. So, unlike [`token_holder`], the search
+/// stops at the first match. Activation refuses two callers on one listener with the same uid, so at most one matches.
 fn peer_holder<'a>(policy: &ActivePolicy, callers: &[(&'a CallerName, &'a CallerConfig)], peer_uid: Option<u32>) -> Option<&'a CallerName> {
     let uid = peer_uid?;
     callers
@@ -108,7 +113,8 @@ fn presented_token(listener: &ListenerConfig, headers: &[(HeaderName, HeaderValu
 
 /// Returns the value of the one header whose lowercase name is `lowercase`; none when it is absent or repeated.
 ///
-/// A repeated token header is refused rather than resolved, because a proxy and Iron Vault could pick different copies.
+/// A repeated token header is refused, because a proxy in front of Iron Vault and Iron Vault itself could pick different
+/// copies.
 fn sole_value<'a>(headers: &'a [(HeaderName, HeaderValue)], lowercase: &str) -> Option<&'a [u8]> {
     let mut values = headers
         .iter()
@@ -138,7 +144,7 @@ fn token_holder<'a>(callers: &[(&'a CallerName, &'a CallerConfig)], token: &Call
 /// Returns the one candidate whose comparison matched, or none when zero or several did.
 ///
 /// Every comparison is consumed, with no early return, so the work done does not depend on which caller matched or
-/// whether any did; timing then reveals neither the matching caller's position nor a near miss. Several matches cannot
+/// whether any did, and timing reveals neither the matching caller's position nor a near miss. Several matches cannot
 /// happen in a validated config, which refuses a shared token hash, and would be refused here anyway.
 fn sole_match<T>(comparisons: impl Iterator<Item = (T, bool)>) -> Option<T> {
     let (found, count) = comparisons.fold((None, 0usize), |(found, count), (candidate, matched)| {

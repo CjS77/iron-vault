@@ -1,4 +1,6 @@
-//! Names a credential record's kind, so activation can check that a route's slot suits it (spec §6, future spec §2.2).
+//! Names a credential record's kind, so activation can check that a route's slot suits it
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [future spec §2.2](../../../design/future-specifications.md#22-credential-kinds)).
 //!
 //! The kinds themselves live in `iron-vault-kinds`; this crate only names them so activation can refuse a route whose
 //! slot its credential's kind cannot fill.
@@ -8,18 +10,19 @@ use crate::slot::Slot;
 /// The kind a credential record declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CredentialKind {
-    /// A stored provider key, sent as is.
+    /// A stored provider key, sent as is (`kind = "static"`).
     Static,
-    /// A username and password, sent as `Authorization: Basic`.
+    /// A username and password, sent as `Authorization: Basic` (`kind = "basic"`).
     Basic,
 }
 
 impl CredentialKind {
-    /// Returns whether a credential of this kind can fill `slot`. A static key fills a header or query slot. A Basic
-    /// credential fills only a Basic slot, since anywhere else its token would travel without its `Basic` scheme.
+    /// Returns `true` if and only if a credential of this kind can fill `slot`. A [`Static`](Self::Static) key fills a
+    /// header or query slot. A [`Basic`](Self::Basic) credential fills only a [`Slot::Basic`], since anywhere else its
+    /// token would travel without its `Basic` scheme.
     ///
-    /// The match is exhaustive on purpose, with every kind and slot named: a new kind (an HMAC or signing secret, say)
-    /// must not fall into a plain header or query slot by default, so it does not compile until it has its own rule.
+    /// The match names every kind and slot, so a new kind, such as an HMAC secret, does not compile until it has its
+    /// own rule and cannot fall into a header or query slot by default.
     pub fn fills(self, slot: &Slot) -> bool {
         match (self, slot) {
             (CredentialKind::Static, Slot::Header(_) | Slot::Query(_)) => true,

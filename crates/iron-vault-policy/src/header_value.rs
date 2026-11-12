@@ -1,4 +1,5 @@
-//! HTTP header field values, as received from callers and as written for upstreams (spec §9).
+//! HTTP header field values, as received from callers and as written for upstreams
+//! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!
 //! Every header the service forwards passes through [`HeaderValue`], so the rules that stop header splitting and
 //! request smuggling are checked in one place.
@@ -10,14 +11,16 @@ use thiserror::Error;
 
 /// The bytes of one HTTP field value.
 ///
-/// CR, LF and NUL are rejected (RFC 9110 §5.5) because they split or truncate a header when the request is written.
-/// Every other C0 control except HTAB, and DEL, is rejected too: RFC 9110 §5.5 forbids them, a lenient upstream may
+/// CR, LF and NUL are rejected ([RFC 9110 §5.5](https://www.rfc-editor.org/rfc/rfc9110#section-5.5)) because they
+/// split or truncate a header when the request is written. Every other C0 control except HTAB, and DEL, is rejected
+/// too: [RFC 9110 §5.5](https://www.rfc-editor.org/rfc/rfc9110#section-5.5) forbids them, a lenient upstream may
 /// parse them differently from Iron Vault (room for request smuggling), and refusing them here gives the caller a
 /// clean `400` instead of a transport error when the request is sent. Bytes from 0x80 upwards (`obs-text`) are kept:
 /// callers may legitimately send them, and the value is forwarded as bytes, never decoded as text.
 ///
 /// Values can carry caller tokens or credentials, so `Debug` shows only the length, there is no `Display`, and the
-/// bytes are wiped when the value is dropped (spec §14).
+/// bytes are wiped when the value is dropped
+/// ([spec §14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)).
 #[derive(PartialEq, Eq)]
 pub struct HeaderValue(Vec<u8>);
 
@@ -49,7 +52,7 @@ impl HeaderValue {
         self.0.len()
     }
 
-    /// Whether the value is empty, which HTTP allows.
+    /// Returns `true` if and only if the value is empty, which HTTP allows.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

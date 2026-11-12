@@ -29,7 +29,7 @@ fn probes() -> [String; 11] {
     ]
 }
 
-/// The names a refusal lists after "expected", which serde puts in backticks.
+/// The names a refusal lists after `expected`, which serde puts in backticks.
 fn expected_names(refusal: &str) -> Vec<String> {
     let (_, expected) = refusal.split_once("expected").unwrap();
     expected.split('`').skip(1).step_by(2).map(str::to_owned).collect()

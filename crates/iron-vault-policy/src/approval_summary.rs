@@ -1,11 +1,13 @@
-//! Describes, in the service's own words, what an approval changes (spec §5, design/config-approval.md "Approval
-//! summary"). `config approve` shows this summary before it asks for the approval passphrase.
+//! Describes, in the service's own words, what an approval changes
+//! ([spec §5](../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns),
+//! [config approval: approval summary](../../../design/config-approval.md#approval-summary)). `config approve` shows this
+//! summary before it asks for the approval passphrase.
 //!
 //! [`summarize`] diffs the pending validated config against the active one. It is a pure function of the two configs, so
 //! the same inputs always give the same text: every collection is walked in `BTreeMap` or `BTreeSet` order. The
 //! committed version, vault ID and digest are not known to this crate; the command that shows the summary writes that
 //! header and puts [`ApprovalSummary::render`] below it. A token hash is never rendered, and every configured value is
-//! escaped, so a hostile value cannot forge a summary line (spec §18).
+//! escaped, so a hostile value cannot forge a summary line ([spec §18](../../../design/iron-vault-specification.md#18-logging)).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
@@ -23,7 +25,8 @@ use crate::route::RouteConfig;
 use crate::slot::Slot;
 use crate::validated::ValidatedConfig;
 
-/// The line printed when the bytes differ but no section has an entry (whitespace or comments, spec §12).
+/// The line printed when the bytes differ but no section has an entry: only whitespace or comments changed
+/// ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
 const TEXT_ONLY: &str = "no policy change; text changed";
 
 /// The line printed, with the committed version, when the pending config's bytes equal the active config's: the
@@ -90,8 +93,8 @@ pub struct ApprovalSummary {
 
 /// Diffs `pending` against `active`; `None` means nothing is active, so everything is listed as added.
 ///
-/// Call it only for a config whose bytes differ from the active config's: a summary with no entries renders as "no
-/// policy change; text changed". For identical bytes use [`ApprovalSummary::same_config`].
+/// Call it only for a config whose bytes differ from the active config's: a summary with no entries renders as
+/// `no policy change; text changed`. For identical bytes use [`ApprovalSummary::same_config`].
 pub fn summarize(active: Option<&ValidatedConfig>, pending: &ValidatedConfig) -> ApprovalSummary {
     let (no_callers, no_routes, no_listeners) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
     let old_callers = active.map_or(&no_callers, ValidatedConfig::callers);
@@ -113,7 +116,7 @@ pub fn summarize(active: Option<&ValidatedConfig>, pending: &ValidatedConfig) ->
 
 impl ApprovalSummary {
     /// The summary of a pending config whose bytes equal the config committed as `version`: it has no entries and
-    /// renders as "no change; same config as version N", so the owner sees the approval only signs the config again.
+    /// renders as `no change; same config as version N`, so the owner sees the approval only signs the config again.
     pub fn same_config(version: u64) -> Self {
         Self {
             no_active_config: false,
@@ -140,14 +143,14 @@ impl ApprovalSummary {
         ]
     }
 
-    /// Whether no section has an entry.
+    /// Returns `true` if and only if no section has an entry.
     pub fn is_empty(&self) -> bool {
         self.sections().iter().all(|(_, entries)| entries.is_empty())
     }
 
-    /// The summary body: "no active config" when nothing is active, then each non-empty section in fixed order, or the
-    /// text-only line when no section has an entry. When the summary is a same-config one, the body is only the line
-    /// "no change; same config as version N". Every line ends with a newline.
+    /// The summary body: `no active config` when nothing is active, then each non-empty section in fixed order, or the
+    /// text-only line when no section has an entry. A same-config summary's body is only the line
+    /// `no change; same config as version N`. Every line ends with a newline.
     pub fn render(&self) -> String {
         let intro = self.no_active_config.then(|| format!("{NO_ACTIVE}\n"));
         let sections = self
@@ -208,8 +211,8 @@ fn join<T: Display>(items: impl IntoIterator<Item = T>) -> String {
     }
 }
 
-/// Lists an entry for every key in either map, in key order. `fields` lists a value's compared fields; `extra` adds a change
-/// the fields cannot show, such as a replaced token.
+/// Lists an entry for every key in either map, in key order. `fields` lists a value's compared fields; `extra` adds a
+/// change the fields cannot show, such as a replaced token.
 fn diff_maps<K: Ord + Display, V: PartialEq>(
     old: &BTreeMap<K, V>,
     new: &BTreeMap<K, V>,
@@ -244,7 +247,7 @@ fn field_text(fields: &[Field]) -> String {
         .join(", ")
 }
 
-/// Lists the fields that differ, old -> new, then any extra change; `None` when nothing differs.
+/// Lists the fields that differ as `old -> new`, then any extra change; `None` when nothing differs.
 fn changed_detail(before: &[Field], after: &[Field], extra: Option<String>) -> Option<String> {
     let changes: Vec<String> = before
         .iter()
@@ -273,7 +276,7 @@ fn caller_fields(caller: &CallerConfig) -> Vec<Field> {
     ]
 }
 
-/// Reports "token changed" when both callers use tokens and the hashes differ; the hash itself is never shown.
+/// Reports `token changed` when both callers use tokens and the hashes differ; the hash itself is never shown.
 fn caller_extra(before: &CallerConfig, after: &CallerConfig) -> Option<String> {
     match (before.auth(), after.auth()) {
         (CallerAuth::Token(old), CallerAuth::Token(new)) if old != new => Some("token changed".to_owned()),
@@ -407,8 +410,8 @@ fn logging_entries(old: Option<&LogDestinationSetting>, new: Option<&LogDestinat
         .collect()
 }
 
-/// How an interval reads in the summary. `None` is shown as `default`, not as 90, so adding an explicit 90 is a visible
-/// change, as it is for the log destination.
+/// How an interval reads in the summary. `None` is shown as `default`, not as `90`, so adding an explicit `90` is a
+/// visible change, as it is for the log destination.
 fn interval_text(interval: Option<ReminderInterval>) -> String {
     interval.map_or_else(|| "default".to_owned(), |i| i.days().to_string())
 }
@@ -443,7 +446,8 @@ mod tests {
         config(&SPEC_EXAMPLE.replacen(from, to, 1))
     }
 
-    /// The rendered lines of the summary of `pending` against the spec example.
+    /// The rendered lines of the summary of `pending` against the
+    /// [spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) example.
     fn lines(pending: &ValidatedConfig) -> Vec<String> {
         summarize(Some(&spec()), pending).render().lines().map(str::to_owned).collect()
     }

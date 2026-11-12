@@ -1,5 +1,6 @@
 //! The `[recovery] reminder_days` setting: how often the service reminds the owner to run a recovery check
-//! (spec §16, `design/recovery.md`).
+//! ([spec §16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration),
+//! [recovery design](../../../design/recovery.md#reminders)).
 
 use std::fmt;
 
@@ -10,12 +11,12 @@ use thiserror::Error;
 const MIN_DAYS: u16 = 7;
 /// The most days a reminder interval may be, so a reminder cannot be pushed out of sight for years.
 const MAX_DAYS: u16 = 365;
-/// The interval when the `[recovery]` table or its key is absent: every few months.
+/// The interval when the `[recovery]` table or its `reminder_days` key is absent.
 const DEFAULT_DAYS: u16 = 90;
 
 /// Why a `[recovery] reminder_days` was rejected.
 ///
-/// Every wrong value, whatever its type, gets this one message, so the rule is always named.
+/// Every wrong value, of any type, gets this one message, so the rule is always named.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("recovery.reminder_days must be a whole number of days from {MIN_DAYS} to {MAX_DAYS}, not {found}")]
 pub struct ReminderIntervalError {

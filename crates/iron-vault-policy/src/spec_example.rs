@@ -1,7 +1,9 @@
-//! The §6 configuration example, shared by tests that parse, validate and activate it.
+//! The [spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) configuration
+//! example, shared by tests that parse, validate and activate it.
 
-/// The §6 example as written, except that its `token_hash = "blake2b:..."` placeholder is not a valid digest, so
-/// a real 64-hex-digit hash stands in. The `naomi-backoffice` listener still follows the caller that names it.
+/// The [spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) example as
+/// written, except that its `token_hash = "blake2b:..."` placeholder is not a valid digest, so a real 64-hex-digit
+/// hash stands in. The `naomi-backoffice` listener still follows the caller that names it.
 pub(crate) const SPEC_EXAMPLE: &str = r#"schema_version = 1
 
 [listeners.local]

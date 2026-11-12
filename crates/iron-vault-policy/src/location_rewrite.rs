@@ -1,8 +1,10 @@
-//! Decides what the caller sees of an upstream redirect's `Location` (spec §8, §11). The service calls
+//! Decides what the caller sees of an upstream redirect's `Location`
+//! ([spec §8](../../../design/iron-vault-specification.md#8-request-flow),
+//! [§11](../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing)). The service calls
 //! [`rewrite_location`] on every upstream response that carries one, before response scrubbing.
 //!
 //! The upstream client never follows a redirect, so the `Location` it returns is the caller's to follow. The value is
-//! resolved against the URL actually sent (RFC 3986 §5) and then:
+//! resolved against the URL actually sent ([RFC 3986 §5](https://www.rfc-editor.org/rfc/rfc3986#section-5)) and then:
 //!
 //! - a same-origin destination inside the upstream base path is rewritten under the route prefix, as an absolute path,
 //!   because the service does not know which listener origin the caller used;
@@ -72,10 +74,13 @@ pub enum LocationRefusal {
     /// A same-origin destination outside the upstream base path: an out-of-base redirect.
     #[error("upstream Location leaves the upstream base path")]
     OutOfBase,
-    /// A same-origin path breaks a request-target path rule (§9), or would be reinterpreted when rebuilt.
+    /// A same-origin path breaks a request-target path rule
+    /// ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)), or would be reinterpreted
+    /// when rebuilt.
     #[error("upstream Location has an ambiguous path")]
     AmbiguousPath,
-    /// A cross-origin destination not written as an absolute `scheme://authority` URL: a relative cross-origin redirect.
+    /// A cross-origin destination not written as an absolute `scheme://authority` URL: a relative cross-origin
+    /// redirect.
     #[error("upstream Location reaches another origin without an absolute URL")]
     RelativeCrossOrigin,
 }
@@ -119,12 +124,12 @@ fn require(holds: bool, refusal: LocationRefusal) -> Result<(), LocationRefusal>
     holds.then_some(()).ok_or(refusal)
 }
 
-/// Accepts only visible ASCII other than `\`: a URI reference has no spaces, controls or raw non-ASCII bytes, which the `url` crate
-/// would strip or encode rather than refuse.
+/// Accepts only visible ASCII other than `\`: a URI reference has no spaces, controls or raw non-ASCII bytes, which the
+/// `url` crate would strip or encode rather than refuse.
 ///
-/// `\` is refused anywhere in the text, not only in the path. RFC 3986 allows it nowhere, and the `url` crate reads it
-/// as `/` in the authority too, so `https://other.example\@api.svc.example/` names one host to this resolver and another
-/// to an RFC 3986 parser, whether the value is rewritten or passed through.
+/// `\` is refused anywhere in the text, not only in the path. [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) allows
+/// it nowhere, and the `url` crate reads it as `/` in the authority too, so `https://other.example\@api.svc.example/`
+/// names one host to this resolver and another to an RFC 3986 parser, whether the value is rewritten or passed through.
 fn uri_characters(bytes: &[u8]) -> Result<&str, LocationRefusal> {
     bytes
         .iter()
@@ -134,8 +139,8 @@ fn uri_characters(bytes: &[u8]) -> Result<&str, LocationRefusal> {
         .ok_or(LocationRefusal::Malformed)
 }
 
-/// Returns whether `url` has scheme `https`, the upstream's host after the one canonical [`Host`] conversion, and its
-/// port (443 when omitted).
+/// Returns `true` if and only if `url` has scheme `https`, the upstream's host after the one canonical [`Host`]
+/// conversion, and the upstream's port (`443` when omitted).
 fn is_same_origin(url: &Url, upstream: &UpstreamUrl) -> bool {
     url.scheme() == "https"
         && url.host_str().and_then(|host| host.parse::<Host>().ok()).as_ref() == Some(upstream.host())
@@ -145,8 +150,9 @@ fn is_same_origin(url: &Url, upstream: &UpstreamUrl) -> bool {
 /// Checks the path as the upstream wrote it, because resolution turns `%2e` into a dot segment, which would erase
 /// exactly the evidence the request-target rules refuse; [`uri_characters`] already refused `\`.
 ///
-/// Literal `.` and `..` segments are allowed here: they are ordinary relative-reference syntax, which RFC 3986 §5.2.4
-/// resolves one way for every client, and the resolved path is checked again in full.
+/// Literal `.` and `..` segments are allowed here: they are ordinary relative-reference syntax, which
+/// [RFC 3986 §5.2.4](https://www.rfc-editor.org/rfc/rfc3986#section-5.2.4) resolves one way for every client, and the
+/// resolved path is checked again in full.
 fn check_raw_path(text: &str) -> Result<(), LocationRefusal> {
     let path = raw_path(text);
     require(path.chars().all(|c| is_path_char(c) || c == '/'), LocationRefusal::AmbiguousPath)?;
@@ -156,7 +162,8 @@ fn check_raw_path(text: &str) -> Result<(), LocationRefusal> {
         .map_err(|_| LocationRefusal::AmbiguousPath)
 }
 
-/// Returns the path component of a URI reference (RFC 3986 §4.1): without query or fragment, scheme, or authority.
+/// Returns the path component of a URI reference ([RFC 3986 §4.1](https://www.rfc-editor.org/rfc/rfc3986#section-4.1)):
+/// without query or fragment, scheme, or authority.
 fn raw_path(text: &str) -> &str {
     let before_query = text.split(['?', '#']).next().unwrap_or_default();
     let after_scheme = before_query
@@ -169,13 +176,15 @@ fn raw_path(text: &str) -> &str {
     }
 }
 
-/// Returns whether `text` starts `scheme://`: an absolute URL with an authority, which resolves to the same URL against every base.
+/// Returns `true` if and only if `text` starts `scheme://`: an absolute URL with an authority, which resolves to the
+/// same URL against every base.
 fn has_scheme_and_authority(text: &str) -> bool {
     text.split_once(':')
         .is_some_and(|(scheme, rest)| is_scheme(scheme) && rest.starts_with("//"))
 }
 
-/// Returns whether `text` is an RFC 3986 `scheme`: a letter, then letters, digits, `+`, `-` or `.`.
+/// Returns `true` if and only if `text` is an [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-3.1) `scheme`:
+/// a letter, then letters, digits, `+`, `-` or `.`.
 fn is_scheme(text: &str) -> bool {
     let mut chars = text.chars();
     chars.next().is_some_and(|c| c.is_ascii_alphabetic()) && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
@@ -203,8 +212,8 @@ fn remaining_path(resolved: &Url, upstream: &UpstreamUrl) -> Result<RemainingPat
     })
 }
 
-/// Drops every parameter whose decoded name is a query slot's, other parameters kept in order; untouched for
-/// a header or Basic slot. `None` when nothing is left.
+/// Drops every parameter whose decoded name is the query slot's, keeping the others in order, and leaves the query
+/// unchanged for a header or `Basic` slot. Returns `None` when nothing is left.
 fn kept_query(query: Option<&str>, slot: &Slot) -> Option<String> {
     let query = query?;
     let Slot::Query(name) = slot else {
@@ -217,8 +226,8 @@ fn kept_query(query: Option<&str>, slot: &Slot) -> Option<String> {
     (!kept.is_empty()).then(|| kept.join("&"))
 }
 
-/// Builds `<route prefix>/<remaining segments>`, the query and the fragment, set through the `url` API on the upstream URL and
-/// read back, then taken from the path onwards.
+/// Builds `<route prefix>/<remaining segments>`, the query and the fragment, set through the `url` API on the upstream
+/// URL and read back, then taken from the path onwards.
 ///
 /// The segments are already percent-encoded, so they go through `Url::set_path`, which keeps existing escapes, as
 /// [`UpstreamTarget`](crate::UpstreamTarget) does; the read-back catches anything the parser would reinterpret.

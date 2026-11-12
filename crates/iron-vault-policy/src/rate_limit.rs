@@ -1,4 +1,6 @@
-//! A route's request-rate allowance (spec §6, §8).
+//! A route's request-rate allowance
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [§8](../../../design/iron-vault-specification.md#8-request-flow)).
 //!
 //! The service enforces it as a token bucket that refills at `requests / per_seconds` and holds at most `burst`
 //! tokens. This type only carries the validated numbers; [`TokenBucket`](crate::TokenBucket) does the counting.

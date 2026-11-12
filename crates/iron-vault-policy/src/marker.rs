@@ -1,10 +1,13 @@
-//! Markers: `{iv:name}` placeholders an SDK may put where its API key belongs (spec §9, implementation spec §2.2 Q-1).
+//! Markers: `{iv:name}` placeholders an SDK may put where its API key belongs
+//! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules),
+//! [implementation spec §2.2 Q-1](../../../design/implementation-specification.md#22-product-decisions-and-resulting-behavior)).
 //!
-//! A marker never selects or expands a credential: the route alone selects the credential (§8 step 6). Slot filling
-//! scans only the text it is about to replace, and refuses the request when a marker there names a different
-//! credential, because that caller expected another key and is misconfigured or probing. Markers anywhere else are
-//! inert text and are never scanned, so a marker in an issue title or a JSON body cannot make the upstream store the
-//! real key (§9).
+//! A marker never selects or expands a credential: the route alone selects the credential
+//! ([§8](../../../design/iron-vault-specification.md#8-request-flow) step 6). Slot filling scans only the text it is
+//! about to replace, and refuses the request when a marker there names a different credential, because that caller
+//! expected another key and is misconfigured or probing. Markers anywhere else are inert text and are never scanned,
+//! so a marker in an issue title or a JSON body cannot make the upstream store the real key
+//! ([§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 
 use thiserror::Error;
 
@@ -28,9 +31,9 @@ pub enum MarkerError {
 ///
 /// For example, `Bearer {iv:fx_key}` yields `fx_key`, and `{iv:Bad}` or an unclosed `{iv:fx` yields an error.
 ///
-/// Each `{iv:` starts a marker that runs to the next `}`, and the text between must follow the [`CredentialName`] rules.
-/// Matching is case-sensitive, as `{iv:` is the only marker syntax. A `{iv:` with no closing `}` ends the scan with
-/// one error, so a caller cannot hide a marker behind an unterminated one.
+/// Each `{iv:` starts a marker that runs to the next `}`, and the text between must follow the [`CredentialName`]
+/// rules. Matching is case-sensitive, as `{iv:` is the only marker syntax. A `{iv:` with no closing `}` ends the scan
+/// with one error, so a caller cannot hide a marker behind an unterminated one.
 pub fn markers(text: &str) -> impl Iterator<Item = Result<CredentialName, MarkerError>> + '_ {
     let mut rest = text;
     std::iter::from_fn(move || {

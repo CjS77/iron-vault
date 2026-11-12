@@ -1,5 +1,6 @@
-//! Parses and matches path patterns, the route restriction that decides which upstream paths a route may reach (spec
-//! §6). Authorization matches them against the request path below the route prefix.
+//! Parses and matches path patterns, the route restriction that decides which upstream paths a route may reach
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)). Authorization
+//! matches them against the request path below the route prefix.
 //!
 //! A pattern is written as an absolute path whose segments are literals, `*` (exactly one segment) or `**` (zero or
 //! more complete segments). For example:
@@ -11,10 +12,10 @@
 //! /items/*/price     /items/42/price                                /items/price, /items/4/2/price
 //! ```
 //!
-//! Patterns match the whole normalized request path below the upstream base path (the segments
-//! after the route prefix), never its query. Normalizing a request path into segments is
-//! [`NormalizedPath`](crate::NormalizedPath)'s job; matching here assumes segments in that form: validated, with
-//! unreserved characters decoded and every other escape kept as uppercase `%XX`.
+//! Patterns match the whole normalized request path below the upstream base path (the segments after the route prefix),
+//! never its query. Normalizing a request path into segments is [`NormalizedPath`](crate::NormalizedPath)'s job;
+//! matching here assumes segments in that form: validated, with unreserved characters decoded and every other escape
+//! kept as uppercase `%XX`.
 //!
 //! A literal pattern segment never contains `%`, so a request segment that still holds an escape (`caf%C3%A9`) can be
 //! matched only by `*` or `**`. Matching therefore fails closed: no literal can match a spelling it did not name.
@@ -85,7 +86,8 @@ enum Segment {
 }
 
 impl Segment {
-    /// Returns whether this segment consumes exactly the given request segment; `Any` is handled by the matcher.
+    /// Returns `true` if and only if this segment consumes exactly the given request segment. The matcher handles
+    /// `Any`.
     fn matches_one(&self, segment: &str) -> bool {
         match self {
             Self::Literal(text) => text == segment,
@@ -134,8 +136,8 @@ impl PathPattern {
         &self.text
     }
 
-    /// Returns whether the pattern matches the whole of a normalized request path, given as its segments without the leading
-    /// slash, trailing slash or query. The root path is the empty slice.
+    /// Returns `true` if and only if the pattern matches the whole of a normalized request path, given as its segments
+    /// without the leading slash, trailing slash or query. The root path is the empty slice.
     ///
     /// Uses greedy two-pointer matching that backtracks only to the most recent `**`, so the worst case is
     /// O(pattern × path) rather than exponential in the number of `**` segments.
@@ -195,12 +197,14 @@ impl fmt::Display for PathPattern {
     }
 }
 
-/// Returns whether a character may appear in a pattern: `/`, `*`, or an RFC 3986 `pchar` other than `%`.
+/// Returns `true` if and only if `c` may appear in a pattern: `/`, `*`, or an
+/// [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-3.3) `pchar` other than `%`.
 ///
-/// Excluding `%` gives each literal exactly one spelling. A normalized segment ([`NormalizedPath`](crate::NormalizedPath))
-/// never escapes an unreserved character, but keeps an escaped sub-delimiter such as `%3B` encoded and distinct from a
-/// literal `;`, so a literal here matches only the literal spelling. A normalized segment that still holds a `%XX`
-/// escape is matched only by a wildcard. `?` and `#` are excluded because patterns never cover a query or fragment.
+/// Excluding `%` gives each literal exactly one spelling. A normalized segment
+/// ([`NormalizedPath`](crate::NormalizedPath)) never escapes an unreserved character, but keeps an escaped
+/// sub-delimiter such as `%3B` encoded and distinct from a literal `;`, so a literal here matches only the literal
+/// spelling. A normalized segment that still holds a `%XX` escape is matched only by a wildcard. `?` and `#` are
+/// excluded because patterns never cover a query or fragment.
 fn is_pattern_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || "/*-._~!$&'()+,;=:@".contains(c)
 }
@@ -250,7 +254,7 @@ impl PathPatterns {
         }
     }
 
-    /// Returns whether any pattern matches the normalized request path segments.
+    /// Returns `true` if and only if any pattern matches the normalized request path segments.
     pub fn matches(&self, path: &[&str]) -> bool {
         self.0.iter().any(|pattern| pattern.matches(path))
     }
@@ -356,7 +360,7 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(1));
     }
 
-    /// Exponential but obviously correct reference matcher.
+    /// A reference matcher, exponential but simple enough to check by reading.
     fn reference(pattern: &[Segment], path: &[&str]) -> bool {
         match pattern.split_first() {
             None => path.is_empty(),

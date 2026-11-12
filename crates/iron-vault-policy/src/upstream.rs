@@ -1,12 +1,14 @@
-//! Parses a route's `upstream` URL into its one canonical form (spec §9).
+//! Parses a route's `upstream` URL into its one canonical form
+//! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!
 //! For example, `https://API.fx.example:443/v1/` and `https://api.fx.example/v1` are the same upstream, and both
 //! display as the latter.
 //!
 //! A route's upstream is parsed here once. Validation runs on the raw text, because the `url` crate silently resolves
-//! dot segments, strips tabs and newlines, and treats `\` as `/` for `https`, which would erase exactly the evidence
-//! §9 requires us to reject. The canonical result is then checked to be a fixed point of the `url` parser, so a
-//! later URL built from it through the `url` API means what was validated.
+//! dot segments, strips tabs and newlines, and treats `\` as `/` for `https`, which would erase the evidence that
+//! [spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules) requires us to reject. The
+//! canonical result is then checked to be a fixed point of the `url` parser, so a later URL built from it through the
+//! `url` API means what was validated.
 
 use std::fmt;
 use std::str::FromStr;
@@ -27,8 +29,8 @@ const SCHEME_PREFIX: &str = "https://";
 /// omitted). The base path is a list of validated segments, still percent-encoded as written but with escape hex
 /// digits uppercased; `https://h/a/` and `https://h/a` are the same upstream, as are `https://h/` and `https://h`.
 ///
-/// The canonical form's parsed `url::Url` is kept, so every request URL starts from the one parse that was checked
-/// to be a fixed point rather than parsing the upstream again (§9).
+/// The canonical form's parsed `url::Url` is kept, so every request URL starts from the one parse that was checked to
+/// be a fixed point ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub struct UpstreamUrl {
@@ -73,7 +75,8 @@ pub enum UpstreamUrlError {
     /// The base path has a `.` or `..` segment.
     #[error("upstream URL base path segment {0:?} is a dot segment")]
     DotSegment(String),
-    /// A base path segment contains a character outside the RFC 3986 path character set.
+    /// A base path segment contains a character outside the
+    /// [RFC 3986 §3.3](https://www.rfc-editor.org/rfc/rfc3986#section-3.3) path character set.
     #[error("upstream URL base path contains {0:?}, which must not appear unencoded in a path")]
     ForbiddenPathCharacter(char),
     /// A `%` in the base path is not followed by two hex digits.
@@ -95,7 +98,7 @@ impl UpstreamUrl {
         &self.host
     }
 
-    /// The upstream port, 443 when the URL omitted it.
+    /// The upstream port, `443` when the URL omitted it.
     pub fn port(&self) -> Port {
         self.port
     }
@@ -139,7 +142,7 @@ impl TryFrom<String> for UpstreamUrl {
     }
 }
 
-/// The canonical form: lowercase scheme, canonical host, port only when it is not 443, and the base path without a
+/// The canonical form: lowercase scheme, canonical host, port only when it is not `443`, and the base path without a
 /// trailing slash (`/` for a root base path).
 impl fmt::Display for UpstreamUrl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -246,7 +249,7 @@ fn normalize_escapes(segment: &str) -> Result<String, UpstreamUrlError> {
     })
 }
 
-/// Returns whether a base path may not hold `byte` as an escape.
+/// Returns `true` if and only if a base path must not hold `byte` as an escape.
 ///
 /// Encoded unreserved characters (including `.`) have an unencoded equivalent, so encoding them only hides intent;
 /// encoded separators, `%` and controls are what double decoding turns into traversal.

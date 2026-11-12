@@ -1,5 +1,6 @@
 //! Assembles the outgoing request: the authorized method, the upstream target and the outgoing headers, with the
-//! route's slot filled exactly once (spec §8 step 7, §9).
+//! route's slot filled exactly once ([spec §8](../../../design/iron-vault-specification.md#8-request-flow) step 7,
+//! [§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!
 //! For example, on a route whose credential is `fx_key` and whose slot is `{ query = "access_key" }`:
 //!
@@ -11,7 +12,9 @@
 //!
 //! The slot is the only place a credential is written. Only the text the slot is about to replace is scanned for
 //! markers; the body, the path, other headers and other query parameters are never read, so a marker there stays
-//! inert (§9). The credential always comes from the route, never from a marker (§8 step 6, implementation spec §2.2 Q-1).
+//! inert ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)). The credential always
+//! comes from the route, never from a marker ([spec §8](../../../design/iron-vault-specification.md#8-request-flow) step 6;
+//! [implementation spec §2.2](../../../design/implementation-specification.md#22-product-decisions-and-resulting-behavior) Q-1).
 
 use secrecy::ExposeSecret;
 use secrecy::zeroize::Zeroizing;
@@ -39,7 +42,7 @@ use crate::upstream_target::{UpstreamTarget, UpstreamTargetError};
 /// The filled header's bytes are wiped when the request is dropped. The URL's copy of a filled query is not, because
 /// `url::Url` owns its buffer. The URL is never cloned: it moves into the [`CheckedRequest`](crate::CheckedRequest)
 /// and, through [`into_parts`](crate::CheckedRequest::into_parts), into the upstream client's HTTP library, whose own
-/// copies are the residual recorded in `design/secret-handling.md`.
+/// copies are listed in [secret handling: known residual copies](../../../design/secret-handling.md#known-residual-copies).
 #[derive(Debug)]
 pub struct OutgoingRequest {
     method: Method,
@@ -52,10 +55,12 @@ pub struct OutgoingRequest {
 /// The text never contains a header value, query text or the slot value: each may hold a secret.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum AssembleError {
-    /// A marker in the slot names a credential other than the route's: `400` (§15), with no upstream request.
+    /// A marker in the slot names a credential other than the route's: `400`
+    /// ([spec §15](../../../design/iron-vault-specification.md#15-service-states-and-errors)), with no upstream request.
     #[error("a marker in the slot names a different credential")]
     ForeignMarker,
-    /// A `{iv:` in the slot has an invalid name or no closing `}`: `400` (§15), with no upstream request.
+    /// A `{iv:` in the slot has an invalid name or no closing `}`: `400`
+    /// ([spec §15](../../../design/iron-vault-specification.md#15-service-states-and-errors)), with no upstream request.
     #[error("the slot holds a malformed {{iv:…}} marker")]
     MalformedMarker,
     /// The slot value for a header or Basic slot is not ASCII. A header value is sent as bytes that upstreams read as
@@ -149,7 +154,7 @@ fn check_markers(text: &str, credential: &CredentialName) -> Result<(), Assemble
     })
 }
 
-/// Scans every caller copy of the slot header, whatever its case, then replaces them all with one rendered value.
+/// Scans every caller copy of the slot header, in any letter case, then replaces them all with one rendered value.
 fn fill_header(
     headers: &mut OutgoingHeaders,
     slot: &HeaderSlot,
@@ -195,7 +200,7 @@ fn fill_query(
     Ok(target.with_query(&query)?)
 }
 
-/// Returns whether `param`'s name, percent-decoded with `+` read as a space, is exactly the slot's name.
+/// Returns `true` if and only if `param`'s name, percent-decoded with `+` read as a space, is exactly the slot's name.
 fn is_slot_param(param: &str, name: &QueryParamName) -> bool {
     decode_param(param).is_some_and(|(decoded, _)| decoded == name.as_str())
 }

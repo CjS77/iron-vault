@@ -1,8 +1,10 @@
-//! The token bucket that enforces a route's [`RateLimit`] (spec §8, §15). [`RateLimiter`](crate::RateLimiter) holds
-//! one per route and per stricter caller limit.
+//! The token bucket that enforces a route's [`RateLimit`]
+//! ([spec §8](../../../design/iron-vault-specification.md#8-request-flow),
+//! [§15](../../../design/iron-vault-specification.md#15-service-states-and-errors)).
+//! [`RateLimiter`](crate::RateLimiter) holds one per route and per stricter caller limit.
 //!
 //! The arithmetic is exact integer arithmetic so rounding can never grant an extra request. The level is counted in
-//! *units*, where one token is `per_seconds × 10⁹` units: one nanosecond then refills exactly `requests` units, so
+//! *units*, where one token is `per_seconds × 10⁹` units: one nanosecond refills exactly `requests` units, so
 //! no fraction of a token is ever lost or invented. Time is passed in, which keeps the bucket pure and lets tests
 //! step a clock instead of sleeping.
 //!
@@ -38,8 +40,8 @@ pub struct TokenBucket {
 impl TokenBucket {
     /// Creates an empty bucket for `limit`, accounting for time from `now`.
     ///
-    /// Starting empty is deliberate (spec §8): a bucket that started full would let every restart replenish a
-    /// whole burst instantly.
+    /// The bucket starts empty ([spec §8](../../../design/iron-vault-specification.md#8-request-flow)) because a bucket
+    /// that started full would let every restart replenish a whole burst instantly.
     pub fn new(limit: RateLimit, now: Instant) -> Self {
         // Each factor is below 2³², so these products stay far below u128::MAX.
         let token_units = u128::from(limit.per_seconds().get()).saturating_mul(NANOS_PER_SEC);
@@ -62,7 +64,8 @@ impl TokenBucket {
         Ok(())
     }
 
-    /// Refills for the time elapsed up to `now` and reports whether a whole token is available, without spending it.
+    /// Refills for the time elapsed up to `now`, then returns `Ok` if a whole token is available, without spending it,
+    /// and otherwise the wait until one is.
     ///
     /// A request charged against two buckets checks both before spending from either, so a refusal by one never
     /// costs a token from the other.
@@ -104,7 +107,8 @@ impl TokenBucket {
 /// How long a refused caller should wait before a token is available, in whole seconds.
 ///
 /// Rounded **up** and never below one second, so a client honouring it is never refused again for retrying too early
-/// and the value can go straight into a `Retry-After` header (spec §15).
+/// and the value can go straight into a `Retry-After` header
+/// ([spec §15](../../../design/iron-vault-specification.md#15-service-states-and-errors)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("rate limit exhausted; retry after {secs} s")]
 pub struct RetryAfter {

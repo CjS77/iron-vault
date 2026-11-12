@@ -1,5 +1,7 @@
-//! Runs the cross-section checks that turn a parsed config into one the rest of the system can trust (spec §6–§9).
-//! Every config the service checks or approves passes through here before activation.
+//! Runs the cross-section checks that turn a parsed config into one the rest of the system can trust
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) to
+//! [§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)). Every config the service checks or
+//! approves passes through here before activation.
 //!
 //! Each section already passed its own rules when parsed; every check here needs two or more sections at once. All
 //! checks run and every failure is reported, in a fixed order, so an operator can fix a configuration in one pass and
@@ -27,8 +29,8 @@ use crate::token_hash::TOKEN_DIGEST_LEN;
 
 /// A parsed config whose references resolve and whose sections cannot conflict.
 ///
-/// [`ValidatedConfig::try_from`] is the only constructor, so holding one proves every check below passed. Facts the
-/// configuration cannot know, such as which credential records exist, are checked at activation instead.
+/// [`ValidatedConfig::try_from`] is the only constructor, so holding one proves every check in this module passed.
+/// Facts the configuration cannot know, such as which credential records exist, are checked at activation instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedConfig(ParsedConfig);
 
@@ -81,8 +83,9 @@ pub enum ValidationError {
     },
     /// An `isolated-network` caller's listener binds an address that is not confined to one network.
     ///
-    /// The caller has no token, so the listener address is its whole identity: a loopback bind hands its routes to every
-    /// local process, and a wildcard bind to every host that can reach any interface (spec §7).
+    /// The caller has no token, so the listener address is its whole identity: a loopback bind hands its routes to
+    /// every local process, and a wildcard bind to every host that can reach any interface
+    /// ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
     #[error(
         "caller {caller} uses auth = \"isolated-network\", so listener {listener} must bind a dedicated non-loopback, \
          non-wildcard address; {address} would let any local process or reachable host use its routes"
@@ -175,7 +178,7 @@ pub enum ValidationError {
     },
 }
 
-/// One cross-section check; each returns all of its failures.
+/// A cross-section check, which returns all of its failures.
 type Check = fn(&ParsedConfig) -> Vec<ValidationError>;
 
 /// The checks in report order.
@@ -193,7 +196,7 @@ const CHECKS: [Check; 8] = [
 impl TryFrom<ParsedConfig> for ValidatedConfig {
     type Error = Vec<ValidationError>;
 
-    /// Runs every check and returns every failure, never just the first.
+    /// Runs every check and returns every failure, in report order.
     fn try_from(config: ParsedConfig) -> Result<Self, Self::Error> {
         let errors: Vec<_> = CHECKS.iter().flat_map(|check| check(&config)).collect();
         match errors.is_empty() {
@@ -224,13 +227,13 @@ impl ValidatedConfig {
         self.0.limits()
     }
 
-    /// The `[logging] destination`, or none for the bootstrap destination.
+    /// The `[logging] destination`, or `None` for the bootstrap destination.
     pub fn log_destination(&self) -> Option<&LogDestinationSetting> {
         self.0.log_destination()
     }
 
-    /// The `[recovery] reminder_days` as written, `None` when absent. The approval summary diffs this, so an absent
-    /// table shows as `default` rather than as 90.
+    /// The `[recovery] reminder_days` as written, or `None` when absent. The approval summary diffs this, so an absent
+    /// table shows as `default`, not as `90`.
     pub fn recovery_reminder(&self) -> Option<ReminderInterval> {
         self.0.recovery_reminder()
     }
@@ -266,7 +269,8 @@ fn caller_references(config: &ParsedConfig, name: &CallerName, caller: &CallerCo
     listener.into_iter().chain(routes).collect()
 }
 
-/// Checks that every TCP listener off loopback has TLS (spec §7).
+/// Checks that every TCP listener off loopback has TLS
+/// ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
 ///
 /// See [`ListenerConfig::plain_off_loopback`] for what counts as loopback.
 fn check_listener_tls(config: &ParsedConfig) -> Vec<ValidationError> {
@@ -282,7 +286,8 @@ fn check_listener_tls(config: &ParsedConfig) -> Vec<ValidationError> {
         .collect()
 }
 
-/// Checks that per-caller limits are no looser than their route's limit, in rate or burst (spec §8).
+/// Checks that per-caller limits are no looser than their route's limit, in rate or burst
+/// ([spec §8](../../../design/iron-vault-specification.md#8-request-flow)).
 ///
 /// A missing route is already reported by [`check_references`], so its limit is skipped here.
 fn check_caller_limits(config: &ParsedConfig) -> Vec<ValidationError> {
@@ -307,12 +312,14 @@ fn looser_limits(caller: &CallerName, route: &RouteName, limit: RateLimit, route
     rate.into_iter().chain(burst).collect()
 }
 
-/// Returns whether `a` refills faster than `b`, compared exactly by cross-multiplying; two `u32`s always fit in a `u64`.
+/// Returns `true` if and only if `a` refills faster than `b`. Compares exactly by cross-multiplying, since the product
+/// of two `u32`s always fits in a `u64`.
 fn higher_rate(a: RateLimit, b: RateLimit) -> bool {
     u64::from(a.requests().get()) * u64::from(b.per_seconds().get()) > u64::from(b.requests().get()) * u64::from(a.per_seconds().get())
 }
 
-/// Checks that callers identified by their connection use the right kind of listener (spec §7).
+/// Checks that callers identified by their connection use the right kind of listener
+/// ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
 ///
 /// An `isolated-network` caller needs a TLS listener on a dedicated, non-loopback, non-wildcard address, bound to its
 /// own network, and must be the listener's only caller, since a second caller there would be indistinguishable. A
@@ -343,7 +350,8 @@ fn listener_auth(config: &ParsedConfig, name: &CallerName, caller: &CallerConfig
     }
 }
 
-/// Explains why `caller` is not the only caller on `listener`, if it is not.
+/// Returns a [`ValidationError::SharedListener`] when `caller` is not the only caller on `listener`, and `None`
+/// otherwise.
 fn sole_caller_fault(config: &ParsedConfig, caller: &CallerName, listener: &ListenerName) -> Option<ValidationError> {
     let others: Vec<_> = callers_on(config, listener)
         .map(|(other, _)| other)
@@ -358,7 +366,7 @@ fn sole_caller_fault(config: &ParsedConfig, caller: &CallerName, listener: &List
     })
 }
 
-/// Explains why `listener` cannot identify an `isolated-network` caller, if it cannot.
+/// Returns the error saying why `listener` cannot identify an `isolated-network` caller, or `None` when it can.
 fn isolated_network_fault(caller: &CallerName, name: &ListenerName, listener: &ListenerConfig) -> Option<ValidationError> {
     match listener.endpoint() {
         Endpoint::Tcp { address, tls: Some(_) } if !is_dedicated(address.ip()) => Some(ValidationError::UndedicatedAddress {
@@ -373,7 +381,8 @@ fn isolated_network_fault(caller: &CallerName, name: &ListenerName, listener: &L
     }
 }
 
-/// Explains why `listener` cannot identify a `peer` caller, if it cannot.
+/// Returns a [`ValidationError::WrongListenerKind`] when `listener` is not a Unix socket, and `None` otherwise: only a
+/// Unix socket can identify a `peer` caller.
 fn peer_fault(caller: &CallerName, name: &ListenerName, listener: &ListenerConfig) -> Option<ValidationError> {
     (!matches!(listener.endpoint(), Endpoint::UnixSocket(_))).then(|| wrong_kind(caller, "peer", name, "a unix_socket listener"))
 }
@@ -387,8 +396,8 @@ fn wrong_kind(caller: &CallerName, auth: &'static str, listener: &ListenerName, 
     }
 }
 
-/// Returns whether a bind on `ip` admits only the hosts of one network: it is neither loopback (every local process) nor
-/// unspecified (every interface).
+/// Returns `true` if and only if a bind on `ip` admits only the hosts of one network: `ip` is neither loopback (every
+/// local process) nor unspecified (every interface).
 ///
 /// The address is canonicalized first, so `::ffff:127.0.0.1` counts as loopback here. The listener's TLS rule treats
 /// that same address as non-loopback; each rule takes the reading that rejects more.
@@ -397,10 +406,11 @@ fn is_dedicated(ip: IpAddr) -> bool {
     !ip.is_loopback() && !ip.is_unspecified()
 }
 
-/// Checks that a socket listener with any peer caller holds only peer callers, each naming its own account (spec §7).
+/// Checks that a socket listener with any peer caller holds only peer callers, each naming its own account
+/// ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
 ///
-/// Address listeners are skipped: a peer caller on one already fails with `WrongListenerKind`, and a second error
-/// about its neighbours would only contradict that.
+/// Address listeners are skipped: a peer caller on one already fails with [`ValidationError::WrongListenerKind`], and a
+/// second error about its neighbours would contradict that.
 fn check_peer_listeners(config: &ParsedConfig) -> Vec<ValidationError> {
     config
         .listeners()
@@ -442,7 +452,7 @@ fn shared_accounts(listener: &ListenerName, peers: &[(&CallerName, &CallerConfig
         .collect()
 }
 
-/// The account a peer caller must connect as; none for any other caller.
+/// The account a peer caller must connect as, or `None` for any other caller.
 fn peer_account(caller: &CallerConfig) -> Option<&AccountName> {
     match caller.auth() {
         CallerAuth::Peer(user) => Some(user),
@@ -476,10 +486,11 @@ fn check_token_hashes(config: &ParsedConfig) -> Vec<ValidationError> {
         .collect()
 }
 
-/// Checks that no route prefix equals or is a segment prefix of another, across all routes (spec §6).
+/// Checks that no route prefix equals or is a segment prefix of another, across all routes
+/// ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 ///
-/// Overlap is rejected outright rather than resolved by longest match, so which route serves a path never depends on
-/// a rule the operator has to remember.
+/// Overlap is rejected instead of resolved by longest match, so which route serves a path never depends on a rule the
+/// operator has to remember.
 fn check_prefixes(config: &ParsedConfig) -> Vec<ValidationError> {
     let routes: Vec<_> = config.routes().iter().collect();
     routes
@@ -500,7 +511,8 @@ fn overlaps(a: &RoutePrefix, b: &RoutePrefix) -> bool {
     a.segments().starts_with(b.segments()) || b.segments().starts_with(a.segments())
 }
 
-/// Checks that a listener's `token_header` is not the slot header of any route its callers can use (spec §9).
+/// Checks that a listener's `token_header` is not the slot header of any route its callers can use
+/// ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 ///
 /// The service strips caller authentication before writing the slot, so a shared header would carry either the token
 /// or the credential, never both. The default `Proxy-Authorization` is reserved and can never be a slot.

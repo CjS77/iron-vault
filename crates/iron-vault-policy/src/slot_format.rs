@@ -1,4 +1,5 @@
-//! Slot formats: the fixed text around a credential written into a header slot (spec §9).
+//! Slot formats: the fixed text around a credential written into a header slot
+//! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!
 //! For example, `slot = { header = "Authorization", format = "Bearer {}" }` with the key `sk-123` writes
 //! `Authorization: Bearer sk-123`.
@@ -14,7 +15,8 @@ use crate::display::quoted;
 /// The placeholder a slot format replaces with the credential.
 const PLACEHOLDER: &str = "{}";
 
-/// A header-value template with exactly one `{}` substitution point, such as `Bearer {}` (spec §9).
+/// A header-value template with exactly one `{}` substitution point, such as `Bearer {}`
+/// ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 ///
 /// The fixed text is printable ASCII without braces, so the template cannot split a header with CR or LF, cannot
 /// carry a second substitution point, and renders to the same bytes on every HTTP stack. The default is `{}`: the
@@ -62,7 +64,8 @@ impl SlotFormat {
         &self.suffix
     }
 
-    /// Returns `Basic {}`, the format a Basic slot writes. It skips parsing because a constant cannot fail to parse.
+    /// Returns `Basic {}`, the format a [`Slot::Basic`](crate::Slot::Basic) writes. It skips parsing because a
+    /// constant cannot fail to parse.
     pub(crate) fn basic() -> Self {
         Self {
             prefix: "Basic ".to_owned(),

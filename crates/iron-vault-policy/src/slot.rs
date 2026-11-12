@@ -1,6 +1,8 @@
-//! Slots: where a route writes its credential, the one place in an outgoing request a credential may appear (spec §3, §9).
+//! Slots: where a route writes its credential, the one place in an outgoing request a credential may appear
+//! ([glossary](../../../design/glossary.md#terms), [spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!
-//! Configuration spells a slot in one of four TOML shapes (spec §6):
+//! Configuration spells a slot in one of four TOML shapes
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)):
 //!
 //! ```toml
 //! slot = { header = "X-Subscription-Token" }
@@ -25,7 +27,7 @@ use crate::header_name::HeaderName;
 use crate::reserved_headers;
 use crate::slot_format::SlotFormat;
 
-/// The keyword that selects the Basic slot.
+/// The keyword `basic` that selects the Basic slot.
 const BASIC: &str = "basic";
 
 /// The header a Basic slot writes, in lowercase.
@@ -65,7 +67,8 @@ pub struct HeaderSlot {
     format: SlotFormat,
 }
 
-/// A query parameter name: non-empty, made only of RFC 3986 unreserved characters (`A–Z a–z 0–9 - . _ ~`).
+/// A query parameter name: non-empty, made only of [RFC 3986 §2.3](https://www.rfc-editor.org/rfc/rfc3986#section-2.3)
+/// unreserved characters (`A–Z a–z 0–9 - . _ ~`).
 ///
 /// Unreserved characters are the ones a URL serializer keeps unchanged, so the name the policy appends is the name the
 /// upstream reads. Any other character either ends the name, starts the value or fragment, reads differently after
@@ -84,7 +87,8 @@ pub enum SlotError {
     /// The query parameter name is empty.
     #[error("query parameter name is empty")]
     EmptyQueryName,
-    /// The query parameter name contains a character outside the RFC 3986 unreserved set.
+    /// The query parameter name contains a character outside the
+    /// [RFC 3986 §2.3](https://www.rfc-editor.org/rfc/rfc3986#section-2.3) unreserved set.
     #[error("query parameter name {name} contains {found:?}; only A-Z a-z 0-9 - . _ ~ are allowed")]
     InvalidQueryChar {
         /// The rejected name, escaped so control characters never reach a log raw.
@@ -101,7 +105,8 @@ pub enum SlotError {
 }
 
 impl HeaderSlot {
-    /// Builds a header slot, refusing a reserved header as `name` (spec §9).
+    /// Builds a header slot, refusing a reserved header as `name`
+    /// ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
     pub fn new(name: HeaderName, format: SlotFormat) -> Result<Self, SlotError> {
         if reserved_headers::is_reserved(&name) {
             return Err(SlotError::ReservedHeader(name));
@@ -197,7 +202,7 @@ impl TryFrom<SlotTable> for Slot {
     }
 }
 
-/// Accepts the string `"basic"` or a slot table; anything else is an error rather than a guess.
+/// Accepts the string `"basic"` or a slot table; anything else is an error.
 struct SlotVisitor;
 
 impl<'de> Visitor<'de> for SlotVisitor {

@@ -1,4 +1,7 @@
-//! A `[callers.<name>]` section: one caller's listener, identity mechanism and route grants (spec §6, §7, §8).
+//! A `[callers.<name>]` section: one caller's listener, identity mechanism and route grants
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [§7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners),
+//! [§8](../../../design/iron-vault-specification.md#8-request-flow)).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,10 +38,10 @@ use crate::token_hash::TokenHash;
 /// routes = ["venice", "brave"]
 /// ```
 ///
-/// Only rules local to the section are checked here. That `listener` and every route exist, that a per-caller rate
-/// limit is no looser than its route's, and that the listener suits the caller's `auth` (a sole caller on a TLS TCP
-/// listener for `isolated-network`; a Unix socket shared only with peer callers of other accounts for `peer`) need the
-/// whole configuration and are checked by [`ValidatedConfig`](crate::ValidatedConfig).
+/// [`ValidatedConfig`](crate::ValidatedConfig) checks the rules that need the whole configuration: that `listener` and
+/// every route exist, that a per-caller rate limit is no looser than its route's, and that the listener suits the
+/// caller's `auth` (a sole caller on a TLS TCP listener for `isolated-network`; a Unix socket shared only with `peer`
+/// callers of other accounts for `peer`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawCaller")]
 pub struct CallerConfig {
@@ -48,15 +51,16 @@ pub struct CallerConfig {
     rate_limits: BTreeMap<RouteName, RateLimit>,
 }
 
-/// Says how the service recognises that a connection comes from this caller (spec §7).
+/// Says how the service recognises that a connection comes from this caller
+/// ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallerAuth {
-    /// The caller presents a token whose hash matches this one.
+    /// The caller presents a caller token whose hash matches this one.
     Token(TokenHash),
     /// The listener's address identifies the caller's isolated Docker network.
     IsolatedNetwork,
     /// The OS account the kernel reports for the process connecting to the listener's Unix socket identifies the
-    /// caller. It proves which account connected, never which program, so every process of that account shares the
+    /// caller. It proves which account connected, not which program, so every process of that account gets the
     /// caller's routes.
     Peer(AccountName),
 }
@@ -115,7 +119,8 @@ impl CallerConfig {
         &self.routes
     }
 
-    /// Per-route limits for this caller, applied in addition to each route's aggregate limit (spec §8).
+    /// Per-route limits for this caller, applied in addition to each route's aggregate limit
+    /// ([spec §8](../../../design/iron-vault-specification.md#8-request-flow)).
     pub fn rate_limits(&self) -> &BTreeMap<RouteName, RateLimit> {
         &self.rate_limits
     }
@@ -163,8 +168,7 @@ impl TryFrom<RawCaller> for CallerConfig {
 
 /// Pairs `auth` with the one key it needs: `token_hash` for token authentication, `user` for `peer`.
 ///
-/// A key that the `auth` value never checks is refused rather than ignored, so a typo in `auth` cannot silently drop
-/// it.
+/// A key that the `auth` value never checks is refused, so a typo in `auth` cannot drop it unnoticed.
 fn caller_auth(kind: AuthKind, token_hash: Option<TokenHash>, user: Option<AccountName>) -> Result<CallerAuth, CallerError> {
     match kind {
         AuthKind::Token => {
@@ -202,7 +206,7 @@ fn check_routes(routes: &[RouteName]) -> Result<(), CallerError> {
         .map_or(Ok(()), |route| Err(CallerError::DuplicateRoute { route: route.clone() }))
 }
 
-/// Rejects a per-caller limit for a route the caller cannot use, which would be a silent no-op.
+/// Rejects a per-caller limit for a route the caller is not granted, since that limit would never apply.
 fn check_rate_limit_routes(routes: &[RouteName], rate_limits: &BTreeMap<RouteName, RateLimit>) -> Result<(), CallerError> {
     rate_limits.keys().find(|route| !routes.contains(route)).map_or(Ok(()), |route| {
         Err(CallerError::RateLimitForUngrantedRoute { route: route.clone() })

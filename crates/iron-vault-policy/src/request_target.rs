@@ -1,11 +1,15 @@
 //! Parses a caller's request target into the one path representation used for both authorization and forwarding
-//! (spec §6, §8 steps 2 and 4, §9). The service's request handler parses every target here first.
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [§8](../../../design/iron-vault-specification.md#8-request-flow) steps 2 and 4,
+//! [§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)). The service's request handler parses
+//! every target here first.
 //!
 //! Caller paths are hostile. Every check runs on the raw target before anything is decoded, so normalization can never
 //! erase evidence of traversal. A target is accepted only in origin form (`/path?query`); the path is split into
 //! segments and each segment is rewritten into its normalized form:
 //!
-//! - percent-encoded RFC 3986 unreserved characters (letters, digits, `-`, `_`, `~`) are decoded;
+//! - percent-encoded unreserved characters (letters, digits, `-`, `_`, `~`;
+//!   [RFC 3986 §2.3](https://www.rfc-editor.org/rfc/rfc3986#section-2.3)) are decoded;
 //! - escapes of `.`, `/`, `\`, `%`, `?`, `#` and control characters are rejected;
 //! - every other escape is kept, with uppercase hex digits;
 //! - literal characters are kept as written.
@@ -19,8 +23,8 @@
 //!
 //! This is the same canonical form [`UpstreamUrl`](crate::UpstreamUrl) stores for its base segments (unreserved
 //! characters never escaped, other escapes uppercase), so the upstream base segments followed by the request segments
-//! form one path in one representation. Escaped and literal sub-delimiters (`%3B` and `;`) stay distinct, as RFC 3986
-//! requires.
+//! form one path in one representation. Escaped and literal sub-delimiters (`%3B` and `;`) stay distinct, as
+//! [RFC 3986 §2.2](https://www.rfc-editor.org/rfc/rfc3986#section-2.2) requires.
 //!
 //! The segments produced here never contain `/`, are never empty, and are never `.` or `..`; [`PathPattern`] relies
 //! on that, because its `*` and `**` accept any non-empty segment.
@@ -102,7 +106,8 @@ const LOOK_ALIKES: &[char] = &[
     '\u{2215}', // DIVISION SLASH
 ];
 
-/// Why a caller's request target was rejected; the request interface answers every variant with `400` (§15).
+/// Why a caller's request target was rejected. The request interface answers every variant with `400`
+/// ([spec §15](../../../design/iron-vault-specification.md#15-service-states-and-errors)).
 ///
 /// Messages never echo the target, because it is caller-controlled and may carry a secret placed in the query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -123,10 +128,12 @@ pub enum TargetError {
     /// The target contains `\`, which some servers treat as `/`.
     #[error("request target contains a backslash")]
     Backslash,
-    /// The path contains an ASCII character outside RFC 3986 `pchar` and `%`, such as `"`, `<`, `|` or `[`.
+    /// The path contains an ASCII character outside [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-3.3)
+    /// `pchar` and `%`, such as `"`, `<`, `|` or `[`.
     #[error("request path contains a character that must be percent-encoded")]
     ForbiddenPathCharacter,
-    /// The query contains an ASCII character outside the RFC 3986 query set.
+    /// The query contains an ASCII character outside the [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-3.4)
+    /// query set.
     #[error("request query contains a character that must be percent-encoded")]
     ForbiddenQueryCharacter,
     /// A `%` is not followed by two hex digits.
@@ -191,7 +198,7 @@ impl RequestTarget {
         &self.path
     }
 
-    /// The query, if the target had a non-empty one.
+    /// The query, or `None` if the target had none or an empty one.
     pub fn query(&self) -> Option<&RawQuery> {
         self.query.as_ref()
     }
@@ -231,7 +238,7 @@ impl NormalizedPath {
         &self.segments
     }
 
-    /// Whether the path ends in one `/` after a segment.
+    /// Returns `true` if and only if the path ends in one `/` after a segment.
     pub fn has_trailing_slash(&self) -> bool {
         self.trailing_slash
     }
@@ -266,9 +273,9 @@ impl fmt::Display for NormalizedPath {
 
 /// A non-empty query string, validated but otherwise kept exactly as the caller sent it.
 ///
-/// It contains only RFC 3986 query characters other than `'`, and well-formed escapes; structural parsing belongs to
-/// query slots. `'` is excluded because the `url` crate escapes it in `https` queries, so the forwarded query would
-/// differ from the validated one.
+/// It contains only [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-3.4) query characters other than `'`, and
+/// well-formed escapes; structural parsing belongs to query slots. `'` is excluded because the `url` crate escapes it
+/// in `https` queries, so the forwarded query would differ from the validated one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawQuery(String);
 
@@ -310,7 +317,8 @@ fn check_target_char(c: char) -> Result<(), TargetError> {
     }
 }
 
-/// RFC 3986 query characters that the `url` crate forwards unchanged in an `https` query: everything but `'`.
+/// [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-3.4) query characters that the `url` crate forwards
+/// unchanged in an `https` query: everything but `'`.
 fn is_query_char(c: char) -> bool {
     (is_path_char(c) || matches!(c, '/' | '?')) && c != '\''
 }

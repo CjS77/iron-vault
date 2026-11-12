@@ -15,7 +15,9 @@ use crate::validated::ValidatedConfig;
 
 const SECRET: &str = "S3CR3T";
 
-/// Permits every §6 credential on its route's host at 443.
+/// Permits every credential of the
+/// [spec §6](../../../../design/iron-vault-specification.md#6-credential-records-and-configuration) example on its
+/// route's host at port `443`.
 struct Catalog;
 
 impl CredentialCatalog for Catalog {
@@ -39,7 +41,8 @@ fn origins(host: &str, port: u16) -> BTreeSet<(Host, Port)> {
     [(host.parse().unwrap(), Port::try_from(port).unwrap())].into()
 }
 
-/// The §6 example with every route opened to every path.
+/// The [spec §6](../../../../design/iron-vault-specification.md#6-credential-records-and-configuration) example with
+/// every route opened to every path.
 fn policy() -> ActivePolicy {
     let doc = [
         "[\"/latest\", \"/historical/**\"]",
@@ -68,7 +71,7 @@ impl Case {
         Self::with_slot(target, None)
     }
 
-    /// Like [`Case::new`], but with a Basic slot in place of the route's.
+    /// Like [`Case::new`], but with a `Basic` slot in place of the route's.
     fn basic(target: &str) -> Self {
         Self::with_slot(target, Some(Slot::Basic))
     }

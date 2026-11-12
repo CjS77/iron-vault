@@ -12,7 +12,9 @@ use crate::validated::ValidatedConfig;
 
 const SECRET: &str = "S3CR3T";
 
-/// Permits every §6 credential on its route's host.
+/// Permits every credential of the
+/// [spec §6](../../../../design/iron-vault-specification.md#6-credential-records-and-configuration) example on its
+/// route's host.
 struct Catalog;
 
 impl CredentialCatalog for Catalog {
@@ -29,7 +31,8 @@ impl CredentialCatalog for Catalog {
     }
 }
 
-/// The §6 example with every route opened to every path.
+/// The [spec §6](../../../../design/iron-vault-specification.md#6-credential-records-and-configuration) example with
+/// every route opened to every path.
 fn policy() -> ActivePolicy {
     let doc = [
         "[\"/latest\", \"/historical/**\"]",

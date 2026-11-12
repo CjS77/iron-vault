@@ -1,5 +1,6 @@
-//! Resolves each peer caller's `user` to the uid the kernel will report for it (spec §7). Activation runs this once,
-//! so identifying a peer caller at request time is a uid comparison.
+//! Resolves each peer caller's `user` to the uid the kernel will report for it
+//! ([spec §7](../../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)). Activation runs
+//! this once, so identifying a peer caller at request time is a uid comparison.
 
 use std::collections::BTreeMap;
 
@@ -37,8 +38,8 @@ pub(super) fn resolve(
     }
 }
 
-/// Looks up the uid of `caller`'s account `user`, refusing a missing account, root, the service account and the overflow
-/// uid.
+/// Looks up the uid of `caller`'s account `user`, refusing a missing account, root, the service account and the
+/// overflow uid.
 fn resolve_caller(caller: &CallerName, user: &AccountName, accounts: &impl AccountDirectory) -> Result<u32, ActivationError> {
     let uid = accounts.uid(user).ok_or_else(|| ActivationError::UnknownAccount {
         caller: caller.clone(),

@@ -1,4 +1,5 @@
-//! RFC 3986 character classes and the percent-escape walker shared by every path parser in this crate.
+//! [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) character classes and the percent-escape walker shared by every
+//! path parser in this crate.
 //!
 //! Upstream base paths and caller request paths must end up in one representation, so both are built by the same
 //! walker; each parser supplies only its own decision for each escaped byte. For a caller request path, `%7E` decodes
@@ -6,17 +7,20 @@
 
 use std::fmt::Write as _;
 
-/// RFC 3986 `unreserved`: characters whose escaped and unescaped forms are equivalent.
+/// [RFC 3986 §2.3](https://www.rfc-editor.org/rfc/rfc3986#section-2.3) `unreserved`: characters whose escaped and
+/// unescaped forms are equivalent.
 pub(crate) fn is_unreserved(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~')
 }
 
-/// RFC 3986 `sub-delims`: allowed unescaped in a path segment, but distinct from their escaped forms.
+/// [RFC 3986 §2.2](https://www.rfc-editor.org/rfc/rfc3986#section-2.2) `sub-delims`: allowed unescaped in a path
+/// segment, but distinct from their escaped forms.
 pub(crate) fn is_sub_delim(c: char) -> bool {
     matches!(c, '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '=')
 }
 
-/// RFC 3986 `pchar` plus `%`: the characters a path segment may contain literally.
+/// [RFC 3986 §3.3](https://www.rfc-editor.org/rfc/rfc3986#section-3.3) `pchar` plus `%`: the characters a path
+/// segment may contain literally.
 ///
 /// Anything else would be percent-encoded by a URL serializer, so the forwarded path would differ from the checked one.
 pub(crate) fn is_path_char(c: char) -> bool {

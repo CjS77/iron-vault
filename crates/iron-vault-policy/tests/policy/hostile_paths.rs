@@ -1,4 +1,6 @@
-//! Property tests over hostile caller request paths (specification §9, implementation spec §2).
+//! Property tests over hostile caller request paths
+//! ([spec §9](../../../../design/iron-vault-specification.md#9-url-header-and-slot-rules),
+//! [implementation spec §2](../../../../design/implementation-specification.md#2-verification-and-deferred-security-work)).
 //!
 //! Example tests cover the attacks someone thought of. These generate targets that mix ordinary segments with raw,
 //! mixed-case encoded and double- or triple-encoded hostile fragments under the prefixes of a fixed config, then check
@@ -86,8 +88,8 @@ fn readings(segment: &str) -> BTreeSet<Vec<u8>> {
     levels.take(MAX_PASSES).flatten().collect()
 }
 
-/// Whether a reading is a plain segment: not `.` or `..`, no `/`, `\` or NUL, and not empty or a dot segment before a
-/// `;` path parameter, which servers such as Tomcat strip before resolving dot segments.
+/// Returns `true` if and only if a reading is a plain segment: not `.` or `..`, no `/`, `\` or NUL, and not empty or
+/// a dot segment before a `;` path parameter, which servers such as Tomcat strip before resolving dot segments.
 fn is_inert(reading: &[u8]) -> bool {
     let before_parameter = reading.split(|&b| b == b';').next().unwrap_or_default();
     let separator = reading.iter().any(|b| matches!(b, b'/' | b'\\' | 0));

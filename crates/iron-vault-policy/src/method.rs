@@ -1,7 +1,10 @@
-//! The HTTP methods a route may allow in its `methods` list (spec §6, §8).
+//! The HTTP methods a route may allow in its `methods` list
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [§8](../../../design/iron-vault-specification.md#8-request-flow)).
 //!
-//! The set is a closed allowlist: `CONNECT` would turn the proxy into a tunnel (spec §8 step 2) and `TRACE`
-//! reflects request headers, including injected credentials, back to the caller. Neither can ever be granted.
+//! The set is a closed allowlist: `CONNECT` would turn the proxy into a tunnel
+//! ([spec §8](../../../design/iron-vault-specification.md#8-request-flow) step 2) and `TRACE` reflects request
+//! headers, including injected credentials, back to the caller. Neither can ever be granted.
 
 use std::fmt;
 use std::str::FromStr;
@@ -11,7 +14,9 @@ use thiserror::Error;
 
 use crate::display::quoted;
 
-/// An HTTP method from the allowlist a route may grant (spec §6, §8).
+/// An HTTP method from the allowlist a route may grant
+/// ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+/// [§8](../../../design/iron-vault-specification.md#8-request-flow)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub enum Method {
@@ -75,7 +80,8 @@ impl Method {
 impl TryFrom<&str> for Method {
     type Error = MethodError;
 
-    /// Matches the token exactly; method names are case-sensitive (RFC 9110 §9.1).
+    /// Matches the token exactly; method names are case-sensitive
+    /// ([RFC 9110 §9.1](https://www.rfc-editor.org/rfc/rfc9110#section-9.1)).
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         ALL.into_iter().find(|m| m.as_str() == s).ok_or_else(|| {
             FORBIDDEN

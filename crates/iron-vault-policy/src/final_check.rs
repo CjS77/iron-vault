@@ -1,6 +1,8 @@
-//! Checks an outgoing request one last time before its credential leaves the service (spec §6, §9, implementation spec
-//! §1). The service's request handler calls [`final_check`] after assembly; the transport sends only the
-//! [`CheckedRequest`] it returns.
+//! Checks an outgoing request one last time before its credential leaves the service
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules);
+//! [implementation spec §1](../../../design/implementation-specification.md#1-implementation-structure)). The service's
+//! request handler calls [`final_check`] after assembly; the transport sends only the [`CheckedRequest`] it returns.
 //!
 //! The rules run in this order, and the first that fails names the [`FinalCheckError`]:
 //!
@@ -16,13 +18,15 @@
 //! CheckedRequest
 //! ```
 //!
-//! Every fact is read back from the assembled request's own URL and headers, never taken from the inputs that built
-//! it, so a defect in URL construction or slot filling is caught here rather than repeated. The route's upstream is
+//! Every fact is read back from the assembled request's own URL and headers, never taken from the inputs that built it,
+//! so a defect in URL construction or slot filling is caught here rather than repeated. The route's upstream is
 //! compared with the credential record's permitted origins too, because destinations are bound to the record and a
-//! route edit must not be able to send an existing secret elsewhere (§6). The selected slot must hold the slot value
-//! as the assembler renders it, and the value must appear nowhere else, so a slot filled through the wrong route, or a
-//! caller copy left in the slot, is caught even when the slot is written exactly once. A failure means a policy or construction
-//! defect: the request is dropped unsent, and the service raises a high-severity event.
+//! route edit must not be able to send an existing secret elsewhere
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)). The selected slot
+//! must hold the slot value as the assembler renders it, and the value must appear nowhere else, so a slot filled
+//! through the wrong route, or a caller copy left in the slot, is caught even when the slot is written exactly once. A
+//! failure means a policy or construction defect: the request is dropped unsent, and the service raises a high-severity
+//! event.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -77,7 +81,7 @@ pub enum FinalCheckError {
     /// The URL's host is missing, does not convert to a [`Host`], or is not the upstream's host.
     #[error("final check: the host is not the upstream's host")]
     Host,
-    /// The URL's port, 443 when omitted, is not the upstream's port.
+    /// The URL's port, `443` when omitted, is not the upstream's port.
     #[error("final check: the port is not the upstream's port")]
     Port,
     /// The credential record does not permit the URL's host and port pair.
@@ -106,14 +110,14 @@ pub enum FinalCheckError {
 
 /// Checks `request` against the plan it was built for, the selected route's `upstream` and `slot`, and the route's
 /// `credential`: the slot value it produced and the origins its credential record permits, immediately before sending
-/// (§9).
+/// ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 ///
-/// The value and origins arrive as one [`BoundCredential`]; built through the store's `CredentialRecord::resolve`, the
-/// intended way, both come from the same record. The value is borrowed and rendered here with the assembler's own
-/// functions, so the expected wire form cannot drift from what filling wrote; the rendered copies are wiped on drop.
-/// None of the arguments is trusted to belong to the others: each rule reads the request's own URL and headers and
-/// compares them with every source that constrains them. The URL's host must equal the upstream's canonical [`Host`]
-/// exactly, never by suffix. On failure the request is dropped here, which wipes its header values.
+/// The value and origins arrive as one [`BoundCredential`]; when built through the store's `CredentialRecord::resolve`,
+/// both come from the same record. The value is borrowed and rendered here with the assembler's own functions, so the
+/// expected wire form cannot drift from what filling wrote; the rendered copies are wiped on drop. None of the
+/// arguments is trusted to belong to the others: each rule reads the request's own URL and headers and compares them
+/// with every source that constrains them. The URL's host must equal the upstream's canonical [`Host`] exactly, never
+/// by suffix. On failure the request is dropped here, which wipes its header values.
 pub fn final_check(
     request: OutgoingRequest,
     authorized: &AuthorizedRequest,
@@ -147,7 +151,7 @@ impl CheckedRequest {
         &self.url
     }
 
-    /// The headers to send, with a header or Basic slot filled; never `Host` or a pseudo-header.
+    /// The headers to send, with a header or `Basic` slot filled; never `Host` or a pseudo-header.
     pub fn headers(&self) -> &OutgoingHeaders {
         &self.headers
     }
@@ -155,7 +159,7 @@ impl CheckedRequest {
     /// The checked upstream host, which the `Host` header or `:authority` and TLS server-name verification must both
     /// use, so the authority the upstream sees is the one the record permits.
     ///
-    /// The authority adds `:port` when [`Url::port`] is `Some`; otherwise the port is 443.
+    /// The authority adds `:port` when [`Url::port`] is `Some`; otherwise the port is `443`.
     pub fn host(&self) -> &Host {
         &self.host
     }
@@ -210,8 +214,8 @@ fn check_origin(url: &Url, upstream: &UpstreamUrl, permitted: &BTreeSet<(Host, P
     Ok(origin.0)
 }
 
-/// Checks that the path starts with this upstream's base segments and is exactly the authorized upstream path. The base check
-/// stands on its own, so a plan authorized on another route cannot pass by matching itself.
+/// Checks that the path starts with this upstream's base segments and is exactly the authorized upstream path. The base
+/// check stands on its own, so a plan authorized on another route cannot pass by matching itself.
 fn check_path(url: &Url, authorized: &AuthorizedRequest, upstream: &UpstreamUrl) -> Result<(), FinalCheckError> {
     let in_base = url
         .path_segments()
@@ -288,7 +292,8 @@ fn check_header_slot(
     require(!carries_any(outside, forms), FinalCheckError::CredentialOutsideSlot)
 }
 
-/// Returns whether any of `places` contains any of `forms`; compares borrowed bytes, so no copy of the value is made.
+/// Returns `true` if and only if any of `places` contains any of `forms`. Compares borrowed bytes, so no copy of the
+/// value is made.
 fn carries_any<'a>(mut places: impl Iterator<Item = &'a [u8]>, forms: &[&[u8]]) -> bool {
     places.any(|place| {
         forms

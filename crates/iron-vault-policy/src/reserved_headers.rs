@@ -1,5 +1,5 @@
 //! Reserved headers: those that carry caller authentication or control transport, routing or method semantics
-//! (spec §9).
+//! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!
 //! This is the single denylist for two uses: a header slot may never name one of these headers, and the outgoing
 //! request has them removed before forwarding. Keeping both uses on one list means a header cannot be stripped from
@@ -10,8 +10,9 @@
 
 use crate::header_name::HeaderName;
 
-/// Hop-by-hop headers (RFC 9110 §7.6.1), plus the legacy `Keep-Alive` and `Proxy-Connection`, lowercase. They describe
-/// one connection, so neither a caller's nor an upstream's crosses the service.
+/// Hop-by-hop headers ([RFC 9110 §7.6.1](https://www.rfc-editor.org/rfc/rfc9110#section-7.6.1)), plus the legacy
+/// `Keep-Alive` and `Proxy-Connection`, lowercase. They describe one connection, so neither a caller's nor an
+/// upstream's crosses the service.
 pub const HOP_BY_HOP_HEADERS: &[&str] = &[
     "connection",
     "keep-alive",
@@ -65,7 +66,7 @@ pub const CALLER_TOKEN_HEADERS: &[&str] = &["proxy-authorization", "x-iron-vault
 /// Reserved header-name prefixes, lowercase; any header starting with one is reserved.
 pub const RESERVED_PREFIXES: &[&str] = &["x-forwarded-"];
 
-/// Returns whether `name` is a reserved header: one on either list or starting with a reserved prefix.
+/// Returns `true` if and only if `name` is a reserved header: one on either list or starting with a reserved prefix.
 pub fn is_reserved(name: &HeaderName) -> bool {
     let lowercase = name.lowercase();
     HOP_BY_HOP_HEADERS.contains(&lowercase)

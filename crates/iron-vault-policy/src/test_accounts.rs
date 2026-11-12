@@ -11,7 +11,8 @@ pub(crate) const SERVICE_UID: u32 = 990;
 /// The kernel's default overflow uid, which the test host reports unless a test configures another.
 pub(crate) const DEFAULT_OVERFLOW_UID: u32 = 65534;
 
-/// The accounts every test host has: root, the service account, `nobody`, and the peer accounts the test configs name.
+/// The accounts every test host has: `root`, the service account, `nobody`, and the peer accounts the test configs
+/// name.
 const HOST: &[(&str, u32)] = &[
     ("root", 0),
     ("iron-vault", SERVICE_UID),

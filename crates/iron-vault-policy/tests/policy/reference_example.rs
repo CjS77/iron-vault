@@ -1,5 +1,6 @@
-//! The configuration reference's annotated example (`book/src/reference/configuration-example.toml`) must stay a valid
-//! configuration, and must keep showing every table and every kind of listener, caller and slot the reference describes.
+//! The configuration reference's annotated example (`book/src/reference/configuration-example.toml`) must stay a
+//! valid configuration, and must keep showing every table and every kind of listener, caller and slot the reference
+//! describes.
 
 use iron_vault_policy::{CallerAuth, Endpoint, Limits, ParsedConfig, Slot, ValidatedConfig};
 

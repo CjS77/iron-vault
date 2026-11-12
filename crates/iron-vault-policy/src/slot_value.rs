@@ -1,4 +1,7 @@
-//! The slot value: the secret text a kind hands to slot filling (spec §9, §14, future spec §2.2).
+//! The slot value: the secret text a kind hands to slot filling
+//! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules),
+//! [§14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory),
+//! [future spec §2.2](../../../design/future-specifications.md#22-credential-kinds)).
 //!
 //! The kinds in `iron-vault-kinds` produce it, and [`OutgoingRequest::assemble`](crate::OutgoingRequest::assemble)
 //! writes it into the route's slot.
@@ -14,7 +17,7 @@ use thiserror::Error;
 /// Credential text a kind produced for a route's slot, before the slot's format or encoding is applied.
 ///
 /// It wraps [`SecretString`] so the buffer is zeroized on drop, `Debug` is redacted, and every read goes through
-/// [`ExposeSecret`], which keeps read sites greppable. There is deliberately no `Display` or `Serialize`.
+/// [`ExposeSecret`], which keeps read sites greppable. There is no `Display` or `Serialize`.
 pub struct SlotValue(SecretString);
 
 /// A slot value that cannot be accepted. Its text names the rule broken, never the value or a position within it.

@@ -1,7 +1,8 @@
 //! Parses one permitted origin as the owner writes it when enrolling a credential, as in
-//! `iron-vault add fx_key --origin api.fx.example` (spec §6).
+//! `iron-vault add fx_key --origin api.fx.example`
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 //!
-//! The scheme is always HTTPS, so it is implicit and never written: an origin is a host and an optional port. The CLI
+//! The scheme is always `https`, so it is implicit and never written: an origin is a host and an optional port. The CLI
 //! parses each `--origin` with [`parse_origin`] before connecting, and the service parses the requested origins of an
 //! `add` request again, so both apply the one rule.
 
@@ -12,7 +13,8 @@ use crate::port::{Port, PortError};
 
 /// Why an origin was rejected.
 ///
-/// Messages name the rule and never the rejected text, so a diagnostic cannot echo an argument (§5).
+/// Messages name the rule and never the rejected text, so a diagnostic cannot echo an argument
+/// ([§5](../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns)).
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum OriginError {
     /// The origin names a scheme; HTTPS is implied and never written.

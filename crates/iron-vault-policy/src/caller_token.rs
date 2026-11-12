@@ -1,4 +1,5 @@
-//! Caller tokens: the secret a caller presents on a token listener to prove which caller it is (spec §7).
+//! Caller tokens: the secret a caller presents on a token listener to prove which caller it is
+//! ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
 //!
 //! This module generates tokens, parses presented ones and fixes their text format. A token looks like
 //! `ivt_` followed by 43 base64url characters; the config holds only its hash ([`TokenHash`](crate::TokenHash)).
@@ -133,12 +134,14 @@ impl CallerToken {
     }
 }
 
-/// Returns whether `b` is in the URL-safe base64 alphabet (RFC 4648 §5).
+/// Returns `true` if and only if `b` is in the URL-safe base64 alphabet
+/// ([RFC 4648 §5](https://www.rfc-editor.org/rfc/rfc4648#section-5)).
 fn is_base64url(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
 }
 
-/// Returns whether `b` is a base64url character whose alphabet index is divisible by 4, so its low two bits are zero.
+/// Returns `true` if and only if `b` is a base64url character whose alphabet index is divisible by 4, so its low two
+/// bits are zero.
 fn is_canonical_ending(b: u8) -> bool {
     b"AEIMQUYcgkosw048".contains(&b)
 }

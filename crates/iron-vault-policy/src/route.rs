@@ -1,5 +1,7 @@
 //! A `[routes.<name>]` section: one upstream with the credential sent to it, where the credential goes, and the
-//! restrictions on what callers may send (spec §6, §10).
+//! restrictions on what callers may send
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [§10](../../../design/iron-vault-specification.md#10-outbound-tls-and-environment)).
 
 use std::collections::BTreeSet;
 
@@ -30,12 +32,13 @@ use crate::upstream::UpstreamUrl;
 /// paths = ["/latest", "/historical/**"]
 /// rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 /// confirm = "none"                         # optional; "none" when omitted
-/// ca_file = "/etc/iron-vault/ca/fx.pem"    # optional administrator-installed CA (spec §10)
+/// ca_file = "/etc/iron-vault/ca/fx.pem"    # optional administrator-installed CA
 /// ```
 ///
-/// Methods, paths and the rate limit are required so a missing restriction never widens into "allow all" (spec §6).
-/// Whether prefixes overlap needs the whole configuration, so [`ValidatedConfig`](crate::ValidatedConfig) checks it.
-/// Whether `credential` exists and permits `upstream` needs the vault, so [`activate`](crate::activate) checks it.
+/// Methods, paths and the rate limit are required so a missing restriction never widens into "allow all"
+/// ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)). Whether prefixes
+/// overlap needs the whole configuration, so [`ValidatedConfig`](crate::ValidatedConfig) checks it. Whether
+/// `credential` exists and permits `upstream` needs the vault, so [`activate`](crate::activate) checks it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawRoute")]
 pub struct RouteConfig {
@@ -105,7 +108,8 @@ impl RouteConfig {
         self.confirm
     }
 
-    /// An administrator-installed CA file that replaces the built-in roots for this upstream, if any.
+    /// An administrator-installed CA file that replaces the built-in roots for this upstream, if any
+    /// ([spec §10](../../../design/iron-vault-specification.md#10-outbound-tls-and-environment)).
     pub fn ca_file(&self) -> Option<&ConfigPath> {
         self.ca_file.as_ref()
     }

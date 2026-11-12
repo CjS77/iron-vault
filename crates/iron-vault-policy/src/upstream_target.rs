@@ -1,4 +1,6 @@
-//! Builds the upstream target: the URL an authorized request is sent to (spec §8 step 7, §9).
+//! Builds the upstream target: the URL an authorized request is sent to
+//! ([spec §8](../../../design/iron-vault-specification.md#8-request-flow) step 7,
+//! [§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!
 //! For example, the caller's `GET /fx/latest?base=USD` on a route with prefix `/fx` and upstream
 //! `https://api.fx.example/v1` becomes `https://api.fx.example/v1/latest?base=USD`.
@@ -6,7 +8,7 @@
 //! The URL is built through the `url` API from the configured [`UpstreamUrl`] and an [`AuthorizedRequest`], never by
 //! accepting caller text as a URL, so a caller cannot supply a scheme, an authority or a path the authorizer did not
 //! see. The `url` crate rewrites some input silently, so every built URL is read back and compared with what was
-//! authorized; a mismatch is a construction error rather than a request to a different path.
+//! authorized; a mismatch is a construction error, and no request is sent.
 
 use std::fmt;
 
@@ -129,13 +131,13 @@ fn check_path(url: &Url, request: &AuthorizedRequest) -> Result<(), UpstreamTarg
     has_authorized_path(url, request).then_some(()).ok_or(UpstreamTargetError::Path)
 }
 
-/// Returns whether `url` reports exactly the authorized upstream path.
+/// Returns `true` if and only if `url` reports exactly the authorized upstream path.
 pub(crate) fn has_authorized_path(url: &Url, request: &AuthorizedRequest) -> bool {
     has_path(url, request.upstream_segments(), request.has_trailing_slash())
 }
 
-/// Returns whether `url` reports exactly `segments`, then an empty one for a trailing slash; the root path is one empty
-/// segment.
+/// Returns `true` if and only if `url` reports exactly `segments`, then an empty one for a trailing slash; the root path
+/// is one empty segment.
 pub(crate) fn has_path<S: AsRef<str>>(url: &Url, segments: &[S], trailing_slash: bool) -> bool {
     let expected = segments.iter().map(AsRef::as_ref);
     let empty = (segments.is_empty() || trailing_slash).then_some("");
@@ -162,7 +164,9 @@ mod tests {
     use crate::test_accounts::FakeAccounts;
     use crate::validated::ValidatedConfig;
 
-    /// Permits every §6 credential on its route's host, on both 443 and 8443.
+    /// Permits every credential of the
+    /// [spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) example on its
+    /// route's host, on both port `443` and port `8443`.
     struct Catalog;
 
     impl CredentialCatalog for Catalog {
@@ -181,7 +185,8 @@ mod tests {
         }
     }
 
-    /// The §6 example with every route opened to every path, so any request target can be built.
+    /// The [spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) example with
+    /// every route opened to every path, so any request target can be built.
     fn open_example() -> String {
         [
             "[\"/latest\", \"/historical/**\"]",
