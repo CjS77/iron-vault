@@ -1,4 +1,6 @@
-//! `recovery check`'s side of the service context (design/recovery.md, "States and the service-wide lock").
+//! Runs the service's part of `recovery check`, which proves the offline recovery key still opens the vault and
+//! records when
+//! ([recovery: States and the service-wide lock](../../../../design/recovery.md#states-and-the-service-wide-lock)).
 //!
 //! The checks before the prompt read the service state, the initialization state and the memory protection. After the
 //! key has parsed, the check takes the service-wide lock without waiting (an approval holds it across its prompts for
@@ -28,7 +30,8 @@ pub enum RecoveryRefusal {
     WrongState(ServiceState),
     /// The vault is not Initialized; the text says which state it is in and what to do.
     NotInitialized(String),
-    /// A protected install's memory is not locked, so the vault identity must not be unwrapped; the owner's message.
+    /// A protected install's memory is not locked, so the vault identity must not be unwrapped; the text is the owner's
+    /// message.
     MemoryUnprotected(String),
     /// The system clock is outside the range the check record can hold.
     ClockUnusable,
@@ -41,7 +44,7 @@ pub enum RecoveryRefusal {
 /// A recovery key that opened the vault.
 #[derive(Debug, Clone)]
 pub struct RecoveryProof {
-    /// The ID in the manifest the key opened.
+    /// The vault ID in the manifest the key opened.
     pub vault_id: VaultId,
     /// The time of the check, as written to the record.
     pub checked_at: UtcSecond,
@@ -50,14 +53,17 @@ pub struct RecoveryProof {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// The checks that come before the key prompt, in order: the service state, the initialization state, then memory.
+    /// Runs the checks that come before the key prompt, in order: the service state, the initialization state, then
+    /// memory.
     pub async fn recovery_check_allowed(&self) -> Result<(), RecoveryRefusal> {
         self.require_checkable().await?;
         self.require_locked_memory_for_check()
     }
 
-    /// The memory rule `unlock` is held to (§14): the check unwraps the vault identity into memory. Every refusal
-    /// `memory_guard` gives counts, so a refusal added to it later fails closed here.
+    /// Applies the memory rule `unlock` is held to
+    /// ([specification §14](../../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)), since
+    /// the check unwraps the vault identity into memory. Every refusal `memory_guard` gives counts, so a refusal
+    /// added to it later fails closed here.
     fn require_locked_memory_for_check(&self) -> Result<(), RecoveryRefusal> {
         memory_guard(self.setup.paths.profile, &self.setup.hardening.memory)
             .map_err(|refusal| RecoveryRefusal::MemoryUnprotected(refusal.to_string()))
@@ -91,7 +97,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         ran.map_err(RecoveryRefusal::Check)
     }
 
-    /// The service state is Locked or Ready and the vault is Initialized.
+    /// Refuses unless the service state is Locked or Ready and the vault is Initialized.
     async fn require_checkable(&self) -> Result<(), RecoveryRefusal> {
         let state = self.state().await;
         if !state.admin_allows(AdminOperation::RecoveryCheck) {
@@ -135,7 +141,7 @@ fn check_and_record(
 }
 
 /// Writes `last_checked = now`, keeping `since` from a readable record and starting it at `now` when the record is
-/// missing or unusable. A clock that went backwards moves `since` back to `now` rather than refusing the record.
+/// missing or unusable. A clock that went backwards moves `since` back to `now`, and the record is still written.
 fn record_check(lock: &StateDirLock, fs: &impl StoreFs, now: UtcSecond) -> Result<(), ErrorKindLabel> {
     let since = read_recovery_check(lock, fs)
         .ok()
@@ -147,7 +153,7 @@ fn record_check(lock: &StateDirLock, fs: &impl StoreFs, now: UtcSecond) -> Resul
         .map_err(|e| e.error_kind_label())
 }
 
-/// A failed directory fsync comes after the rename, so the record holds the new bytes: it counts as recorded.
+/// Treats a failed directory fsync as written: it comes after the rename, so the record holds the new bytes.
 pub(super) fn synced_late(error: WriteError) -> Result<(), WriteError> {
     match error {
         WriteError::Io {
