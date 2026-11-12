@@ -1,0 +1,61 @@
+name: Coverage
+
+# Measures test coverage with scripts/coverage.sh, the script developers run locally, and uploads the lcov report to
+# Coveralls. Runs on release tags (the same coarse filter as release.yml) and by hand; only a tag run uploads.
+#
+# The upload needs the COVERALLS_REPO_TOKEN repository secret. Without it the upload step fails, but the report is still
+# kept as a workflow artifact, and pull-request CI (ci.yml) does not depend on this workflow.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_LLVM_COV_VERSION: 0.9.1
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # rustup reads rust-toolchain.toml and installs the pinned toolchain with its components, llvm-tools-preview included.
+      - name: Install toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # The TPM signing helper links the system's tpm2-tss.
+      - name: Install tpm2-tss
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libtss2-dev pkg-config
+      - name: Cache cargo-llvm-cov
+        id: cov-tools
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cov-tools
+          key: cov-tools-${{ runner.os }}-cargo-llvm-cov-${{ env.CARGO_LLVM_COV_VERSION }}
+      - name: Install cargo-llvm-cov
+        if: steps.cov-tools.outputs.cache-hit != 'true'
+        run: cargo install cargo-llvm-cov --version "$CARGO_LLVM_COV_VERSION" --locked --root ~/.cov-tools
+      - name: Measure coverage
+        run: |
+          export PATH="$HOME/.cov-tools/bin:$PATH"
+          scripts/coverage.sh lcov
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-lcov
+          path: target/llvm-cov/lcov.info
+          if-no-files-found: error
+      - name: Upload to Coveralls
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
+        env:
+          COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
+        with:
+          file: target/llvm-cov/lcov.info
+          format: lcov
