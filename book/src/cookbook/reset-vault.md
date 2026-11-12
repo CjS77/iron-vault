@@ -87,7 +87,7 @@ refused by the new vault, even if you put them back.
 Add each credential again with the value its provider reissued, then approve your copy of the config:
 
 ```sh
-iron-vault add fx_key --origin api.fx.example
+iron-vault add fx_key --origin openexchangerates.org
 iron-vault config approve ~/iron-vault-config.toml
 ```
 
