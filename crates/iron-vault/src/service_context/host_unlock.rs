@@ -1,9 +1,22 @@
-//! The host unlock at startup (`design/docker-compose.md`, "In the container"; specification §15): a Protected or
+//! Runs the host unlock at startup
+//! ([Docker Compose: In the container](../../../../design/docker-compose.md#in-the-container);
+//! [specification §15](../../../../design/iron-vault-specification.md#15-service-states-and-errors)). A Protected or
 //! Container service leaves Starting for Checking when the unlock handoff opens the vault, and for Locked otherwise.
 //!
-//! Every step's failure leaves the service Locked with passphrase `unlock` still offered, since the operational identity
-//! is still a recipient. None counts toward the passphrase attempt limit: a host unlock failure is not a guess, and only
-//! root can change the file.
+//! ```text
+//!   Starting
+//!     owner-lock file present? ──yes──▶ Locked   owner_locked
+//!     memory locked?           ──no───▶ Locked   refused: memory_unprotected
+//!     handoff present?         ──no───▶ Locked   absent, or unseal_failed beside the unseal-failure file
+//!     handoff trusted and readable, an identity, vault Initialized, identity.age wrapped for it?
+//!                              ──no───▶ Locked   refused: untrusted, unreadable, not_an_identity, not_initialized,
+//!                                                not_a_recipient
+//!                              ──yes──▶ Checking ──▶ Ready or Unavailable   unlocked
+//! ```
+//!
+//! Every step's failure leaves the service Locked with passphrase `unlock` still offered, since the operational
+//! identity is still a recipient. None counts toward the passphrase attempt limit: a host unlock failure is not a
+//! guess, and only root can change the file.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -26,10 +39,11 @@ use crate::unlock_handoff::{HandoffError, read_handoff, unseal_failed_present};
 pub enum HostUnlockOutcome {
     /// The handoff unwrapped the vault identity, and the config check followed.
     Unlocked,
-    /// No handoff was there, and no unseal-failure file either: a machine never provisioned for host unlock.
+    /// Neither the handoff nor the unseal-failure file was there: a machine never provisioned for host unlock.
     Absent,
-    /// No handoff was there, but the handoff unit left the unseal-failure file: its unseal failed, as after a `dbx` or KEK
-    /// update changes PCR 7. A diagnostic only; the service waits Locked for passphrase `unlock`, as for `Absent`.
+    /// No handoff was there, but the handoff unit left the unseal-failure file: its unseal failed, as after a `dbx`
+    /// or KEK update changes PCR 7. The file is a diagnostic only; the service waits Locked for passphrase `unlock`,
+    /// as for `Absent`.
     UnsealFailed,
     /// The owner-lock file is there: an explicit `lock` stands, so the handoff and the memory guard were never reached.
     OwnerLocked,
@@ -40,7 +54,8 @@ pub enum HostUnlockOutcome {
 /// Why a host unlock left the service Locked. No variant carries the handoff's bytes or its recipient key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostUnlockRefusal {
-    /// Memory is not locked against swap, so the handoff was never opened (§14).
+    /// Memory is not locked against swap, so the handoff was never opened
+    /// ([specification §14](../../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)).
     MemoryUnprotected,
     /// The handoff or a directory above it broke the `UnlockHandoff` trusted-path rule.
     Untrusted,
@@ -55,7 +70,7 @@ pub enum HostUnlockRefusal {
 }
 
 impl HostUnlockOutcome {
-    /// The snake_case label `host_unlock_outcome` records.
+    /// Returns the snake_case label that the `host_unlock_outcome` field records, such as `unseal_failed`.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Unlocked => "unlocked",
@@ -68,7 +83,7 @@ impl HostUnlockOutcome {
 }
 
 impl HostUnlockRefusal {
-    /// The snake_case label `refusal` records.
+    /// Returns the snake_case label that the `refusal` field records, such as `not_a_recipient`.
     pub const fn label(self) -> &'static str {
         match self {
             Self::MemoryUnprotected => "memory_unprotected",
@@ -110,11 +125,12 @@ impl From<EnvelopeError> for HostUnlockRefusal {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Leaves Starting: to Checking when the unlock handoff at `handoff` opens the vault, then on to Ready or Unavailable
-    /// as the config check settles, and to Locked otherwise. Call it once, right after [`start`](Self::start).
+    /// Leaves Starting: goes to Checking when the unlock handoff at `handoff` opens the vault, then on to Ready or
+    /// Unavailable as the config check settles, and to Locked otherwise. Call it once, right after
+    /// [`start`](Self::start).
     ///
-    /// Only the Protected and Container profiles try a host unlock, and only they leave `start` in Starting; in any other
-    /// state this returns the state unchanged, so a Development service stays Locked, exactly as `start` left it. Each
+    /// Only the Protected and Container profiles try a host unlock, and only they leave `start` in Starting; in any
+    /// other state this returns the state unchanged, so a Development service stays Locked, as `start` left it. Each
     /// attempt writes one `vault.host-unlock` record. The owner-lock file is read first, before the memory guard and
     /// before the handoff is opened: while anything is at that name the attempt is `owner_locked` and the service
     /// goes to Locked. Host unlock never removes the file.
@@ -146,8 +162,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         }
     }
 
-    /// The vault identity the handoff unwraps, `None` when there is no handoff. The memory guard comes first, so without
-    /// locked memory the file is never opened; the rest reads files, so it runs on the blocking pool.
+    /// Returns the vault identity the handoff unwraps, or `None` when there is no handoff. The memory guard comes
+    /// first, so without locked memory the file is never opened. The rest reads files, so it runs on the blocking pool.
     async fn open_with_handoff(&self, handoff: &Path) -> Result<Option<VaultIdentity>, HostUnlockRefusal> {
         self.require_locked_memory().map_err(|_| HostUnlockRefusal::MemoryUnprotected)?;
         let (locks, setup, handoff) = (Arc::clone(&self.locks), Arc::clone(&self.setup), handoff.to_path_buf());
@@ -156,8 +172,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             .unwrap_or(Err(HostUnlockRefusal::Unreadable))
     }
 
-    /// `UnsealFailed` when the unseal-failure file sits beside the missing `handoff`, `Absent` otherwise. The file is read
-    /// only now, so a handoff that is there is never second-guessed by a stale one.
+    /// Returns `UnsealFailed` when the unseal-failure file sits beside the missing `handoff`, and `Absent` otherwise.
+    /// The file is read only now, so a handoff that is there is never second-guessed by a stale one.
     async fn missing_handoff_outcome(&self, handoff: &Path) -> HostUnlockOutcome {
         let (owner, flag) = (self.unseal_failure_owner, handoff.with_file_name(UNSEAL_FAILED_NAME));
         let present = tokio::task::spawn_blocking(move || unseal_failed_present(owner, &flag)).await;
@@ -167,11 +183,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         }
     }
 
-    /// The recipient key of the configured host unlock adapter, which part 1 of the independence rule keeps: the
-    /// identity the unlock handoff holds now, in the Protected and Container profiles (`design/tpm-unlock.md`, "The
-    /// recipient role"; `design/docker-compose.md`, "Its role among the recipients"). With no readable handoff, or in a
-    /// Development service, which has none, no host unlock is configured. The identity is dropped as this returns; only
-    /// its public key is kept.
+    /// Returns the recipient key of the configured host unlock adapter, which part 1 of the independence rule keeps:
+    /// the identity the unlock handoff holds now, in the Protected and Container profiles
+    /// ([TPM unlock: The recipient role](../../../../design/tpm-unlock.md#the-recipient-role);
+    /// [Docker Compose: Its role among the recipients](../../../../design/docker-compose.md#its-role-among-the-recipients)).
+    /// With no readable handoff, or in a Development service, which has none, no host unlock is configured and this
+    /// returns `None`. The identity is dropped as this returns; only its public key is kept.
     pub(super) async fn configured_host_unlock(&self) -> Option<RecipientKey> {
         let setup = Arc::clone(&self.setup);
         if !tries_host_unlock(setup.paths.profile) {
@@ -201,8 +218,8 @@ fn unwrap_with_handoff<F: StoreFs>(
     Ok(Some(unwrap_identity(&envelope, &host)?))
 }
 
-/// Keeps the startup outcome for `status` and writes its `vault.host-unlock` record, so no path through the attempt does
-/// one without the other.
+/// Keeps the startup outcome for `status` and writes its `vault.host-unlock` record, so no path through the attempt
+/// does one without the other.
 fn record_and_emit(inner: &mut Inner, outcome: HostUnlockOutcome) {
     inner.host_unlock_outcome = Some(outcome);
     HostUnlock { outcome }.emit();
@@ -216,8 +233,9 @@ const fn outcome_of(opened: &Result<Option<VaultIdentity>, HostUnlockRefusal>) -
     }
 }
 
-/// Whether `start` leaves this profile in Starting for [`ServiceContext::unlock_at_start`]: the Protected and Container
-/// profiles try a host unlock. A Development service runs as the invoking user, so no root-owned handoff unit exists to trust.
+/// Returns `true` if and only if `start` leaves this profile in Starting for [`ServiceContext::unlock_at_start`]: the
+/// Protected and Container profiles try a host unlock. A Development service runs as the invoking user, so no
+/// root-owned handoff unit exists to trust.
 pub(super) const fn tries_host_unlock(profile: DeploymentProfile) -> bool {
     matches!(profile, DeploymentProfile::Protected | DeploymentProfile::Container)
 }
