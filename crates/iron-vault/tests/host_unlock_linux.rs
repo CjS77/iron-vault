@@ -88,7 +88,9 @@ fn service_on(fixture: &Fixture, profile: DeploymentProfile) -> ServiceContext {
     start(fixture, profile, MemoryProtection::Locked)
 }
 
-/// Runs each case once as a Protected service and once as a Container service: both try the unlock handoff.
+/// Runs each case once as a Protected service and once as a Container service: both try the unlock handoff. Each run
+/// holds the turn throughout, so a case cannot forget it: any case that starts a service may write host unlock records,
+/// and one written outside the turn lands in another case's count.
 macro_rules! on_both_profiles {
     ($($case:ident),* $(,)?) => {$(
         mod $case {
@@ -96,22 +98,30 @@ macro_rules! on_both_profiles {
 
             #[tokio::test]
             async fn protected() {
+                let _turn = TURN.lock().await;
                 super::$case(DeploymentProfile::Protected).await;
             }
 
             #[tokio::test]
             async fn container() {
+                let _turn = TURN.lock().await;
                 super::$case(DeploymentProfile::Container).await;
             }
         }
     )*};
 }
 
-/// The turn and the log, with the number of host unlock records already in it.
-async fn turn() -> (MutexGuard<'static, ()>, Captured, usize) {
-    let turn = TURN.lock().await;
+/// The log, with the number of host unlock records already in it. Only meaningful while the caller holds the turn.
+fn logs_now() -> (Captured, usize) {
     let logs = captured_logs();
     let before = logs.events(EVENT).len();
+    (logs, before)
+}
+
+/// The turn and the log, for a test outside [`on_both_profiles`], which must take the turn itself.
+async fn turn() -> (MutexGuard<'static, ()>, Captured, usize) {
+    let turn = TURN.lock().await;
+    let (logs, before) = logs_now();
     (turn, logs, before)
 }
 
@@ -138,7 +148,7 @@ async fn assert_passphrase_unlock_works(service: &ServiceContext) {
 }
 
 async fn a_good_handoff_reaches_ready_and_serves_with_no_unlock(profile: DeploymentProfile) {
-    let (_turn, logs, before) = turn().await;
+    let (logs, before) = logs_now();
     let fixture = Fixture::new().await;
     let (secret, host_key) = with_host_key(&fixture);
     let dir = HandoffDir::new();
@@ -161,7 +171,7 @@ async fn a_good_handoff_reaches_ready_and_serves_with_no_unlock(profile: Deploym
 }
 
 async fn without_locked_memory_the_handoff_is_never_opened(profile: DeploymentProfile) {
-    let (_turn, logs, before) = turn().await;
+    let (logs, before) = logs_now();
     let fixture = Fixture::new().await;
     let (secret, _) = with_host_key(&fixture);
     let dir = HandoffDir::new();
@@ -178,7 +188,7 @@ async fn without_locked_memory_the_handoff_is_never_opened(profile: DeploymentPr
 }
 
 async fn a_missing_handoff_leaves_it_locked_for_the_passphrase(profile: DeploymentProfile) {
-    let (_turn, logs, before) = turn().await;
+    let (logs, before) = logs_now();
     let fixture = Fixture::new().await;
     with_host_key(&fixture);
     let dir = HandoffDir::new();
@@ -205,7 +215,7 @@ impl HandoffDir {
 }
 
 async fn an_unseal_failure_file_beside_a_missing_handoff_is_reported(profile: DeploymentProfile) {
-    let (_turn, logs, before) = turn().await;
+    let (logs, before) = logs_now();
     let fixture = Fixture::new().await;
     with_host_key(&fixture);
     let dir = HandoffDir::new();
@@ -221,7 +231,7 @@ async fn an_unseal_failure_file_beside_a_missing_handoff_is_reported(profile: De
 
 /// Each of these at the unseal-failure path is not the file, so a missing handoff is `absent`.
 async fn anything_but_a_regular_file_of_the_expected_owner_is_absent(profile: DeploymentProfile) {
-    let (_turn, logs, before) = turn().await;
+    let (logs, before) = logs_now();
     let fixture = Fixture::new().await;
     with_host_key(&fixture);
     let target = fixture.path("some-regular-file");
@@ -249,7 +259,7 @@ async fn anything_but_a_regular_file_of_the_expected_owner_is_absent(profile: De
 }
 
 async fn a_stale_unseal_failure_file_does_not_stop_a_good_handoff(profile: DeploymentProfile) {
-    let (_turn, logs, before) = turn().await;
+    let (logs, before) = logs_now();
     let fixture = Fixture::new().await;
     let (secret, _) = with_host_key(&fixture);
     let dir = HandoffDir::new();
@@ -264,7 +274,7 @@ async fn a_stale_unseal_failure_file_does_not_stop_a_good_handoff(profile: Deplo
 }
 
 async fn an_identity_that_is_not_a_recipient_leaves_it_locked_for_the_passphrase(profile: DeploymentProfile) {
-    let (_turn, logs, before) = turn().await;
+    let (logs, before) = logs_now();
     let fixture = Fixture::new().await;
     let (_, host_key) = with_host_key(&fixture);
     let (stranger, _) = RecoveryKey::generate();
@@ -281,7 +291,7 @@ async fn an_identity_that_is_not_a_recipient_leaves_it_locked_for_the_passphrase
 }
 
 async fn an_uninitialized_vault_stays_locked(profile: DeploymentProfile) {
-    let (_turn, logs, before) = turn().await;
+    let (logs, before) = logs_now();
     let fixture = Fixture::new().await;
     let (secret, _) = with_host_key(&fixture);
     ["state", "etc"].into_iter().for_each(|name| empty(&fixture.path(name)));
@@ -363,7 +373,6 @@ fn file_names(fixture: &Fixture, dir: &str) -> Vec<String> {
 }
 
 async fn init_host_unlock_with_no_handoff_is_refused_before_any_prompt_and_writes_nothing(profile: DeploymentProfile) {
-    let (_turn, _logs, _before) = turn().await;
     let fixture = Fixture::new().await;
     let dir = HandoffDir::new();
     let service = uninitialized(&fixture, profile, &dir.path()).await;
@@ -384,7 +393,7 @@ async fn init_host_unlock_with_no_handoff_is_refused_before_any_prompt_and_write
 }
 
 async fn init_host_unlock_with_an_untrusted_handoff_names_the_reason_and_not_the_key(profile: DeploymentProfile) {
-    let (_turn, logs, _before) = turn().await;
+    let logs = captured_logs();
     let fixture = Fixture::new().await;
     let (secret, _) = RecoveryKey::generate();
     let dir = HandoffDir::new();
@@ -424,7 +433,7 @@ async fn init_host_unlock_is_refused_by_a_service_that_has_no_host_unlock() {
 }
 
 async fn init_host_unlock_then_a_restart_reaches_ready_with_no_unlock(profile: DeploymentProfile) {
-    let (_turn, logs, _before) = turn().await;
+    let logs = captured_logs();
     let fixture = Fixture::new().await;
     let (secret, _) = RecoveryKey::generate();
     let dir = HandoffDir::new();
@@ -469,7 +478,7 @@ async fn remove(service: &Arc<ServiceContext>, key: &RecipientKey, answers: &[&s
 /// it with `recipient add --host-unlock`, a restart reaches Ready with no `unlock`, and then the old `host-unlock`
 /// recipient can be removed while the one the handoff holds cannot.
 async fn a_new_host_unlock_key_reaches_ready_after_a_restart_and_the_old_one_can_then_be_removed(profile: DeploymentProfile) {
-    let (_turn, logs, _before) = turn().await;
+    let logs = captured_logs();
     let fixture = Fixture::new().await;
     let (old_secret, old_key) = RecoveryKey::generate();
     let dir = HandoffDir::new();
@@ -535,7 +544,7 @@ async fn a_new_host_unlock_key_reaches_ready_after_a_restart_and_the_old_one_can
 }
 
 async fn an_untrusted_handoff_leaves_it_locked_for_the_passphrase(profile: DeploymentProfile) {
-    let (_turn, logs, before) = turn().await;
+    let (logs, before) = logs_now();
     let fixture = Fixture::new().await;
     let (secret, _) = with_host_key(&fixture);
     let dir = HandoffDir::new();
@@ -551,7 +560,7 @@ async fn an_untrusted_handoff_leaves_it_locked_for_the_passphrase(profile: Deplo
 }
 
 async fn a_handoff_that_is_not_an_identity_leaves_it_locked_for_the_passphrase(profile: DeploymentProfile) {
-    let (_turn, logs, before) = turn().await;
+    let (logs, before) = logs_now();
     let fixture = Fixture::new().await;
     with_host_key(&fixture);
     let dir = HandoffDir::new();
@@ -704,7 +713,7 @@ fn locked(outcome: LockOutcome, persisted: bool) -> LockResult {
 }
 
 async fn an_explicit_lock_survives_a_restart_until_a_passphrase_unlock(profile: DeploymentProfile) {
-    let (_turn, logs, before) = turn().await;
+    let (logs, before) = logs_now();
     let fixture = Fixture::new().await;
     let (secret, _) = with_host_key(&fixture);
     let dir = HandoffDir::new();
@@ -750,7 +759,7 @@ async fn an_explicit_lock_survives_a_restart_until_a_passphrase_unlock(profile: 
 }
 
 async fn a_failed_owner_lock_write_still_locks_and_says_so(profile: DeploymentProfile) {
-    let (_turn, logs, _before) = turn().await;
+    let logs = captured_logs();
     let fixture = Fixture::new().await;
     let (secret, _) = with_host_key(&fixture);
     let dir = HandoffDir::new();
@@ -772,7 +781,7 @@ async fn a_failed_owner_lock_write_still_locks_and_says_so(profile: DeploymentPr
 }
 
 async fn a_failed_owner_lock_removal_still_unlocks_and_says_so(profile: DeploymentProfile) {
-    let (_turn, logs, before) = turn().await;
+    let (logs, before) = logs_now();
     let fixture = Fixture::new().await;
     let (secret, _) = with_host_key(&fixture);
     let dir = HandoffDir::new();
@@ -796,7 +805,6 @@ async fn a_failed_owner_lock_removal_still_unlocks_and_says_so(profile: Deployme
 }
 
 async fn a_lock_in_locked_writes_nothing(profile: DeploymentProfile) {
-    let (_turn, _logs, _before) = turn().await;
     let fixture = Fixture::new().await;
     with_host_key(&fixture);
     let dir = HandoffDir::new();
@@ -809,7 +817,6 @@ async fn a_lock_in_locked_writes_nothing(profile: DeploymentProfile) {
 }
 
 async fn init_removes_a_stale_owner_lock_so_the_new_vault_host_unlocks(profile: DeploymentProfile) {
-    let (_turn, _logs, _before) = turn().await;
     let fixture = Fixture::new().await;
     let (secret, _) = RecoveryKey::generate();
     let dir = HandoffDir::new();
@@ -901,7 +908,6 @@ fn serve_admin_as_owner<F: StoreFs + Send + Sync + 'static>(
 }
 
 async fn reset_writes_the_owner_lock_before_the_discard(profile: DeploymentProfile) {
-    let (_turn, _logs, _before) = turn().await;
     let fixture = Fixture::new().await;
     let fs = OwnerLockFs::default();
 
@@ -920,7 +926,7 @@ async fn reset_writes_the_owner_lock_before_the_discard(profile: DeploymentProfi
 }
 
 async fn a_reset_whose_owner_lock_write_fails_still_completes(profile: DeploymentProfile) {
-    let (_turn, logs, _before) = turn().await;
+    let logs = captured_logs();
     let fixture = Fixture::new().await;
     let fs = OwnerLockFs::failing_write();
 
