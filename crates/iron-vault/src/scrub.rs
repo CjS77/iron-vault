@@ -1,8 +1,22 @@
-//! The scrubber: replaces every occurrence of a request's scrub patterns in a streamed response body (spec §11).
+//! The scrubber: replaces every occurrence of a request's scrub patterns in a streamed response body and in the
+//! response headers ([spec §11][s11]). It is the response stage's backstop: if an upstream echoes the injected
+//! credential in any of the forms its credential kind lists as scrub patterns, the caller sees [`SCRUB_REPLACEMENT`]
+//! instead.
 //!
-//! Matching is a hand-rolled scan rather than `aho-corasick`: a request has 10-20 short patterns, `aho-corasick`'s
-//! streaming search does not support leftmost-longest matching, and its automaton would hold copies of the secrets that
-//! are never wiped. The scrubber borrows or takes the patterns and copies none of them.
+//! The body arrives in chunks, so a secret can straddle two of them. The scrubber holds back only the bytes that could
+//! still begin a match. For example, with the one pattern `sk-123`:
+//!
+//! ```text
+//! push("data: sk-1")   returns "data: "                       holds "sk-1", which "23" could complete
+//! push("23 done\n")    returns "[iron-vault:scrubbed] done\n"   holds nothing
+//! finish()             returns "" and 1 match
+//! ```
+//!
+//! Matching is a hand-written scan, not `aho-corasick`: a request has 10-20 short patterns, `aho-corasick`'s streaming
+//! search does not support leftmost-longest matching, and its automaton would hold copies of the secrets that are never
+//! wiped. The scrubber borrows or takes the patterns and copies none of them.
+//!
+//! [s11]: ../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing
 
 use std::fmt;
 
@@ -14,8 +28,8 @@ use zeroize::{Zeroize, Zeroizing};
 #[cfg(test)]
 mod tests;
 
-/// The scrub replacement, written in place of every match whatever its length, so the output shows neither the length
-/// nor the position of the secret it replaced.
+/// The scrub replacement, written in place of every match of any length, so the output shows neither the length nor
+/// the position of the secret it replaced.
 pub const SCRUB_REPLACEMENT: &[u8] = REPLACEMENT_TEXT.as_bytes();
 
 /// [`SCRUB_REPLACEMENT`] as text, so the header fallback can be a `&'static str` without repeating the literal.
@@ -24,10 +38,11 @@ const REPLACEMENT_TEXT: &str = "[iron-vault:scrubbed]";
 /// The per-response streaming matcher for one request's scrub patterns.
 ///
 /// Matching is leftmost-longest and byte-exact: where several patterns match at one position, the longest wins, so
-/// `Basic <token>` is replaced whole rather than leaving `Basic ` before a replaced token. Between chunks it holds back
+/// `Basic <token>` is replaced whole instead of leaving `Basic ` before a replaced token. Between chunks it holds back
 /// only the bytes from the first position where a match could still begin or grow; everything before that is released
 /// at once, so an SSE event is never delayed until the next one. The held bytes are at most one less than the longest
-/// pattern (§11) and are wiped when the scrubber is dropped.
+/// pattern ([§11](../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing)) and are wiped when
+/// the scrubber is dropped.
 ///
 /// Call [`finish`](Self::finish) at the end of the body. It consumes the scrubber, so no chunk can be pushed after the
 /// held bytes are released, and it returns the body's total match count. Dropping the scrubber without it releases
@@ -47,7 +62,7 @@ enum Patterns<'p> {
 }
 
 impl Patterns<'_> {
-    /// Whether some pattern satisfies `test`.
+    /// Returns `true` if and only if some pattern satisfies `test`.
     fn any(&self, test: impl Fn(&[u8]) -> bool) -> bool {
         match self {
             Self::Borrowed(patterns) => patterns.iter().any(|pattern| test(pattern)),
@@ -55,7 +70,7 @@ impl Patterns<'_> {
         }
     }
 
-    /// The length of the longest pattern that satisfies `test`.
+    /// Returns the length of the longest pattern that satisfies `test`, or `None` if none does.
     fn longest(&self, test: impl Fn(&[u8]) -> bool) -> Option<usize> {
         match self {
             Self::Borrowed(patterns) => longest_of(patterns.iter().copied(), test),
@@ -95,7 +110,7 @@ enum Step {
 }
 
 impl Scrubber<'static> {
-    /// A scrubber that takes `patterns`, for a response body that outlives the request that resolved them. They are
+    /// Creates a scrubber that takes `patterns`, for a response body that outlives the request that resolved them. They are
     /// wiped when the scrubber is dropped, by [`finish`](Scrubber::finish) or with a body that fails.
     pub fn owning(patterns: ScrubPatterns) -> Self {
         Self::over(Patterns::Owned(patterns))
@@ -103,12 +118,12 @@ impl Scrubber<'static> {
 }
 
 impl<'p> Scrubber<'p> {
-    /// A scrubber for one response, watching for `patterns`.
+    /// Creates a scrubber for one response that borrows `patterns`.
     pub fn new(patterns: &'p ScrubPatterns) -> Self {
         Self::over(Patterns::Borrowed(patterns.iter().collect()))
     }
 
-    /// A scrubber over arbitrary patterns, for tests; an empty pattern is dropped, since it would match everywhere.
+    /// Creates a scrubber over arbitrary patterns, for tests; an empty pattern is dropped, since it would match everywhere.
     #[cfg(test)]
     pub(crate) fn with_patterns(patterns: impl IntoIterator<Item = &'p [u8]>) -> Self {
         let patterns: Vec<&[u8]> = patterns.into_iter().filter(|pattern| !pattern.is_empty()).collect();
@@ -149,7 +164,7 @@ impl<'p> Scrubber<'p> {
         self.matches
     }
 
-    /// The held bytes followed by `chunk`, in a buffer sized for both so it never reallocates.
+    /// Joins the held bytes and `chunk` in a buffer sized for both, so it never reallocates.
     fn pending(&self, chunk: &[u8]) -> Zeroizing<Vec<u8>> {
         let mut pending = Zeroizing::new(Vec::with_capacity(self.held.len() + chunk.len()));
         pending.extend_from_slice(&self.held);
@@ -191,7 +206,8 @@ impl<'p> Scrubber<'p> {
             .map_or(Step::Release, Step::Replace)
     }
 
-    /// Whether some pattern is longer than `rest` and begins with it, so the next chunk could complete it.
+    /// Returns `true` if and only if some pattern is longer than `rest` and begins with it, so the next chunk could
+    /// complete it.
     fn could_grow(&self, rest: &[u8]) -> bool {
         self.patterns.any(|pattern| pattern.len() > rest.len() && pattern.starts_with(rest))
     }
@@ -207,7 +223,8 @@ impl fmt::Debug for Scrubber<'_> {
     }
 }
 
-/// Scrubs every response header value in place and returns how many matches were replaced across all values (spec §11).
+/// Scrubs every response header value in place and returns how many matches were replaced across all values
+/// ([spec §11](../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing)).
 ///
 /// Each value is scrubbed whole and one-shot through the same [`Scrubber`] as the body, so headers and body share one
 /// matching rule. Header names are not scrubbed: a secret in a name is implausible, and rewriting names would change
@@ -218,7 +235,7 @@ pub fn scrub_headers(headers: &mut HeaderMap, patterns: &ScrubPatterns) -> u64 {
     scrub_header_values(headers, || Scrubber::new(patterns))
 }
 
-/// [`scrub_headers`] over a scrubber factory, one fresh scrubber per value.
+/// Scrubs every header value as [`scrub_headers`] does, with a fresh scrubber from `scrubber` for each value.
 pub(crate) fn scrub_header_values<'p>(headers: &mut HeaderMap, scrubber: impl Fn() -> Scrubber<'p>) -> u64 {
     headers
         .values_mut()
@@ -234,7 +251,8 @@ pub(crate) fn scrub_header_values<'p>(headers: &mut HeaderMap, scrubber: impl Fn
         .sum()
 }
 
-/// The scrubbed value and its match count if `value` held a match, else `None` so an unmatched value stays byte-identical.
+/// Returns the scrubbed value and its match count if `value` held a match. Returns `None` otherwise, so an unmatched
+/// value stays byte-identical.
 fn scrub_value(mut scrubber: Scrubber<'_>, value: &[u8]) -> Option<(HeaderValue, u64)> {
     let mut out = Zeroizing::new(scrubber.push(value).to_vec());
     let finished = scrubber.finish();
@@ -242,8 +260,8 @@ fn scrub_value(mut scrubber: Scrubber<'_>, value: &[u8]) -> Option<(HeaderValue,
     (finished.matches > 0).then(|| (header_value(&out), finished.matches))
 }
 
-/// A header value from scrubbed bytes. The replacement is ASCII and the rest came from a valid header value, so this
-/// cannot fail; if it somehow did, the whole value becomes the replacement rather than leaving the secret in place.
+/// Builds a header value from scrubbed bytes. The replacement is ASCII and the rest came from a valid header value, so
+/// this cannot fail; if it did, the whole value becomes the replacement, so the secret is never left in place.
 fn header_value(bytes: &[u8]) -> HeaderValue {
     HeaderValue::from_bytes(bytes).unwrap_or_else(|_| {
         debug_assert!(false, "scrubbed header value is not a valid header value");
