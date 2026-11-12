@@ -111,7 +111,7 @@ Check that the service is running and show its deployment profile.
 iron-vault status [OPTIONS]
 ```
 
-Show the service, vault, approval, memory protection, host unlock outcome and credential states, without secrets. It exits 4 when the service answers and is not Ready.
+Show the service, vault, approval, memory protection, host unlock outcome and credential states, without secrets. When an approved listener did not open (a TLS key that does not match its certificate, an address in use, a socket directory that is missing), it adds a `Listeners not open:` section naming each listener and a short reason; the other listeners keep serving, and that alone does not change the exit code. It exits 4 when the service answers and is not Ready.
 
 ## `iron-vault list`
 

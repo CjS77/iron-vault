@@ -820,6 +820,7 @@ digest or permitted origin.
 | 16 | recovery reminder due | flag: `1` when a [recovery reminder](recovery.md#reminders) is due |
 | 17 | recovery check detail | UTF-8 text: why tag 13 is `0`, a fixed phrase; empty otherwise |
 | 18 | host unlock outcome | byte value: empty when the profile tries no host unlock (Development); else the startup outcome, `1` unlocked, `2` absent, `3` unseal failed, `4` owner locked, or `5` followed by a refusal code (`0` memory unprotected, `1` untrusted, `2` unreadable, `3` not an identity, `4` not initialized, `5` not a recipient) |
+| 19 | listeners not open | byte value: the listener failure list below; empty when every listener the config names is open |
 
 The vault ID, both approval versions, the credentials and the route faults are sealed behind the vault identity
 (`approval.age`, the manifest), so they are unknown while no vault is open. No vault is open in Starting, Locked and
@@ -870,6 +871,20 @@ listed here is never listed under a healthy credential; one whose credential is 
 | 1 | fault: `1` pinned CA unavailable |
 
 The entry names no CA path, PEM bytes or load error; the owner's log names the route and its `ca_file` field.
+
+The listener failure list is one entry per listener that the config names and that is not open, in listener-name order.
+It is known in every state, and it is the set the last listener open or rebuild left out: the provisional listeners from
+the published config until the first Ready, then the approved ones, replaced whole on each approval or reload. A listener
+that is not open does not change the service state.
+
+| Size | Part |
+|---|---|
+| 1 | listener name length `n`, 1 to 64 |
+| `n` | listener name |
+| 1 | reason: `1` `tls-key-mismatch`, `2` `tls-file-unreadable`, `3` `tls-certificate-invalid`, `4` `tls-key-unusable`, `5` `address-in-use`, `6` `plain-http-off-loopback`, `7` `socket-path`, `8` `socket-activation-missing`, `9` `socket-activation-mismatch`, `10` `bind-refused` |
+
+The reason is a fixed category chosen from the open error. It carries no path, address, file content or key; the owner's
+log names those.
 
 #### list
 

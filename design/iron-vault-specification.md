@@ -906,6 +906,11 @@ stateDiagram-v2
 | Upstream transport or TLS failure                               | Return `502`, or `504` for timeout, without raw secret-bearing client diagnostics                               |
 | Supported size limit exceeded                                   | Return `413` for requests; fail oversized response processing without returning unscreened secret-bearing bytes |
 
+An approved listener can fail to open: its TLS key does not match its certificate, its address is in use, or its socket
+path's directory is missing. The service leaves it out and the other listeners keep serving, so the service state does
+not change, but `status` lists each approved listener that is not open with a fixed reason category, never a path or a
+key. A later approval that fixes the cause, or removes the listener, clears the entry.
+
 A healthy TPM service restarts unattended using a policy such as `Restart=on-failure`. Passphrase-only and later
 YubiKey-only profiles remain locked until the owner supplies the required input. The YubiKey profile reports
 `locked: needs a touch` and notifies the owner. The implementation must verify how unclean power loss affects its
@@ -931,7 +936,7 @@ release check in [implementation spec §3](implementation-specification.md#3-imp
 | `iron-vault rm <name>`                           | Require owner presence and remove the record; refused while any route uses the name                                  | v0                                        |
 | `iron-vault config approve`                      | Run the service-owned pending-config and versioned-signature transaction                                             | v0                                        |
 | `iron-vault lock` / `unlock`                     | Clear or recover the in-memory vault identity and cached secrets                                                     | v0                                        |
-| `iron-vault status`                              | Report service, vault, approval version, and affected credential states without secrets                              | v0                                        |
+| `iron-vault status`                              | Report service, vault, approval version, affected credential states and listeners not open, without secrets        | v0                                        |
 | `iron-vault recovery check`                      | Prompt for the offline recovery identity and verify that it opens the current vault identity                         | v0                                        |
 | `iron-vault recipient add` / `remove`            | Require fresh existing-owner authorization; rewrap the vault identity; preserve independent recovery paths           | v0; each device backend follows its phase |
 | `iron-vault export <bundle>` / `import <bundle>` | Authorize migration with an existing source factor before export; require the bundle passphrase on import           | v0                                        |
