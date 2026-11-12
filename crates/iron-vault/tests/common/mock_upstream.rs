@@ -56,11 +56,22 @@ impl TestCa {
 
     /// A TLS server config presenting a leaf certificate for `dns_name`, offering HTTP/1.1 only.
     pub fn server_config(&self, dns_name: &str) -> Arc<ServerConfig> {
+        self.server_config_for(CertificateParams::new(vec![dns_name.to_owned()]).unwrap())
+    }
+
+    /// As [`server_config`](Self::server_config), with a leaf for `dns_name` that expired in 2001, so only its validity
+    /// period fails verification.
+    pub fn expired_server_config(&self, dns_name: &str) -> Arc<ServerConfig> {
+        let mut params = CertificateParams::new(vec![dns_name.to_owned()]).unwrap();
+        params.not_before = rcgen::date_time_ymd(2000, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2001, 1, 1);
+        self.server_config_for(params)
+    }
+
+    /// A TLS server config presenting a leaf this CA signs from `params`, offering HTTP/1.1 only.
+    fn server_config_for(&self, params: CertificateParams) -> Arc<ServerConfig> {
         let key = KeyPair::generate().unwrap();
-        let leaf = CertificateParams::new(vec![dns_name.to_owned()])
-            .unwrap()
-            .signed_by(&key, &self.issuer)
-            .unwrap();
+        let leaf = params.signed_by(&key, &self.issuer).unwrap();
         let chain = vec![CertificateDer::from(leaf.der().to_vec())];
         let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der()));
         let provider = Arc::new(rustls::crypto::ring::default_provider());
