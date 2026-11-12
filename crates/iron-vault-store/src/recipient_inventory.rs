@@ -1,10 +1,22 @@
-//! The recipient inventory: the service's own record of which recipient keys `identity.age` is wrapped for (spec §13,
-//! §14, `design/recipients.md`).
+//! The recipient inventory: the service's own record of which recipient keys `identity.age` is wrapped for
+//! ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
+//! [§14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory),
+//! [recipient inventory](../../../design/recipients.md#recipient-inventory)).
 //!
-//! An X25519 stanza does not name its recipient, so without this file the service could not rewrap the vault identity for
-//! the recipients it keeps. Anyone holding the vault public key could seal a list of their own choosing, so the
+//! An X25519 stanza does not name its recipient, so without this file the service could not rewrap the vault identity
+//! for the recipients it keeps. Anyone holding the vault public key could seal a list of their own choosing, so the
 //! inventory is a MAC'd file: only the holder of the vault identity writes one that opens. It carries the digest of the
-//! `identity.age` it describes, which is how a restore of either file alone is noticed.
+//! `identity.age` it describes, so a restore of either file alone is noticed
+//! ([binding to `identity.age`](../../../design/recipients.md#binding-to-identityage)):
+//!
+//! ```text
+//! identity.age                                     recipients.age  (MAC'd with a key from the vault identity)
+//! ┌───────────────────────────────┐                ┌─────────────────────────────────────────────────────┐
+//! │ one X25519 stanza per key,    │ ◀── BLAKE2b ── │ envelope_digest                                     │
+//! │ none naming its recipient     │      -256      │ entries: key, role, label, enrolled_at, per key     │
+//! │ payload: the vault identity   │                │          (2 to 64, in ascending key order)          │
+//! └───────────────────────────────┘                └─────────────────────────────────────────────────────┘
+//! ```
 
 mod change;
 mod encoding;
@@ -29,7 +41,7 @@ use crate::{
 };
 
 /// The largest inventory file accepted, in bytes on disk, checked before any other work. A full inventory is under
-/// 10,300 bytes (`design/storage-formats.md`).
+/// 10,300 bytes ([size limit](../../../design/recipients.md#size-limit)).
 pub const MAX_RECIPIENT_INVENTORY_LEN: usize = 16 * 1024;
 
 /// The longest recipient label, in bytes of UTF-8.
@@ -53,7 +65,8 @@ const KIND: MacFileKind<RecipientInventoryError> = MacFileKind {
     invalid_vault_id: RecipientInventoryError::InvalidVaultId,
 };
 
-/// What reaches the vault through a recipient. The role decides how the recipient counts toward the independence rule.
+/// Names what reaches the vault through a recipient. The role decides how the recipient counts toward the
+/// [independence rule](../../../design/recipients.md#independence-rule).
 ///
 /// Codes 4 and 5 (`tpm`, `hardware`) are reserved for later epics and are refused on reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -70,7 +83,7 @@ pub enum RecipientRole {
 }
 
 impl RecipientRole {
-    /// The role's code in the inventory payload.
+    /// Returns the role's code in the inventory payload.
     pub fn code(self) -> u8 {
         match self {
             Self::Operational => 1,
@@ -80,14 +93,14 @@ impl RecipientRole {
         }
     }
 
-    /// The role with `code`, or `None` for a reserved or unknown code.
+    /// Returns the role with `code`, or `None` for a reserved or unknown code.
     pub fn from_code(code: u8) -> Option<Self> {
         [Self::Operational, Self::Recovery, Self::Added, Self::HostUnlock]
             .into_iter()
             .find(|role| role.code() == code)
     }
 
-    /// The name the CLI prints and the audit log records.
+    /// Returns the name the CLI prints and the audit log records, such as `host-unlock`.
     pub fn name(self) -> &'static str {
         match self {
             Self::Operational => "operational",
@@ -99,12 +112,24 @@ impl RecipientRole {
 }
 
 /// Owner text saying which device or copy a recipient key is, valid on construction: 1 to 64 bytes of UTF-8, no control
-/// or format character, no leading or trailing whitespace. A label can then neither start a log line nor reorder a
-/// summary with a bidirectional control. It is never interpreted and need not be unique.
+/// or format character, no leading or trailing whitespace
+/// ([recipient labels](../../../design/recipients.md#recipient-labels)).
+///
+/// A label can then neither start a log line nor reorder a summary with a bidirectional control. It is never
+/// interpreted and need not be unique.
+///
+/// ```
+/// use iron_vault_store::{RecipientLabel, RecipientLabelError};
+///
+/// assert_eq!(RecipientLabel::new("recovery key, safe deposit box").unwrap().as_str(), "recovery key, safe deposit box");
+/// assert_eq!(RecipientLabel::new(" laptop"), Err(RecipientLabelError::SurroundingWhitespace));
+/// assert_eq!(RecipientLabel::new("laptop\nfake log line"), Err(RecipientLabelError::ControlOrFormat));
+/// assert_eq!(RecipientLabel::new("\u{202e}potpal"), Err(RecipientLabelError::ControlOrFormat));
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecipientLabel(String);
 
-/// Why a string is not a recipient label.
+/// Says why a string is not a recipient label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum RecipientLabelError {
     /// The label is empty.
@@ -133,7 +158,7 @@ impl RecipientLabel {
         }
     }
 
-    /// The label text.
+    /// Borrows the label text.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -145,10 +170,11 @@ impl fmt::Display for RecipientLabel {
     }
 }
 
-/// Whether `c` is in Unicode general category Cf. `std` knows Cc but not Cf. `icu_properties` knows it but is only a
-/// transitive dependency here, and adding it directly would pull a large Unicode data crate into the store's audited
-/// surface for one check, so the ranges are listed by hand (Unicode 16). A character added to Cf later is accepted
-/// until the list is updated.
+/// Returns `true` if and only if `c` is in Unicode general category Cf, as of Unicode 16.
+///
+/// `std` knows Cc but not Cf. `icu_properties` knows it but is only a transitive dependency here, and adding it directly
+/// would pull a large Unicode data crate into the store's audited surface for one check, so the ranges are listed by
+/// hand. A character added to Cf later is accepted until the list is updated.
 fn is_format_char(c: char) -> bool {
     const CF: [(u32, u32); 21] = [
         (0xAD, 0xAD),
@@ -186,7 +212,7 @@ pub struct RecipientEntry {
 }
 
 impl RecipientEntry {
-    /// An entry for `key`, enrolled at `enrolled_at`. The caller reads the clock; the store never does.
+    /// Creates an entry for `key`, enrolled at `enrolled_at`. The caller reads the clock; the store never does.
     pub fn new(key: RecipientKey, role: RecipientRole, label: RecipientLabel, enrolled_at: UtcSecond) -> Self {
         Self {
             key,
@@ -196,30 +222,32 @@ impl RecipientEntry {
         }
     }
 
-    /// The recipient key; entries are identified by it.
+    /// Returns the recipient key, which identifies the entry.
     pub fn key(&self) -> &RecipientKey {
         &self.key
     }
 
-    /// The recipient's role.
+    /// Returns the recipient's role.
     pub fn role(&self) -> RecipientRole {
         self.role
     }
 
-    /// The recipient's label.
+    /// Returns the recipient's label.
     pub fn label(&self) -> &RecipientLabel {
         &self.label
     }
 
-    /// When the recipient was enrolled.
+    /// Returns the UTC second the recipient was enrolled.
     pub fn enrolled_at(&self) -> UtcSecond {
         self.enrolled_at
     }
 }
 
 /// The recipients of one identity envelope: from 2 to [`MAX_RECIPIENTS`] entries, no key twice, in the canonical order
-/// of [`RecipientKey`], so an inventory has one encoding whatever order its entries were added in. It names the
-/// `identity.age` it describes by that file's [`envelope_digest`].
+/// of [`RecipientKey`].
+///
+/// The order gives an inventory one encoding, however its entries were added. It names the `identity.age` it describes
+/// by that file's [`envelope_digest`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecipientInventory {
     vault_id: VaultId,
@@ -228,7 +256,8 @@ pub struct RecipientInventory {
 }
 
 impl RecipientInventory {
-    /// An inventory of `entries` describing the envelope with digest `envelope_digest`.
+    /// Creates an inventory of `entries` describing the envelope with digest `envelope_digest`, refusing a duplicate
+    /// key and fewer than 2 or more than [`MAX_RECIPIENTS`] entries.
     pub fn new(
         vault_id: VaultId,
         envelope_digest: [u8; 32],
@@ -251,43 +280,43 @@ impl RecipientInventory {
         }
     }
 
-    /// The vault this inventory belongs to.
+    /// Returns the ID of the vault this inventory belongs to.
     pub fn vault_id(&self) -> VaultId {
         self.vault_id
     }
 
-    /// The digest of the `identity.age` this inventory describes.
+    /// Returns the digest of the `identity.age` this inventory describes.
     pub fn envelope_digest(&self) -> &[u8; 32] {
         &self.envelope_digest
     }
 
-    /// The entries in canonical key order.
+    /// Returns the entries in canonical key order.
     pub fn entries(&self) -> impl ExactSizeIterator<Item = &RecipientEntry> {
         self.entries.values()
     }
 
-    /// The entry for `key`, if it is enrolled.
+    /// Returns the entry for `key`, or `None` if it is not enrolled.
     pub fn get(&self, key: &RecipientKey) -> Option<&RecipientEntry> {
         self.entries.get(key)
     }
 
-    /// The set of keys the identity envelope is wrapped for.
+    /// Returns the set of keys the identity envelope is wrapped for.
     pub fn recipient_set(&self) -> RecipientSet {
         RecipientSet::from_validated(self.entries.keys().cloned().collect())
     }
 
-    /// This inventory describing the envelope with digest `envelope_digest` instead.
+    /// Returns this inventory describing the envelope with digest `envelope_digest` instead.
     pub(crate) fn describing(self, envelope_digest: [u8; 32]) -> Self {
         Self { envelope_digest, ..self }
     }
 }
 
-/// The digest of an `identity.age` file's bytes exactly as they sit on disk: BLAKE2b-256, unkeyed.
+/// Returns the digest of an `identity.age` file's bytes exactly as they sit on disk: BLAKE2b-256, unkeyed.
 pub fn envelope_digest(envelope: &[u8]) -> [u8; 32] {
     Blake2b256::digest(envelope).into()
 }
 
-/// An inventory cannot be built or opened. No variant carries file bytes, key material or MAC bytes.
+/// Says why an inventory cannot be built or opened. No variant carries file bytes, key material or MAC bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RecipientInventoryError {
     /// The file is larger than [`MAX_RECIPIENT_INVENTORY_LEN`]; nothing else was read.
@@ -344,7 +373,7 @@ pub enum RecipientInventoryError {
     /// The entries are not in ascending key order, so the payload is not the one encoding of its inventory.
     #[error("recipient inventory entries are not in ascending key order")]
     UnsortedEntries,
-    /// A role code this release does not know, whether reserved or unassigned.
+    /// A role code this release does not know, reserved or unassigned.
     #[error("recipient inventory holds role code {0}, which this release does not know")]
     UnknownRole(u8),
     /// A label is not UTF-8.
@@ -358,12 +387,13 @@ pub enum RecipientInventoryError {
     BadTime,
 }
 
-/// The inventory file's bytes: header, the payload sealed to the vault public key, then the MAC.
+/// Returns the inventory file's bytes: header, the payload sealed to the vault public key, then the MAC
+/// ([file format](../../../design/storage-formats.md#recipient-inventory-file-v1)).
 pub fn seal_recipient_inventory(identity: &VaultIdentity, inventory: &RecipientInventory) -> Result<Vec<u8>, SealError> {
     KIND.seal(identity, inventory.vault_id, &encoding::encode(inventory))
 }
 
-/// `inventory` sealed with its first entry's role code replaced by `code`, so a test can plant a role this build does
+/// Seals `inventory` with its first entry's role code replaced by `code`, so a test can plant a role this build does
 /// not know behind a valid MAC.
 #[cfg(test)]
 pub(crate) fn seal_with_role_code(identity: &VaultIdentity, inventory: &RecipientInventory, code: u8) -> Vec<u8> {
@@ -371,7 +401,7 @@ pub(crate) fn seal_with_role_code(identity: &VaultIdentity, inventory: &Recipien
         .unwrap()
 }
 
-/// The inventory a file holds. Size, header and MAC are checked before anything is decrypted.
+/// Opens the inventory a file holds. Size, header and MAC are checked before anything is decrypted.
 pub fn open_recipient_inventory(identity: &VaultIdentity, file: &[u8]) -> Result<RecipientInventory, RecipientInventoryError> {
     let (vault_id, payload) = KIND.open(identity, file)?;
     let inventory = encoding::decode(&payload)?;
@@ -381,7 +411,7 @@ pub fn open_recipient_inventory(identity: &VaultIdentity, file: &[u8]) -> Result
     }
 }
 
-/// Why the inventory could not be written.
+/// Says why the inventory could not be written.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RecipientInventoryWriteError {
     /// Sealing to the vault public key failed.
@@ -392,7 +422,7 @@ pub enum RecipientInventoryWriteError {
     Write(#[from] WriteError),
 }
 
-/// Why the inventory could not be read.
+/// Says why the inventory could not be read.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RecipientInventoryReadError {
     /// The file could not be read; `ReadError::Io` with `NotFound` means there is no inventory.

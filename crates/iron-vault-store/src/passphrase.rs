@@ -1,12 +1,22 @@
-//! Passphrase unlock: the operational identity and the passphrase envelope that holds it (specification §14, §15,
-//! §19).
+//! Passphrase unlock: the operational identity and the passphrase envelope that holds it
+//! ([spec §14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory),
+//! [§15](../../../design/iron-vault-specification.md#15-service-states-and-errors),
+//! [§19](../../../design/iron-vault-specification.md#19-v0-user-acceptance)).
 //!
 //! `age` refuses an scrypt stanza beside any other recipient, so a passphrase cannot be a recipient of the identity
 //! envelope. The service instead generates an operational identity, enrolls its recipient key in `identity.age` like
-//! any other, and keeps its secret text in `operational.age`, encrypted to the passphrase alone. Unlocking goes
-//! passphrase, then operational identity, then vault identity.
+//! any other, and keeps its secret text in `operational.age`, encrypted to the passphrase alone. Unlocking runs this
+//! chain:
 //!
-//! Attempt limits and lockout are not enforced here: the service owns them (`design/migration-authorization.md`).
+//! ```text
+//! vault passphrase ──scrypt──▶ operational.age ──▶ operational identity ──X25519──▶ identity.age ──▶ vault identity
+//!                              (one scrypt stanza)                                  (one stanza per recipient)
+//! ```
+//!
+//! Changing the passphrase reseals only `operational.age`; `identity.age` and its recipients stay as they are.
+//!
+//! The store does not enforce attempt limits or lockout: the service owns them
+//! ([passphrase attempt limit](../../../design/migration-authorization.md#passphrase-attempt-limit)).
 
 use std::{fmt, iter};
 
@@ -25,18 +35,18 @@ use crate::{
     vault_identity::{VaultIdentity, VaultPublicKey},
 };
 
-/// The scrypt work factor, as `log2(N)`, that new passphrase envelopes are sealed with.
+/// The scrypt work factor, as `log2(N)`, that seals new passphrase envelopes.
 ///
-/// N = 2^18 with `age`'s r = 8 needs 256 MiB of memory and takes roughly half a second to one second on a current
-/// desktop CPU, once per unlock. `age`'s own default measures the machine to aim for about one second; a fixed value
-/// keeps the envelope's cost the same on every host it is copied to.
+/// N = 2^18 with `age`'s r = 8 needs 256 MiB of memory and takes half a second to one second on a current desktop CPU,
+/// once per unlock. `age`'s own default measures the machine and aims for about one second. A fixed value keeps the
+/// envelope's cost the same on every host it is copied to.
 pub const PASSPHRASE_WORK_FACTOR: u8 = 18;
 
-/// The highest scrypt work factor, as `log2(N)`, the store will run when opening a passphrase envelope.
+/// The highest scrypt work factor, as `log2(N)`, the store runs when opening a passphrase envelope.
 ///
 /// N = 2^20 needs 1 GiB and about four times the unlock time of [`PASSPHRASE_WORK_FACTOR`]. It leaves room to raise the
-/// sealing factor later without stranding existing envelopes, while a planted file still cannot force an unbounded
-/// scrypt run: a higher factor is refused from the header, before any scrypt work.
+/// sealing factor later without stranding existing envelopes. A planted file still cannot force an unbounded scrypt
+/// run, because a higher factor is refused from the header, before any scrypt work.
 pub const MAX_PASSPHRASE_WORK_FACTOR: u8 = 20;
 
 /// The largest passphrase envelope, and the largest approver key envelope, the store reads.
@@ -53,13 +63,14 @@ const SECRET_TEXT_LEN: usize = 74;
 const _: () = assert!(0 < PASSPHRASE_WORK_FACTOR && PASSPHRASE_WORK_FACTOR <= MAX_PASSPHRASE_WORK_FACTOR);
 const _: () = assert!(MAX_PASSPHRASE_WORK_FACTOR < 64);
 
-/// The owner's passphrase for the passphrase envelope.
+/// The owner's vault passphrase, which opens the passphrase envelope.
 ///
-/// It has no `Display` or `Clone`, its `Debug` shows nothing of it, and its text is cleared when it is dropped. A
-/// minimum length or strength is not enforced here; vault initialization sets that rule.
+/// It has no `Display` or `Clone`, its `Debug` shows nothing of it, and its text is cleared when it is dropped. It
+/// enforces no minimum length or strength: vault initialization sets that rule
+/// ([passphrase rules](../../../design/vault-initialization.md#passphrase-rules)).
 pub struct Passphrase(SecretString);
 
-/// A passphrase that cannot be used.
+/// Says why a passphrase cannot be used.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PassphraseError {
     /// The passphrase is empty.
@@ -76,12 +87,12 @@ impl Passphrase {
         }
     }
 
-    /// A copy of the passphrase for `age`, which takes its passphrase by value; the copy is also cleared on drop.
+    /// Returns a copy of the passphrase for `age`, which takes its passphrase by value. The copy is cleared on drop too.
     fn for_age(&self) -> SecretString {
         SecretString::from(self.0.expose_secret())
     }
 
-    /// The passphrase text, borrowed for the rules initialization checks it against.
+    /// Borrows the passphrase text, for the rules initialization checks it against.
     pub(crate) fn text(&self) -> &str {
         self.0.expose_secret()
     }
@@ -93,14 +104,14 @@ impl fmt::Debug for Passphrase {
     }
 }
 
-/// The generator of operational identities: the X25519 recipients through which a passphrase reaches the vault.
+/// Generates operational identities: the X25519 recipients through which a passphrase reaches the vault.
 pub enum OperationalIdentity {}
 
 impl OperationalIdentity {
-    /// A fresh operational identity and its recipient key.
+    /// Returns a fresh operational identity and its recipient key.
     ///
-    /// The key is enrolled in the identity envelope's recipient set; the identity is sealed into the passphrase
-    /// envelope and then dropped.
+    /// The caller enrolls the key in the identity envelope's recipient set, seals the identity into the passphrase
+    /// envelope, and then drops it.
     pub fn generate() -> (RecipientIdentity, RecipientKey) {
         let identity = RecipientIdentity::generate();
         let key = identity.recipient_key();
@@ -110,8 +121,8 @@ impl OperationalIdentity {
 
 /// Encrypts the operational identity's secret text to `passphrase` alone, at [`PASSPHRASE_WORK_FACTOR`].
 ///
-/// The output is a binary `age` file with exactly one scrypt stanza and no other: `age` adds its grease stanza only to
-/// files without one.
+/// The output is a binary `age` file with exactly one scrypt stanza and no other, because `age` adds its grease stanza
+/// only to files without one.
 pub fn seal_passphrase_envelope(identity: &RecipientIdentity, passphrase: &Passphrase) -> Result<Vec<u8>, EnvelopeError> {
     seal_at(identity, passphrase, PASSPHRASE_WORK_FACTOR)
 }
@@ -120,14 +131,14 @@ pub fn seal_passphrase_envelope(identity: &RecipientIdentity, passphrase: &Passp
 ///
 /// Every check that needs no passphrase runs first: the size bound, then that the header holds exactly one scrypt
 /// stanza, then that its work factor is at most [`MAX_PASSPHRASE_WORK_FACTOR`]. Only then does scrypt run. A wrong
-/// passphrase is [`EnvelopeError::WrongPassphrase`] and nothing more.
+/// passphrase gives [`EnvelopeError::WrongPassphrase`] and nothing more.
 pub fn open_passphrase_envelope(envelope: &[u8], passphrase: &Passphrase) -> Result<RecipientIdentity, EnvelopeError> {
     let secret = open_scrypt_file(envelope, passphrase.for_age(), SECRET_TEXT_LEN)?;
     RecipientIdentity::from_secret_text(&secret).ok_or(EnvelopeError::Malformed)
 }
 
-/// [`seal_passphrase_envelope`] at work factor 2, so other crates' tests do not spend 256 MiB and a second on each seal
-/// and each unlock.
+/// Does what [`seal_passphrase_envelope`] does at work factor 2, so other crates' tests do not spend 256 MiB and a
+/// second on each seal and each unlock.
 #[cfg(any(test, feature = "test-support"))]
 pub fn seal_passphrase_envelope_for_tests(identity: &RecipientIdentity, passphrase: &Passphrase) -> Result<Vec<u8>, EnvelopeError> {
     seal_at(identity, passphrase, 2)
@@ -135,7 +146,7 @@ pub fn seal_passphrase_envelope_for_tests(identity: &RecipientIdentity, passphra
 
 /// Opens `envelope` with `old` and seals the same operational identity to `new`.
 ///
-/// Changing the passphrase rewrites only `operational.age`: the operational identity, and so `identity.age`, stay as
+/// Changing the passphrase rewrites only `operational.age`. The operational identity, and so `identity.age`, stay as
 /// they are.
 pub fn reseal_passphrase_envelope(envelope: &[u8], old: &Passphrase, new: &Passphrase) -> Result<Vec<u8>, EnvelopeError> {
     reseal_at(envelope, old, new, PASSPHRASE_WORK_FACTOR)
@@ -151,7 +162,7 @@ pub fn read_passphrase_envelope(lock: &StateDirLock, fs: &impl StoreFs) -> Resul
     read_state_file(lock, fs, &StateFileName::passphrase_envelope(), MAX_PASSPHRASE_ENVELOPE_LEN as u64)
 }
 
-/// Unlocking the vault with the passphrase failed. No variant carries key material or passphrase text.
+/// Says why unlocking the vault with the passphrase failed. No variant carries key material or passphrase text.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum UnlockError {
     /// The passphrase does not open `operational.age`.
@@ -174,19 +185,19 @@ pub enum UnlockError {
         "the vault import is unfinished, or is running now; run `iron-vault import` again if it is not, or `iron-vault init` for a new one"
     )]
     ImportUnfinished,
-    /// `reset.unfinished` is present: a reset was interrupted, and only the next reset finishes it.
+    /// `reset.unfinished` is present: a reset was interrupted, and only the next `reset` finishes it.
     #[error("a reset was interrupted; run `iron-vault reset` again")]
     ResetUnfinished,
     /// There is no vault in the state directory.
     #[error("there is no vault here; run `iron-vault init`")]
     NotInitialized,
-    /// The state and config directories hold files initialization did not write, so there is no vault to unlock.
+    /// The state and config directories hold files `init` did not write, so there is no vault to unlock.
     #[error("the vault directories hold files that initialization did not write, first {files:?}; move them aside")]
     Unrecognized {
         /// The first offending names, sorted state-directory names first.
         files: Vec<String>,
     },
-    /// The initialization state could not be read, so it is unknown whether there is a vault.
+    /// The initialization state could not be read, so it is not known if there is a vault.
     #[error("the initialization state cannot be read: {0}")]
     InitializationState(crate::InitStateError),
     /// Listing the state directory failed, so the initialization state is unknown.
@@ -202,8 +213,8 @@ pub enum UnlockError {
 ///
 /// As with [`unwrap_identity`], the returned identity is trusted only once the vault manifest's MAC verifies.
 ///
-/// It refuses first, before any envelope is read or scrypt runs, while `reset.unfinished` or `init.unfinished` exists,
-/// or when the directory holds neither `operational.age` nor a manifest.
+/// It refuses first, before any envelope is read or scrypt runs, while `reset.unfinished`, `init.unfinished` or
+/// `import.unfinished` exists, or when the directory holds neither `operational.age` nor `manifest.age`.
 pub fn unlock_with_passphrase(lock: &StateDirLock, fs: &impl StoreFs, passphrase: &Passphrase) -> Result<VaultIdentity, UnlockError> {
     crate::initialization::ensure_unlockable(lock, fs)?;
     let operational = open_passphrase_envelope(&read_passphrase_envelope(lock, fs)?, passphrase).map_err(|error| match error {
@@ -213,7 +224,8 @@ pub fn unlock_with_passphrase(lock: &StateDirLock, fs: &impl StoreFs, passphrase
     unwrap_identity(&read_identity_envelope(lock, fs)?, &operational).map_err(UnlockError::IdentityEnvelope)
 }
 
-/// Why the passphrase could not be checked against the envelopes on disk. No variant carries key material or passphrase text.
+/// Says why the passphrase could not be checked against the envelopes on disk. No variant carries key material or
+/// passphrase text.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PassphraseCheckError {
     /// The passphrase does not open `operational.age`.
@@ -227,7 +239,7 @@ pub enum PassphraseCheckError {
     Unavailable(CheckUnavailable),
 }
 
-/// The part of the vault on disk that stopped a passphrase check.
+/// Names the part of the vault on disk that stopped a passphrase check.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CheckUnavailable {
     /// `operational.age` or `identity.age` could not be read, or is longer than its bound.
@@ -243,11 +255,12 @@ pub enum CheckUnavailable {
 
 /// Proves that `passphrase` opens the envelopes on disk to the vault identity whose public key is `held`.
 ///
-/// Both envelopes are read fresh, so the answer is about the files and not about anything the service holds in memory.
-/// The unwrapped identity is dropped (and so cleared) before returning; only the yes or no leaves. Unlike
-/// [`unlock_with_passphrase`] it does not consult the initialization state: the caller already holds a vault.
+/// Both envelopes are read fresh, so the answer is about the files, not about anything the service holds in memory.
+/// The unwrapped identity is dropped, and so cleared, before returning; only the yes or no leaves. Unlike
+/// [`unlock_with_passphrase`], it does not consult the initialization state: the caller already holds a vault.
 ///
-/// A match of public keys is the whole proof here. The caller's `held` key comes from a manifest that already verified.
+/// A match of public keys is the whole proof here, because the caller's `held` key comes from a manifest that already
+/// verified.
 pub fn verify_vault_passphrase(
     lock: &StateDirLock,
     fs: &impl StoreFs,
@@ -272,18 +285,18 @@ pub fn verify_vault_passphrase(
     }
 }
 
-/// [`reseal_passphrase_envelope`] sealing at work factor `log_n`, which must be in `1..64`.
+/// Does what [`reseal_passphrase_envelope`] does, sealing at work factor `log_n`, which must be in `1..64`.
 fn reseal_at(envelope: &[u8], old: &Passphrase, new: &Passphrase, log_n: u8) -> Result<Vec<u8>, EnvelopeError> {
     seal_at(&open_passphrase_envelope(envelope, old)?, new, log_n)
 }
 
-/// [`seal_passphrase_envelope`] at work factor `log_n`, which must be in `1..64`.
+/// Does what [`seal_passphrase_envelope`] does at work factor `log_n`, which must be in `1..64`.
 pub(crate) fn seal_at(identity: &RecipientIdentity, passphrase: &Passphrase, log_n: u8) -> Result<Vec<u8>, EnvelopeError> {
     seal_scrypt_file(identity.secret_text().expose_secret().as_bytes(), passphrase.for_age(), log_n)
 }
 
 /// Encrypts `secret` as an `age` file with one scrypt stanza for `passphrase` at work factor `log_n`, which must be in
-/// `1..64`; the shared sealing path of every passphrase-protected state file.
+/// `1..64`. Every passphrase-protected state file is sealed through it.
 pub(crate) fn seal_scrypt_file(secret: &[u8], passphrase: SecretString, log_n: u8) -> Result<Vec<u8>, EnvelopeError> {
     let mut recipient = scrypt::Recipient::new(passphrase);
     recipient.set_work_factor(log_n);
@@ -296,7 +309,7 @@ pub(crate) fn seal_scrypt_file(secret: &[u8], passphrase: SecretString, log_n: u
 }
 
 /// Decrypts an `age` file with exactly one scrypt stanza, returning at most `max_plaintext` bytes in a buffer cleared
-/// on drop; the shared opening path of every passphrase-protected state file.
+/// on drop. Every passphrase-protected state file is opened through it.
 ///
 /// Every check that needs no passphrase runs first: the size bound, then that the header holds exactly one scrypt
 /// stanza, then that its work factor is at most [`MAX_PASSPHRASE_WORK_FACTOR`]. Only then does scrypt run.
@@ -365,14 +378,14 @@ mod tests {
         Passphrase::new(SecretString::from(text)).unwrap()
     }
 
-    /// A passphrase envelope sealed at the test work factor, with the identity inside it.
+    /// Returns a passphrase envelope sealed at the test work factor, with the identity inside it.
     fn sealed(text: &str) -> (RecipientIdentity, Vec<u8>) {
         let (identity, _) = OperationalIdentity::generate();
         let envelope = seal_at(&identity, &passphrase(text), TEST_WORK_FACTOR).unwrap();
         (identity, envelope)
     }
 
-    /// `envelope` with its scrypt stanza's work factor argument replaced by `log_n`.
+    /// Returns `envelope` with its scrypt stanza's work factor argument replaced by `log_n`.
     fn with_work_factor(envelope: &[u8], log_n: &str) -> Vec<u8> {
         let line_end = 22 + envelope[22..].iter().position(|&b| b == b'\n').unwrap();
         let suffix = format!(" {TEST_WORK_FACTOR}");
@@ -380,8 +393,8 @@ mod tests {
         [&envelope[..line_end - suffix.len()], b" ", log_n.as_bytes(), &envelope[line_end..]].concat()
     }
 
-    /// A vault identity wrapped for a fresh operational identity and a second key, with the passphrase envelope, both
-    /// written to a new state directory.
+    /// Writes a vault identity, wrapped for a fresh operational identity and a second key, and the passphrase envelope
+    /// to a new state directory.
     fn vault_on_disk(dir: &TestDir, text: &str) -> (StateDirLock, VaultIdentity) {
         let lock = StateDirLock::acquire(dir.path()).unwrap();
         let vault = VaultIdentity::generate();
@@ -647,8 +660,8 @@ mod tests {
         ));
     }
 
-    /// The on-disk `operational.age` raised to the largest work factor `open_passphrase_envelope` accepts, so any scrypt run
-    /// on it takes far longer than the timing assertions allow.
+    /// Returns the on-disk `operational.age` raised to the largest work factor `open_passphrase_envelope` accepts, so
+    /// any scrypt run on it takes far longer than the timing assertions allow.
     fn slow_passphrase_envelope(lock: &StateDirLock) -> Vec<u8> {
         with_work_factor(
             &read_passphrase_envelope(lock, &OsFs).unwrap(),

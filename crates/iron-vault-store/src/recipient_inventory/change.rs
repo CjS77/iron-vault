@@ -1,7 +1,8 @@
-//! The recipient change rule: which inventory a change to the recipient set leads to, or why it is refused (spec §14,
-//! `design/recipients.md`).
+//! The recipient change rule: which inventory a change to the recipient set leads to, or why it is refused
+//! ([spec §14](../../../../design/iron-vault-specification.md#14-recipients-startup-and-memory),
+//! [the recipient change](../../../../design/recipients.md#the-recipient-change)).
 //!
-//! The rule is pure, so `recipient add` and `recipient remove` can apply it before any prompt and the rewrap applies it
+//! The rule is pure, so `recipient add` and `recipient remove` can apply it before any prompt, and the rewrap applies it
 //! again before it writes. It is checked on the inventory the change would write, never on the change itself.
 
 #[cfg(test)]
@@ -23,7 +24,8 @@ pub enum RecipientChange {
     Remove(RecipientKey),
 }
 
-/// Why a recipient change is refused. Nothing has been written when it is; each variant names the rule it breaks.
+/// Says why a recipient change is refused. Nothing has been written when it is, and each variant names the rule it
+/// breaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum RecipientChangeRefusal {
     /// The key to add is already enrolled.
@@ -36,8 +38,8 @@ pub enum RecipientChangeRefusal {
     /// second one could take the first one's place.
     #[error("only init enrolls an operational recipient")]
     AddsOperational,
-    /// The key to remove is the `operational` recipient's, which passphrase unlock and migration authorization go through.
-    /// It is never removed, and no other recipient takes its place.
+    /// The key to remove is the `operational` recipient's, which passphrase unlock and migration authorization go
+    /// through. It is never removed, and no other recipient takes its place.
     #[error("the operational recipient is never removed: passphrase unlock goes through it")]
     RemovesOperational,
     /// The change would leave no `operational` recipient: the inventory it starts from has none.
@@ -59,16 +61,18 @@ pub enum RecipientChangeRefusal {
 }
 
 impl RecipientChange {
-    /// The inventory after this change, if the independence rule allows it.
+    /// Returns the inventory after this change, if the independence rule allows it.
     ///
-    /// The result still carries `current`'s envelope digest: the envelope it describes does not exist until the rewrap
-    /// wraps the vault identity for it, which then gives it that envelope's digest.
+    /// The result still carries `current`'s envelope digest, because the envelope it describes does not exist until the
+    /// rewrap wraps the vault identity for it. The rewrap then gives it that envelope's digest.
     pub fn apply(&self, current: &RecipientInventory) -> Result<RecipientInventory, RecipientChangeRefusal> {
         self.apply_configured(current, None)
     }
 
-    /// [`Self::apply`] with `host_unlock`, the recipient key of the configured host unlock adapter, when there is one.
-    /// Part 1 of the independence rule keeps that recipient while `current` enrols it with the `host-unlock` role; a key
+    /// Does what [`Self::apply`] does, given `host_unlock`, the recipient key of the configured host unlock adapter, if
+    /// there is one.
+    ///
+    /// Part 1 of the independence rule keeps that recipient while `current` enrols it with the `host-unlock` role. A key
     /// enrolled with another role is not the adapter's recipient, so it is not kept.
     pub fn apply_configured(
         &self,
@@ -107,19 +111,26 @@ impl RecipientChange {
 }
 
 impl RecipientInventory {
-    /// Whether this inventory, as it is, meets parts 2 to 4 of the independence rule. Part 1 needs the configured host
-    /// unlock identity, which only a change that removes it can break. `forget-machine` asks this of the inventory a past
-    /// removal wrote, to find one restored from an old copy or edited around the service.
+    /// Checks that this inventory, as it is, meets parts 2 to 4 of the independence rule, and returns the refusal of the
+    /// first part it breaks.
+    ///
+    /// Part 1 needs the configured host unlock identity, which only a change that removes it can break.
+    /// `forget-machine` asks this of the inventory a past removal wrote, to find one restored from an old copy or edited
+    /// around the service.
     pub fn independence(&self) -> Result<(), RecipientChangeRefusal> {
         independence_rule(&self.entries)
     }
 }
 
-/// The independence rule, part by part in the order `design/recipients.md` numbers them; the first part that fails is
-/// the refusal. Part 1, the configured unlock method's recipient, is checked by `configured_unlock_rule`, because only
-/// the caller knows which host unlock identity is configured; its floor of one unlock-class recipient follows from part
-/// 2 in v0. Part 2 keeps `operational` because the vault passphrase is the only source-owner method in v0. Parts 2 and
-/// 3 already imply part 4's floor in v0; it stays so the rule still means two ways in once later roles join.
+/// Checks the [independence rule](../../../../design/recipients.md#independence-rule) part by part, in the order the
+/// design numbers them. The first part that fails is the refusal.
+///
+/// - Part 1, the configured unlock method's recipient, is checked by `configured_unlock_rule`, because only the caller
+///   knows which host unlock identity is configured. Its floor of one unlock-class recipient follows from part 2 in v0.
+/// - Part 2 keeps `operational`, because the vault passphrase is the only source-owner method in v0.
+/// - Part 3 keeps a `recovery` recipient.
+/// - Part 4 is the count. Parts 2 and 3 already imply its floor in v0; it stays so the rule still means two ways in
+///   once later roles join.
 fn independence_rule(entries: &BTreeMap<RecipientKey, RecipientEntry>) -> Result<(), RecipientChangeRefusal> {
     let has = |role| entries.values().any(|entry| entry.role == role);
     match entries.len() {
@@ -129,7 +140,7 @@ fn independence_rule(entries: &BTreeMap<RecipientKey, RecipientEntry>) -> Result
     }
 }
 
-/// Part 1 for the host unlock adapter: the set still holds the `host-unlock` recipient it is configured for.
+/// Checks part 1 for the host unlock adapter: the set still holds the `host-unlock` recipient it is configured for.
 fn configured_unlock_rule(
     entries: &BTreeMap<RecipientKey, RecipientEntry>,
     host_unlock: Option<&RecipientKey>,
@@ -140,7 +151,7 @@ fn configured_unlock_rule(
     }
 }
 
-/// Part 4: from 2 to [`MAX_RECIPIENTS`] recipients.
+/// Checks part 4: from 2 to [`MAX_RECIPIENTS`] recipients.
 fn count_rule(count: usize) -> Result<(), RecipientChangeRefusal> {
     match count {
         0..2 => Err(RecipientChangeRefusal::TooFew),

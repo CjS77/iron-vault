@@ -35,7 +35,7 @@ fn entry(key: RecipientKey, role: RecipientRole, label: &str, at: u64) -> Recipi
     )
 }
 
-/// The documented example's entries, one per role.
+/// Returns the documented example's entries, one per role.
 fn example_entries() -> Vec<RecipientEntry> {
     [
         (RecipientRole::Operational, "vault passphrase", 1_793_959_965),
@@ -131,7 +131,7 @@ fn encoding_is_independent_of_insertion_order() {
     assert_eq!(forward.recipient_set().iter().cloned().collect::<Vec<_>>(), keys);
 }
 
-/// The example in `design/storage-formats.md`, byte for byte.
+/// Checks the [example](../../../../design/storage-formats.md#recipient-inventory-payload-v1) byte for byte.
 #[test]
 fn documented_example_encodes() {
     let expected = "49565250013f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6babababababababababababababababababababababababababababababababab0000000000000003000000000000003e616765317137336865307135797a6675336436346d736433703672766b736e72776a6b3364323539386d67746d6c717439777264723337713276726e37320100000000000000107661756c742070617373706872617365000000006aeda81d000000000000003e61676531747035366c617a73326a746e396a6132613430396d37646e70666b36783839737534367a68743236366a7336773638333565617363757471647802000000000000000c7265636f76657279206b6579000000006aeda81d000000000000003e61676531766a63737276777368656467777039617137386533396771726c71726172356c6a353330727a78617a32786573336b3573336e71786463363936030000000000000011616c696365206c6170746f702032303236000000006aee4480";

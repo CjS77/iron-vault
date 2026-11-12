@@ -1,4 +1,5 @@
-//! The recipient inventory payload v1 encoding: the plaintext an inventory file seals (`design/storage-formats.md`).
+//! The recipient inventory payload v1 encoding: the plaintext an inventory file seals
+//! ([payload format](../../../../design/storage-formats.md#recipient-inventory-payload-v1)).
 
 use super::{MAX_RECIPIENTS, RecipientEntry, RecipientInventory, RecipientInventoryError, RecipientLabel, RecipientRole};
 use crate::vault_id::VaultId;
@@ -12,7 +13,7 @@ const VERSION: u8 = 1;
 /// The length of a canonical `age1…` X25519 recipient key.
 const KEY_TEXT_LEN: usize = 62;
 
-/// The inventory's v1 payload. Entries are written in ascending key order, so an inventory has one encoding.
+/// Encodes the inventory's v1 payload. Entries are written in ascending key order, so an inventory has one encoding.
 pub(super) fn encode(inventory: &RecipientInventory) -> Vec<u8> {
     let mut out = [&MAGIC[..], &[VERSION], inventory.vault_id.as_bytes(), &inventory.envelope_digest].concat();
     put_len(&mut out, inventory.entries.len());
@@ -25,7 +26,7 @@ pub(super) fn encode(inventory: &RecipientInventory) -> Vec<u8> {
     out
 }
 
-/// The inventory a v1 payload holds, accepted only if it is that inventory's one encoding.
+/// Decodes the inventory a v1 payload holds, accepting it only if it is that inventory's one encoding.
 pub(super) fn decode(payload: &[u8]) -> Result<RecipientInventory, RecipientInventoryError> {
     let mut reader = Reader::new(payload);
     if reader.take(MAGIC.len())? != MAGIC {
@@ -37,8 +38,8 @@ pub(super) fn decode(payload: &[u8]) -> Result<RecipientInventory, RecipientInve
     }
 }
 
-/// The payload of `inventory` with its first entry's role code replaced by `code`, as a build that knows more roles
-/// could write it.
+/// Encodes `inventory` with its first entry's role code replaced by `code`, as a build that knows more roles could
+/// write it.
 #[cfg(test)]
 pub(super) fn encode_with_role_code(inventory: &RecipientInventory, code: u8) -> Vec<u8> {
     let first_role = MAGIC.len() + 1 + 16 + 32 + 8 + 8 + KEY_TEXT_LEN;
@@ -92,7 +93,7 @@ fn read_entry(reader: &mut Reader<'_>) -> Result<RecipientEntry, RecipientInvent
     Ok(RecipientEntry::new(key, role, RecipientLabel::new(label)?, enrolled_at))
 }
 
-/// The key whose canonical text is `text`. Bech32 also accepts an all-uppercase spelling; refusing it keeps one
+/// Parses the key whose canonical text is `text`. Bech32 also accepts an all-uppercase spelling; refusing it keeps one
 /// encoding per inventory.
 fn read_key(text: &[u8]) -> Result<RecipientKey, RecipientInventoryError> {
     let key: RecipientKey = std::str::from_utf8(text)

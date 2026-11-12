@@ -10,7 +10,7 @@ fn inventory(roles: &[RecipientRole]) -> RecipientInventory {
     RecipientInventory::new(VaultId::new_random(), [7; 32], roles.iter().map(|&role| entry(role))).unwrap()
 }
 
-/// The vault `init` leaves: one `operational` and one `recovery` recipient.
+/// Returns the inventory `init` leaves: one `operational` and one `recovery` recipient.
 fn initial() -> RecipientInventory {
     inventory(&[RecipientRole::Operational, RecipientRole::Recovery])
 }
@@ -128,7 +128,8 @@ fn adding_past_the_maximum_is_refused() {
     );
 }
 
-/// A Compose vault after re-enrolment: the old and the new host unlock identity are both `host-unlock` recipients.
+/// Returns a Compose vault's inventory after re-enrolment: the old and the new host unlock identity are both
+/// `host-unlock` recipients.
 fn two_host_unlocks() -> (RecipientInventory, RecipientKey, RecipientKey) {
     let current = inventory(&[
         RecipientRole::Operational,
