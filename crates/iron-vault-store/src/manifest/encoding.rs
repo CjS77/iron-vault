@@ -1,4 +1,5 @@
-//! The manifest payload v1 encoding: the plaintext a manifest file seals (`design/storage-formats.md`).
+//! The manifest payload v1 encoding: the plaintext a manifest file seals
+//! ([payload format](../../../../design/storage-formats.md#manifest-payload-v1)).
 
 use std::collections::BTreeMap;
 
@@ -15,7 +16,7 @@ const MAGIC: [u8; 4] = *b"IVMP";
 /// The payload version this code writes and the only one it reads.
 const VERSION: u8 = 1;
 
-/// The manifest's v1 payload. Entries are written in ascending record ID order, so a manifest has one encoding.
+/// Encodes the manifest's v1 payload. Entries are written in ascending record ID order, so a manifest has one encoding.
 pub(super) fn encode(manifest: &VaultManifest) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&MAGIC);
@@ -34,7 +35,7 @@ pub(super) fn encode(manifest: &VaultManifest) -> Vec<u8> {
     out
 }
 
-/// The manifest a v1 payload holds, accepted only if it is that manifest's one encoding.
+/// Decodes the manifest a v1 payload holds, accepting it only if it is that manifest's one encoding.
 pub(super) fn decode(payload: &[u8]) -> Result<VaultManifest, ManifestError> {
     let mut reader = Reader::new(payload);
     if reader.take(MAGIC.len())? != MAGIC {
@@ -108,7 +109,7 @@ mod tests {
     const RECORD: &str = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
     const LATER_RECORD: &str = "9d4f0b52-0c6e-4b1a-8f3d-2a7e5c9b1d04";
 
-    /// The 16 bytes of a UUID; vault and record IDs share the form.
+    /// Returns the 16 bytes of a UUID; vault and record IDs share the form.
     fn uuid_bytes(text: &str) -> [u8; 16] {
         *text.parse::<RecordId>().unwrap().as_bytes()
     }
@@ -121,7 +122,7 @@ mod tests {
     struct Payload(Vec<u8>);
 
     impl Payload {
-        /// A header at state generation 3 with peer generation 2, as in the documented example.
+        /// Builds a header at state generation 3 with peer generation 2, as in the documented example.
         fn header(count: u64) -> Self {
             Self::header_at(3, 2, count)
         }
@@ -185,7 +186,7 @@ mod tests {
         assert_eq!(encode(&forward), expected.0);
     }
 
-    /// The example in `design/storage-formats.md`, byte for byte.
+    /// Checks the [example](../../../../design/storage-formats.md#manifest-payload-v1) byte for byte.
     #[test]
     fn documented_example_decodes() {
         let hex = "49564d50 01 3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b 0000000000000003 0000000000000002 0000000000000001 \

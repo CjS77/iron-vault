@@ -28,7 +28,7 @@ struct Paused;
 
 impl AdmissionPaused for Paused {}
 
-/// Locked state and config directories. The locks are real; the files live wherever the `fs` passed puts them.
+/// Locked state and config directories. The locks are real; the files live wherever the `fs` passed in puts them.
 struct Dirs {
     state_dir: TestDir,
     config_dir: TestDir,
@@ -68,9 +68,9 @@ impl Dirs {
             .vault_id
     }
 
-    /// An initialized vault with everything a used one holds beyond `init`'s files: a record, a second approver key
-    /// envelope, a TPM key blob, a staged inventory, a recovery check record, the owner-lock file, a pending config and a
-    /// staged signature.
+    /// Initializes a vault with everything a used one holds beyond `init`'s files: a record, a second approver key
+    /// envelope, a TPM key blob, a staged inventory, a recovery check record, the owner-lock file, a pending config and
+    /// a staged signature. Returns its ID.
     fn full_vault(&self, fs: &impl StoreFs) -> VaultId {
         let vault_id = self.init(fs);
         let passphrase = Passphrase::new(SecretString::from(VAULT_PASSPHRASE)).unwrap();
@@ -107,7 +107,7 @@ impl Dirs {
         reset_scope(&self.state, &self.config, fs).unwrap()
     }
 
-    /// Every file in both directories with its contents, sorted, read through `fs`.
+    /// Returns every file in both directories with its contents, sorted, read through `fs`.
     fn snapshot(&self, fs: &FaultFs) -> Vec<(String, Option<Vec<u8>>)> {
         [self.state_dir.path(), self.config_dir.path()]
             .into_iter()
@@ -183,7 +183,7 @@ fn the_scope_describes_the_vault_without_its_identity() {
 }
 
 /// Reset tells an unfinished import from an unfinished initialization in the scope, and removes the import's marker, its
-/// record files and its `config.toml` whatever its bytes.
+/// record files and its `config.toml`, whatever its bytes.
 #[test]
 fn an_unfinished_import_is_scoped_by_its_kind_and_discarded_whole() {
     let dirs = Dirs::new("reset-import");
@@ -309,8 +309,8 @@ fn fail_and_resume(call: usize) {
     assert_eq!(dirs.read(&fs), InitializationState::Uninitialized, "call {call}");
 }
 
-/// The directories hold the intact vault, read Unfinished reset, or are empty (a failed final fsync leaves the marker
-/// gone until the power is cut); never a vault with files missing.
+/// Checks the directories hold the intact vault, read Unfinished reset, or are empty (a failed final fsync leaves the
+/// marker gone until the power is cut), and never a vault with files missing.
 fn assert_safe(dirs: &Dirs, fs: &FaultFs, intact: &[(String, Option<Vec<u8>>)], context: &str) {
     match dirs.read(fs) {
         InitializationState::Initialized => assert_eq!(dirs.snapshot(fs), intact, "{context}"),

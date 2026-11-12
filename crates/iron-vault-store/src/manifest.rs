@@ -1,10 +1,24 @@
-//! The vault manifest: the service's own index of which credential records exist (spec §6, §13).
+//! The vault manifest: the service's own index of which credential records exist
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [§13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 //!
 //! `age` does not authenticate the sender, so anyone holding the vault public key can plant a well-formed record file.
 //! The manifest names every record the service wrote and the digest of its file, so a planted, swapped or deleted record
-//! is detected. The manifest is sealed to the same public key and therefore carries a MAC keyed from the vault identity:
-//! only the service, holding the private identity, can write one that opens. The file layout and the MAC construction
-//! are in `design/storage-formats.md`.
+//! is detected. The manifest is sealed to the same public key, so it carries a MAC keyed from the vault identity: only
+//! the service, holding the private identity, can write one that opens:
+//!
+//! ```text
+//! manifest.age  (MAC'd with the manifest key)        state directory
+//! ┌───────────────────────────────────────────────┐
+//! │ vault ID, state generation, peer generation   │
+//! │ record ID 1 ─▶ credential name, file digest ──┼──▶ record-<record ID 1>.age   BLAKE2b-256 of its bytes
+//! │ record ID 2 ─▶ credential name, file digest ──┼──▶ record-<record ID 2>.age   must equal the digest
+//! └───────────────────────────────────────────────┘
+//! ```
+//!
+//! The storage formats give the [file layout](../../../design/storage-formats.md#manifest-file-v1),
+//! the [payload](../../../design/storage-formats.md#manifest-payload-v1) and
+//! the [MAC construction](../../../design/storage-formats.md#macd-file-frame).
 
 mod encoding;
 
@@ -24,9 +38,9 @@ use crate::vault_identity::VaultIdentity;
 /// The largest manifest file accepted, in bytes on disk, checked before any other work.
 ///
 /// A full manifest holds [`MAX_MANIFEST_ENTRIES`] entries of at most 120 bytes each (16-byte record ID, 8-byte name
-/// length, 64-byte name, 32-byte digest), so its payload is under 492,000 bytes. `age` adds a few hundred header bytes
-/// plus one 16-byte payload nonce and a 16-byte tag per 64 KiB chunk, and the file adds 53 bytes of header and MAC: a
-/// full manifest is under half this limit.
+/// length, 64-byte name, 32-byte digest), so its payload is under 492,000 bytes. `age` adds a few hundred header bytes,
+/// a 16-byte payload nonce and a 16-byte tag per 64 KiB chunk, and the file adds 53 bytes of header and MAC. A full
+/// manifest is under half this limit.
 pub const MAX_MANIFEST_LEN: usize = 1 << 20;
 
 /// The most entries one manifest may hold, so every manifest the service can build also fits [`MAX_MANIFEST_LEN`].
@@ -58,17 +72,17 @@ pub struct ManifestEntry {
 }
 
 impl ManifestEntry {
-    /// An entry for the record file whose ciphertext has digest `file_digest` (see [`record_digest`]).
+    /// Creates an entry for the record file whose ciphertext has digest `file_digest` (see [`record_digest`]).
     pub fn new(name: CredentialName, file_digest: [u8; 32]) -> Self {
         Self { name, file_digest }
     }
 
-    /// The credential name the record holds.
+    /// Returns the credential name the record holds.
     pub fn name(&self) -> &CredentialName {
         &self.name
     }
 
-    /// The BLAKE2b-256 digest of the record file's ciphertext bytes.
+    /// Returns the BLAKE2b-256 digest of the record file's ciphertext bytes.
     pub fn file_digest(&self) -> &[u8; 32] {
         &self.file_digest
     }
@@ -76,9 +90,10 @@ impl ManifestEntry {
 
 /// The set of records a vault holds, at one state generation.
 ///
-/// Names are unique across entries and there are at most [`MAX_MANIFEST_ENTRIES`], whether the manifest was built or
-/// decoded. It also records the approval state's state generation when it was written, so a restore of either file
-/// alone leaves a pair that disagrees.
+/// Names are unique across entries, and there are at most [`MAX_MANIFEST_ENTRIES`], whether the manifest was built or
+/// decoded. It also records the approval state's
+/// [state generation](../../../design/storage-formats.md#state-generation) when it was written, so a restore of
+/// either file alone leaves a pair that disagrees.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultManifest {
     vault_id: VaultId,
@@ -87,7 +102,7 @@ pub struct VaultManifest {
     entries: BTreeMap<RecordId, ManifestEntry>,
 }
 
-/// A manifest cannot be built or opened. No variant carries key material or MAC bytes.
+/// Says why a manifest cannot be built or opened. No variant carries key material or MAC bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ManifestError {
     /// The file is larger than [`MAX_MANIFEST_LEN`]; nothing else was read.
@@ -160,9 +175,9 @@ pub enum ManifestError {
 }
 
 impl VaultManifest {
-    /// A manifest of `entries` written at `state_generation` while the approval state was at `peer_generation` (`None`
-    /// before it existed), refusing a peer generation not below the state generation, a repeated name or more than
-    /// [`MAX_MANIFEST_ENTRIES`].
+    /// Creates a manifest of `entries` written at `state_generation` while the approval state was at `peer_generation`
+    /// (`None` before it existed). It refuses a peer generation not below the state generation, a repeated name, and
+    /// more than [`MAX_MANIFEST_ENTRIES`] entries.
     pub fn new(
         vault_id: VaultId,
         state_generation: StateGeneration,
@@ -191,14 +206,14 @@ impl VaultManifest {
         })
     }
 
-    /// The first manifest of a new vault: no entries, at the first state generation, before any approval state.
+    /// Creates the first manifest of a new vault: no entries, at the first state generation, before any approval state.
     pub fn first(vault_id: VaultId) -> Result<Self, ManifestError> {
         let state_generation = StateGeneration::next(None, None).ok_or(ManifestError::StateGenerationExhausted)?;
         Self::new(vault_id, state_generation, None, BTreeMap::new())
     }
 
-    /// The manifest to write after this one: the same vault, `entries`, and the next state generation given the approval
-    /// state's current one, `approval_generation` (`None` while there is none).
+    /// Creates the manifest to write after this one: the same vault, `entries`, and the next state generation given the
+    /// approval state's current one, `approval_generation` (`None` while there is none).
     pub fn next(
         &self,
         approval_generation: Option<StateGeneration>,
@@ -209,43 +224,44 @@ impl VaultManifest {
         Self::new(self.vault_id, state_generation, approval_generation, entries)
     }
 
-    /// The vault this manifest indexes.
+    /// Returns the ID of the vault this manifest indexes.
     pub fn vault_id(&self) -> VaultId {
         self.vault_id
     }
 
-    /// The state generation this manifest was written at.
+    /// Returns the state generation this manifest was written at.
     pub fn state_generation(&self) -> StateGeneration {
         self.state_generation
     }
 
-    /// The approval state's state generation when this manifest was written; `None` if there was no approval state.
+    /// Returns the approval state's state generation when this manifest was written, or `None` if there was no approval
+    /// state.
     pub fn peer_generation(&self) -> Option<StateGeneration> {
         self.peer_generation
     }
 
-    /// The state generation and the peer generation, as the partial restore check takes them.
+    /// Returns the state generation and the peer generation, as the partial restore check takes them.
     pub(crate) fn generations(&self) -> (StateGeneration, Option<StateGeneration>) {
         (self.state_generation, self.peer_generation)
     }
 
-    /// Every record the vault holds, by record ID.
+    /// Returns every record the vault holds, by record ID.
     pub fn entries(&self) -> &BTreeMap<RecordId, ManifestEntry> {
         &self.entries
     }
 }
 
-/// The BLAKE2b-256 digest of a record file's ciphertext bytes, as a [`ManifestEntry`] stores it.
+/// Returns the BLAKE2b-256 digest of a record file's ciphertext bytes, as a [`ManifestEntry`] stores it.
 pub fn record_digest(ciphertext: &[u8]) -> [u8; 32] {
     Blake2b256::digest(ciphertext).into()
 }
 
-/// The manifest file's bytes: header, the payload sealed to the vault public key, then the MAC.
+/// Returns the manifest file's bytes: header, the payload sealed to the vault public key, then the MAC.
 pub fn seal_manifest(identity: &VaultIdentity, manifest: &VaultManifest) -> Result<Vec<u8>, SealError> {
     KIND.seal(identity, manifest.vault_id, &encoding::encode(manifest))
 }
 
-/// The manifest a file holds, after its size, header and MAC are checked and before anything is decrypted.
+/// Opens the manifest a file holds. Its size, header and MAC are checked before anything is decrypted.
 pub fn open_manifest(identity: &VaultIdentity, file: &[u8]) -> Result<VaultManifest, ManifestError> {
     let (vault_id, payload) = KIND.open(identity, file)?;
     let manifest = encoding::decode(&payload)?;
@@ -255,9 +271,10 @@ pub fn open_manifest(identity: &VaultIdentity, file: &[u8]) -> Result<VaultManif
     Ok(manifest)
 }
 
-/// The vault ID in a manifest file's clear header, read without the vault identity. Nothing checks the MAC, so it is
-/// unverified: enough to name the vault a locked manifest claims to belong to, as reset's confirmation does, and never
-/// trusted for anything else.
+/// Reads the vault ID in a manifest file's clear header, without the vault identity.
+///
+/// Nothing checks the MAC, so the ID is unverified: enough to name the vault a locked manifest claims to belong to, as
+/// reset's confirmation does, and never trusted for anything else.
 pub fn unverified_vault_id(file: &[u8]) -> Result<VaultId, ManifestError> {
     KIND.unverified_vault_id(file)
 }
@@ -275,7 +292,8 @@ pub(crate) mod tests {
     const FILE_MAGIC: [u8; 4] = KIND.magic;
     const FILE_VERSION: u8 = KIND.version;
 
-    /// The known-answer identity: the `age` secret-key text of the X25519 key bytes 01 02 … 20.
+    /// The known-answer identity: the `age` secret-key text of the X25519 key bytes 01 02 … 20
+    /// ([test vectors](../../../../design/storage-formats.md#manifest-file-v1)).
     pub(crate) const KAT_IDENTITY: &str = "AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE";
     /// The manifest key of [`KAT_IDENTITY`].
     pub(crate) const KAT_MANIFEST_KEY: &str =
@@ -326,8 +344,8 @@ pub(crate) mod tests {
         VaultManifest::new(vault_id, generation(7), Some(generation(6)), entries.into()).unwrap()
     }
 
-    /// A manifest file with the given header vault ID and payload, MACed under `key`: what anyone could build who
-    /// holds the vault public key, plus whatever key they claim.
+    /// Builds a manifest file with the given header vault ID and payload, MACed under `key`: what anyone holding the
+    /// vault public key could build, with a key of their choosing.
     fn forged(identity: &VaultIdentity, header_id: VaultId, payload: &[u8], key: &[u8; 64]) -> Vec<u8> {
         let mut file = [&FILE_MAGIC[..], &[FILE_VERSION], header_id.as_bytes()].concat();
         file.extend_from_slice(&sealed::seal(&identity.public_key(), payload).unwrap());
@@ -335,8 +353,8 @@ pub(crate) mod tests {
         [file, tag.to_vec()].concat()
     }
 
-    /// Known answer computed independently with Python's `hashlib.blake2b`; age output is randomized, so the
-    /// ciphertext is a fixed stand-in.
+    /// Checks the known answer, computed independently with Python's `hashlib.blake2b`. `age` output is randomized, so
+    /// the ciphertext is a fixed stand-in.
     #[test]
     fn mac_matches_its_known_answer() {
         let key: [u8; 64] = unhex(KAT_MANIFEST_KEY).try_into().unwrap();

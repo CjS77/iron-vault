@@ -1,5 +1,5 @@
-//! The store-owned files: every name the store writes in the state and config directories (design/reset.md "Removal
-//! order").
+//! The store-owned files: every name the store writes in the state and config directories
+//! ([removal order](../../../design/reset.md#removal-order)).
 //!
 //! The list is held here once, so the initialization state, every discard and reset agree on which files are the
 //! store's and which are foreign. A design that adds a state file adds one line to [`STATE_FILES`], and reset then
@@ -24,9 +24,10 @@ pub(crate) enum OwnedStateFile {
 
 use OwnedStateFile::{ApproverKeys, Fixed, Records, TpmKeyBlobs};
 
-/// Every store-owned file in the state directory, in the order reset removes them. The manifest goes first, so no
-/// binary opens the vault once anything else is gone; the identity envelope next, so a crash leaves no file a recovery
-/// key opens; reset's own commit point, `reset.unfinished`, last.
+/// Every store-owned file in the state directory, in the order reset removes them.
+///
+/// The manifest goes first, so no binary opens the vault once anything else is gone. The identity envelope goes next,
+/// so a crash leaves no file a recovery key opens. Reset's own commit point, `reset.unfinished`, goes last.
 pub(crate) const STATE_FILES: [OwnedStateFile; 14] = [
     Fixed(StateFileName::manifest),
     Fixed(StateFileName::identity_envelope),
@@ -49,9 +50,10 @@ pub(crate) const STATE_FILES: [OwnedStateFile; 14] = [
 /// either.
 const NOT_VAULT_FILES: [fn() -> StateFileName; 2] = [StateFileName::recovery_check_record, StateFileName::owner_lock];
 
-/// The config files, in the order every discard removes them: all signatures before any config. A signature with no
-/// config beside it reads as the owner's file, and `publish` can leave `config.toml` beside `config.toml.sig.staged`, so
-/// removing a config while a signature remains could strand that signature after a crash.
+/// The config files, in the order every discard removes them: all signatures before any config.
+///
+/// A signature with no config beside it reads as the owner's file, and `publish` can leave `config.toml` beside
+/// `config.toml.sig.staged`, so removing a config while a signature remains could strand that signature after a crash.
 pub(crate) const CONFIG_FILES: [ConfigFileName; 4] = [
     ConfigFileName::ActiveSignature,
     ConfigFileName::StagedSignature,
@@ -70,19 +72,21 @@ impl OwnedStateFile {
     }
 }
 
-/// Whether the store writes a state file named `name`.
+/// Returns `true` if and only if the store writes a state file named `name`.
 pub(crate) fn is_store_owned(name: &StateFileName) -> bool {
     STATE_FILES.iter().any(|entry| entry.matches(name))
 }
 
-/// Whether `name` is a vault file: a store-owned state file other than those whose presence alone is no vault. A state
-/// directory with no vault file reads Uninitialized, or Unrecognized when a foreign file is there, and has nothing to
-/// reset.
+/// Returns `true` if and only if `name` is a vault file: a store-owned state file other than those whose presence alone
+/// is no vault.
+///
+/// A state directory with no vault file reads Uninitialized, or Unrecognized when a foreign file is there, and has
+/// nothing to reset.
 pub(crate) fn is_vault_file(name: &str) -> bool {
     StateFileName::new(name).is_ok_and(|file| is_store_owned(&file) && !NOT_VAULT_FILES.iter().any(|not| not() == file))
 }
 
-/// The store-owned names among `names`, in the order of [`STATE_FILES`]; every other name is left out.
+/// Returns the store-owned names among `names`, in the order of [`STATE_FILES`]; every other name is left out.
 pub(crate) fn in_removal_order(names: &[StateFileName]) -> Vec<StateFileName> {
     STATE_FILES
         .iter()
@@ -97,9 +101,9 @@ mod tests {
     /// A version 4 UUID in lowercase hyphenated form, for the ID in a family's name.
     const ID: &str = "8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f";
 
-    /// Every name `state_file_name.rs` builds outside its tests: each `Self("…")` literal, and each `format!("…")` with
-    /// its placeholder filled by a UUID. Read from the source, so a constructor added there without a line in
-    /// [`STATE_FILES`] fails this test.
+    /// Returns every name `state_file_name.rs` builds outside its tests: each `Self("…")` literal, and each
+    /// `format!("…")` with its placeholder filled by a UUID. They are read from the source, so a constructor added
+    /// there without a line in [`STATE_FILES`] fails this test.
     fn constructed_names() -> Vec<String> {
         let source = include_str!("state_file_name.rs");
         let code = source.split("#[cfg(test)]").next().unwrap();

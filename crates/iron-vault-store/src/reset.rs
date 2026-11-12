@@ -1,10 +1,23 @@
-//! The store half of `reset` (design/reset.md): what a reset would discard, read without the vault identity, and the
-//! discard itself.
+//! The store half of [`reset`](../../../design/reset.md): what a reset would discard, read without the vault identity, and the discard
+//! itself.
 //!
 //! The filesystem has no transaction, and a vault holds dozens of files. The discard writes `reset.unfinished` before
 //! its first removal and removes it last, and removes the manifest first, so a crash at any point leaves either the
-//! intact vault or an Unfinished reset, never a vault that half-opens. Only the next reset finishes an interrupted one:
-//! `init`, `import`, `unlock` and startup all refuse it.
+//! intact vault or an Unfinished reset, never a vault that half-opens. Only the next `reset` finishes an interrupted
+//! one: `init`, `import`, `unlock` and startup all refuse it. The [removal order](../../../design/reset.md#removal-order):
+//!
+//! ```text
+//! reset.unfinished written         the commit point: from here the directory reads Unfinished reset
+//! state directory, in STATE_FILES order:
+//!   manifest.age                   first, so nothing opens the vault once anything else is gone
+//!   identity.age                   next, so no file a recovery key opens is left
+//!   operational.age … record-*.age … locked-by-owner
+//!   stale temporary files
+//! config directory, signatures first:
+//!   config.toml.sig, config.toml.sig.staged, config.toml, config.toml.pending
+//!   stale temporary files
+//! reset.unfinished removed
+//! ```
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -20,13 +33,13 @@ use crate::{
     StateDirLock, StateFileName, StoreFs, VaultId, WriteStep, read_state_file, unverified_vault_id,
 };
 
-/// What a reset would discard, read from the directory listings without the vault identity: the store's part of the
-/// reset summary.
+/// Records what a reset would discard, read from the directory listings without the vault identity: the store's part
+/// of the reset summary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResetScope {
     /// The initialization state.
     pub state: InitializationState,
-    /// Whether the state directory holds a vault file. With none there is nothing to reset, whatever the state.
+    /// `true` if and only if the state directory holds a vault file. With none there is nothing to reset, in any state.
     pub has_vault_file: bool,
     /// The number of `record-*.age` files, unverified: only the manifest says which records are live.
     pub record_files: usize,
@@ -51,7 +64,7 @@ pub fn reset_scope(state: &StateDirLock, config: &ConfigDirLock, fs: &impl Store
     })
 }
 
-/// Why the vault ID could not be read from the manifest's clear header.
+/// Says why the vault ID could not be read from the manifest's clear header.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum UnverifiedVaultIdError {
     /// `manifest.age` could not be read.
@@ -62,22 +75,24 @@ pub enum UnverifiedVaultIdError {
     Manifest(#[from] ManifestError),
 }
 
-/// The vault ID in `manifest.age`'s clear header, read while the vault is locked. It is unverified, since nothing checks
-/// the MAC without the vault identity: enough for reset's confirmation, which only names the vault the owner means.
+/// Reads the vault ID in `manifest.age`'s clear header while the vault is locked.
+///
+/// It is unverified, since nothing checks the MAC without the vault identity. That is enough for reset's confirmation,
+/// which only names the vault the owner means.
 pub fn read_unverified_vault_id(state: &StateDirLock, fs: &impl StoreFs) -> Result<VaultId, UnverifiedVaultIdError> {
     // MAX_MANIFEST_LEN is 1 MiB, so it always fits in a u64.
     let file = read_state_file(state, fs, &StateFileName::manifest(), MAX_MANIFEST_LEN as u64)?;
     Ok(unverified_vault_id(&file)?)
 }
 
-/// The step of a discard that failed, as `vault.reset-failed` names it.
+/// Names the step of a discard that failed, as the `vault.reset-failed` audit event does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResetStep {
     /// Writing `reset.unfinished`. The vault is intact.
     Begin,
-    /// Removing a store-owned file. The next reset resumes.
+    /// Removing a store-owned file. The next `reset` resumes.
     Remove,
-    /// Removing `reset.unfinished`. The next reset resumes.
+    /// Removing `reset.unfinished`. The next `reset` resumes.
     Finish,
 }
 
@@ -91,32 +106,32 @@ impl fmt::Display for ResetStep {
     }
 }
 
-/// Why a discard stopped. No variant carries file contents.
+/// Says why a discard stopped. No variant carries file contents.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DiscardFailure {
-    /// The state directory holds no vault file, so there is nothing to reset; nothing was written.
+    /// The state directory holds no vault file, so there is nothing to reset. Nothing was written.
     #[error("there is no vault file to reset")]
     NothingToReset,
-    /// Listing the state directory failed; nothing was written.
+    /// Listing the state directory failed. Nothing was written.
     #[error("cannot list the state directory: {kind}")]
     ListStateDir {
         /// The underlying error kind.
         kind: io::ErrorKind,
     },
-    /// Listing the config directory failed; nothing was written.
+    /// Listing the config directory failed. Nothing was written.
     #[error("cannot list the config directory: {kind}")]
     ListConfigDir {
         /// The underlying error kind.
         kind: io::ErrorKind,
     },
     /// A store-owned name is a symlink, directory or other non-regular entry, which a reset never follows or descends
-    /// into; nothing was written, and an administrator must inspect it.
+    /// into. Nothing was written, and an administrator must inspect it.
     #[error("{file} is not a regular file, so nothing was removed; inspect it")]
     NotARegularFile {
         /// The entry's name.
         file: String,
     },
-    /// Checking that a store-owned name is a regular file failed; nothing was written.
+    /// Checking that a store-owned name is a regular file failed. Nothing was written.
     #[error("cannot check {file}: {kind}")]
     Inspect {
         /// The entry's name.
@@ -124,8 +139,8 @@ pub enum DiscardFailure {
         /// The underlying error kind.
         kind: io::ErrorKind,
     },
-    /// A file step failed. At [`ResetStep::Begin`] the vault is intact; at any later step `reset.unfinished` stays and
-    /// the next reset resumes.
+    /// A file step failed. At [`ResetStep::Begin`] the vault is intact. At any later step `reset.unfinished` stays, and
+    /// the next `reset` resumes.
     #[error("reset step {step} failed on {file} at {failed}: {kind}")]
     Io {
         /// The reset step.
@@ -139,7 +154,8 @@ pub enum DiscardFailure {
     },
 }
 
-/// Why [`discard_vault`] stopped, with the files it removed before it did, for the `vault.reset-failed` log.
+/// Says why [`discard_vault`] stopped, with the files it removed before it did, for the `vault.reset-failed` audit
+/// event.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{cause}")]
 pub struct DiscardError {
@@ -158,7 +174,7 @@ impl From<DiscardFailure> for DiscardError {
     }
 }
 
-/// A finished discard.
+/// Records a finished discard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscardedVault {
     /// The store-owned files removed, in removal order, state directory first; `reset.unfinished` is not among them.
@@ -166,18 +182,24 @@ pub struct DiscardedVault {
     /// The foreign files left in the state directory, sorted. With any, the directory reads Unrecognized.
     pub foreign: Vec<String>,
     /// Set when `reset.unfinished` was unlinked but the state directory fsync failed, so it may come back after power
-    /// loss. It can only come back over a directory with no vault file, where the next reset removes it.
+    /// loss. It can only come back over a directory with no vault file, where the next `reset` removes it.
     pub finish_uncertain: Option<ErrorKindLabel>,
 }
 
-/// Discards every store-owned file of a vault, in the removal order of design/reset.md, and keeps every foreign file.
+/// Discards every store-owned file of a vault, in the [removal order](../../../design/reset.md#removal-order), and keeps every foreign
+/// file.
 ///
-/// The caller holds the service-wide lock and both directory locks, has withdrawn the vault and has the owner's
+/// The caller holds the service-wide lock and both directory locks, has withdrawn the vault, and has the owner's
 /// confirmation. Nothing is written when the state directory holds no vault file, or when a store-owned name is not a
-/// regular file. Then `reset.unfinished` is durably written, the commit point; the state files are removed in
-/// [`crate::store_owned::STATE_FILES`] order, manifest first, then their stale temp files, then the config files,
-/// signatures first, each unlinked and followed by the config directory's fsync, then theirs; and `reset.unfinished` is
-/// removed last. Each removal skips a file already gone, so a rerun after a crash resumes where the last run stopped.
+/// regular file. Otherwise:
+///
+/// 1. `reset.unfinished` is durably written: the commit point.
+/// 2. The state files are removed in `STATE_FILES` order, manifest first, then their stale temporary files.
+/// 3. The config files are removed, signatures first, each unlinked and followed by the config directory's fsync, then
+///    their stale temporary files.
+/// 4. `reset.unfinished` is removed.
+///
+/// Each removal skips a file already gone, so a rerun after a crash resumes where the last run stopped.
 pub fn discard_vault(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<DiscardedVault, DiscardError> {
     let (removals, foreign) = plan(state, config, fs)?;
     let marker = StateFileName::unfinished_reset();
@@ -206,8 +228,8 @@ pub fn discard_vault(state: &StateDirLock, config: &ConfigDirLock, fs: &impl Sto
 /// The files a discard removes, each with its directory, in removal order; and the foreign files it keeps.
 type Plan<'a> = (Vec<(&'a Path, String)>, Vec<String>);
 
-/// Every file to remove with its directory, in order, and the foreign files to keep. Refuses a directory with no vault
-/// file and a store-owned name that is not a regular file.
+/// Plans every file to remove with its directory, in order, and the foreign files to keep. Refuses a directory with no
+/// vault file and a store-owned name that is not a regular file.
 fn plan<'a>(state: &'a StateDirLock, config: &'a ConfigDirLock, fs: &impl StoreFs) -> Result<Plan<'a>, DiscardFailure> {
     let state_names = fs
         .list_dir(state.dir())
@@ -227,7 +249,8 @@ fn plan<'a>(state: &'a StateDirLock, config: &'a ConfigDirLock, fs: &impl StoreF
     Ok((removals, foreign(&state_names)))
 }
 
-/// The store-owned state files present but `reset.unfinished`, in removal order, then their stale temp files.
+/// Lists the store-owned state files present, except `reset.unfinished`, in removal order, then their stale temporary
+/// files.
 fn state_removals(names: &[OsString]) -> Vec<String> {
     let files: Vec<_> = names.iter().filter_map(|name| StateFileName::new(name.to_str()?).ok()).collect();
     let temps = names
@@ -242,7 +265,7 @@ fn state_removals(names: &[OsString]) -> Vec<String> {
         .collect()
 }
 
-/// The config files present, signatures first, then their stale temp files.
+/// Lists the config files present, signatures first, then their stale temporary files.
 fn config_removals(names: &[OsString]) -> Vec<String> {
     CONFIG_FILES
         .iter()
@@ -252,7 +275,8 @@ fn config_removals(names: &[OsString]) -> Vec<String> {
         .collect()
 }
 
-/// The names that are neither store-owned nor the lock file, `lost+found` or a stale temp file, in listing order.
+/// Lists the names that are neither store-owned nor the lock file, `lost+found` or a stale temporary file, in listing
+/// order.
 fn foreign(names: &[OsString]) -> Vec<String> {
     names
         .iter()
@@ -274,8 +298,8 @@ fn ensure_regular(fs: &impl StoreFs, dir: &Path, name: &str) -> Result<(), Disca
     }
 }
 
-/// Durably removes `dir/name`: whether it was unlinked, and whether that failed. A file already gone is skipped. A
-/// failed directory fsync comes after the unlink, so that file counts as removed.
+/// Durably removes `dir/name`, and returns whether it was unlinked and whether the removal failed. A file already gone
+/// is skipped. A failed directory fsync comes after the unlink, so that file counts as removed.
 fn remove(fs: &impl StoreFs, dir: &Path, name: &str) -> (bool, Result<(), DiscardFailure>) {
     match remove_in(fs, dir, name) {
         Ok(()) => (true, Ok(())),
