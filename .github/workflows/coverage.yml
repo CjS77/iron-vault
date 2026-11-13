@@ -1,26 +1,17 @@
 name: Coverage
 
 # Measures test coverage with scripts/coverage.sh, the script developers run locally, and keeps the lcov report as a
-# workflow artifact. It runs on release tags (the same coarse filter as release.yml); by hand from the Actions tab, on
-# whichever branch or tag is picked; and from ci.yml's `coverage` job on pull requests, which calls it with
-# `upload: false`.
+# workflow artifact, then uploads it to Coveralls. It runs on release tags (the same coarse filter as release.yml) and
+# by hand from the Actions tab, on whichever branch or tag is picked. It does not run on pull requests.
 #
-# A tag push or a manual run has no `upload` input, so the upload step allows those events by name. A manual run
-# uploads for any ref; otherwise the upload happens only for a tag ref, so a pull-request run never uploads. The upload
-# needs the COVERALLS_REPO_TOKEN repository secret, and a calling workflow must pass it (`secrets: inherit`); without
-# it the upload step fails, after the artifact has been kept.
+# The upload needs the COVERALLS_REPO_TOKEN repository secret; without it the upload step fails, after the artifact
+# has been kept.
 on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+-*'
   workflow_dispatch:
-  workflow_call:
-    inputs:
-      upload:
-        description: Upload the report to Coveralls when the run is for a tag.
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -62,9 +53,6 @@ jobs:
           path: target/llvm-cov/lcov.info
           if-no-files-found: error
       - name: Upload to Coveralls
-        if: >-
-          github.event_name == 'workflow_dispatch'
-          || ((github.event_name == 'push' || inputs.upload) && startsWith(github.ref, 'refs/tags/'))
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}

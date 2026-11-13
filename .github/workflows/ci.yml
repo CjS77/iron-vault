@@ -99,12 +99,6 @@ jobs:
               --flags not-need-init,startup-clear --daemon
           IRON_VAULT_SWTPM=swtpm:host=127.0.0.1,port=2321 cargo test -p iron-vault-tpm-signer --features tpm --locked -- --include-ignored
 
-  # The same coverage run as on release tags (scripts/coverage.sh), without the Coveralls upload.
-  coverage:
-    uses: ./.github/workflows/coverage.yml
-    with:
-      upload: false
-
   book:
     runs-on: ubuntu-latest
     env:
