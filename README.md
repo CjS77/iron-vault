@@ -1,4 +1,7 @@
+<!-- The release badge is pinned: on a version bump, update its text, its tag and the .deb asset name, which cargo-deb
+     writes with a dot where the tag has a hyphen (v0.4.0-alpha => iron-vault_0.4.0.alpha-1_amd64.deb). -->
 [![Coverage Status](https://coveralls.io/repos/github/CjS77/iron-vault/badge.svg?branch=main)](https://coveralls.io/github/CjS77/iron-vault?branch=main)
+[![Release](https://img.shields.io/badge/release-v0.4.0--alpha-blue)](https://github.com/CjS77/iron-vault/releases/download/v0.4.0-alpha/iron-vault_0.4.0.alpha-1_amd64.deb)
 
 # Iron Vault
 
