@@ -1,3 +1,5 @@
+[![Coverage Status](https://coveralls.io/repos/github/CjS77/iron-vault/badge.svg?branch=main)](https://coveralls.io/github/CjS77/iron-vault?branch=main)
+
 # Iron Vault
 
 A small local proxy that holds API credentials so the programs that use them never do.
