@@ -32,6 +32,7 @@
 - [Tamper detection and recovery](cookbook/tamper-detection.md)
 - [Start over in development mode](cookbook/start-over.md)
 - [Reset the vault](cookbook/reset-vault.md)
+- [Recover from an upgrade that cannot open the vault](cookbook/breaking-upgrade.md)
 - [Retire a machine](cookbook/forget-machine.md)
 - [Run Iron Vault in Docker Compose](cookbook/compose.md)
 - [Unlock at boot with a TPM](cookbook/tpm-unlock.md)

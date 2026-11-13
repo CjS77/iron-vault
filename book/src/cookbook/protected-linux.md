@@ -121,6 +121,9 @@ for removing it.
 - **`unlock` is refused with `memory-unprotected`.** An edited unit or drop-in lowered `LimitMEMLOCK`. Fix it and
   restart the service.
 - **Every request gets `503` after an upgrade or reboot.** The service restarted Locked. Run `sudo iron-vault unlock`.
+- **After an upgrade, `unlock` ends with `unlocked-unavailable` and `status` shows `reason: recovery needed`.** The new
+  release may not read the old vault's format. Check the changelog's **Breaking changes**, then follow
+  [Recover from an upgrade that cannot open the vault](breaking-upgrade.md).
 
 ## Reference
 

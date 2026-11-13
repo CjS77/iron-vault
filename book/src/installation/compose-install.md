@@ -431,6 +431,10 @@ The service restarts, reads the handoff and comes back Ready. The named volumes 
 new host CLI out of the image as in step 2, so it matches the service. Without a working handoff, run
 `sudo iron-vault unlock`.
 
+Read the release's **Breaking changes** in the changelog first. If it says the new release cannot open the old vault, as
+from 0.3.0-alpha to 0.4.0-alpha, the service comes up with `reason: recovery needed` instead of Ready: follow
+[Recover from an upgrade that cannot open the vault](../cookbook/breaking-upgrade.md).
+
 ## Remove
 
 Stop the stack. The volumes, and with them the vault, stay:

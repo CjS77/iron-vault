@@ -445,6 +445,12 @@ The upgrade restarts `iron-vault.service`, and it comes back Locked unless TPM u
 reason `locked` until you unlock it ([§15](../../../design/iron-vault-specification.md#15-service-states-and-errors)). Listener socket units are not restarted, so
 they keep their ports through the upgrade. The vault and config are not touched.
 
+Read the release's **Breaking changes** in the changelog first. A pre-release may change a vault file format without
+reading the old one: the upgrade from 0.3.0-alpha to 0.4.0-alpha does. Then `unlock` ends with `unlocked-unavailable`
+and `status` shows `reason: recovery needed`. Copy `/etc/iron-vault/config.toml` and save the output of
+`sudo iron-vault list` before such an upgrade, and follow
+[Recover from an upgrade that cannot open the vault](../cookbook/breaking-upgrade.md) after it.
+
 ## Uninstall and purge
 
 `sudo apt remove iron-vault` stops the service, stops and disables the listener instances, and removes the program. It

@@ -7,9 +7,20 @@ Linux package carries the same version with `~` before the pre-release tag (`0.4
 
 ### Breaking changes
 
-A config approved under 0.3.0-alpha can stop working under 0.4.0-alpha. Check each route against the first item below
-before you approve it again.
+A vault made by 0.3.0-alpha cannot be opened by 0.4.0-alpha, and a config approved under 0.3.0-alpha can stop working
+under 0.4.0-alpha. Read the first item before you upgrade, and check each route against the second before you approve
+it again.
 
+- **A 0.3.0-alpha vault cannot be opened.** The approval state (`approval.age`) now holds a list of approvers, and the
+  config signature names the approver that signed it. Both changed layout under the same format version, so 0.4.0-alpha
+  cannot read the files 0.3.0-alpha wrote, and there is no migration: 0.3.0-alpha has no `export`.
+  - **What you see:** `unlock` ends with `unlocked-unavailable` (error 16), `status` shows `reason: recovery needed`,
+    every request gets `503`, and the log has `vault.shared-state-damaged` with `file` `approval.age` and `damage`
+    `approval_state`. The vault passphrase and the recovery key cannot get past it.
+  - **How to recover:** keep a copy of the config, `reset`, `init`, add each credential again with a value its provider
+    reissues, and approve the config. See
+    [Recover from an upgrade that cannot open the vault](book/src/cookbook/breaking-upgrade.md). Before you upgrade,
+    copy the config and save the output of `iron-vault list` while 0.3.0-alpha can still open the vault.
 - **Route `paths` now match the request path after the route `prefix`, not the full path sent upstream.** In
   0.3.0-alpha a pattern had to name the upstream's base path (the path part of `upstream`) followed by the rest of the
   request path. Patterns now name only the path the provider documents. The service adds the base path when it forwards

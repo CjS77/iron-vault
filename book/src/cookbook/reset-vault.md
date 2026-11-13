@@ -3,6 +3,8 @@
 At the end of this recipe the vault and its config are gone, and a new, empty vault with new passphrases is running under
 the same service. Use it only when no way into the vault is left: neither the vault passphrase nor the recovery key
 opens the vault, or no approver can answer (see [why to keep a second approver](approval-signers.md#why-keep-a-second-approver)).
+An upgrade whose release cannot read the old vault's format also leaves no way in; see
+[Recover from an upgrade that cannot open the vault](breaking-upgrade.md).
 If you still know the vault passphrase and at least one approver answers, you don't need reset:
 [rotate the recovery key or add a recipient](recipients.md), or [rotate the approval passphrase](approval-signers.md).
 
