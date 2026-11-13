@@ -44,47 +44,65 @@ fn socket_activate() -> Option<PathBuf> {
 
 /// A private tree with the XDG bases and a copy of the service binary, removed on drop. The copy is `0500` in a `0700`
 /// directory, because a binary the build user's group can write (as cargo's umask often leaves it) is refused.
-struct Install(PathBuf);
+///
+/// The runtime directory lives apart, under the system temporary directory. The admin socket's path must fit a Unix
+/// socket address (107 bytes), and the build tree's can be long: under `cargo llvm-cov` on CI it is 111 bytes. The
+/// trusted-path rules allow a sticky ancestor such as `/tmp` above the runtime directory, but not above the config or
+/// state directory, so those stay in the build tree.
+struct Install {
+    root: PathBuf,
+    runtime: PathBuf,
+}
 
 impl Install {
     fn new() -> Self {
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("iv-act-{}-{n}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        chmod(&root, 0o700);
-        let install = Self(root);
-        ["config", "state", "run"].iter().for_each(|name| {
-            let dir = install.dir(name);
-            fs::create_dir_all(&dir).unwrap();
-            chmod(&dir, 0o700);
-        });
+        let name = format!("iv-act-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
+        let install = Self {
+            root: Path::new(env!("CARGO_TARGET_TMPDIR")).join(&name),
+            runtime: std::env::temp_dir().join(&name),
+        };
+        [
+            install.root.clone(),
+            install.dir("config"),
+            install.dir("state"),
+            install.runtime.clone(),
+        ]
+        .iter()
+        .for_each(|dir| private_dir(dir));
         fs::copy(env!("CARGO_BIN_EXE_iron-vault"), install.binary()).unwrap();
         chmod(&install.binary(), 0o500);
         install
     }
 
     fn dir(&self, name: &str) -> PathBuf {
-        self.0.join(name)
+        self.root.join(name)
     }
 
     fn binary(&self) -> PathBuf {
-        self.0.join("iron-vault")
+        self.root.join("iron-vault")
     }
 
     fn admin_socket(&self) -> PathBuf {
-        self.0.join("run/iron-vault-dev/admin.sock")
+        self.runtime.join("iron-vault-dev/admin.sock")
     }
 
     fn log(&self) -> String {
-        fs::read_to_string(self.0.join("serve.log")).unwrap_or_default()
+        fs::read_to_string(self.root.join("serve.log")).unwrap_or_default()
     }
 }
 
 impl Drop for Install {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        let _ = fs::remove_dir_all(&self.root);
+        let _ = fs::remove_dir_all(&self.runtime);
     }
+}
+
+/// Creates `dir` afresh as a `0700` directory, removing what an earlier run with the same process id left there.
+fn private_dir(dir: &Path) {
+    let _ = fs::remove_dir_all(dir);
+    fs::create_dir_all(dir).unwrap();
+    chmod(dir, 0o700);
 }
 
 fn chmod(path: &Path, mode: u32) {
@@ -98,13 +116,13 @@ struct Activated(Child);
 impl Activated {
     /// Passes a listening socket on `passed`, named `fdname`, to `iron-vault serve`.
     fn start(install: &Install, activate: &Path, passed: SocketAddr, fdname: &str) -> Self {
-        let log = fs::File::create(install.0.join("serve.log")).unwrap();
+        let log = fs::File::create(install.root.join("serve.log")).unwrap();
         // systemd-socket-activate passes the service only `LISTEN_*` and what `-E` names, not its own environment.
         let environment = [
-            ("HOME", install.0.clone()),
+            ("HOME", install.root.clone()),
             ("XDG_CONFIG_HOME", install.dir("config")),
             ("XDG_STATE_HOME", install.dir("state")),
-            ("XDG_RUNTIME_DIR", install.dir("run")),
+            ("XDG_RUNTIME_DIR", install.runtime.clone()),
         ];
         let child = Command::new(activate)
             .arg("-l")
