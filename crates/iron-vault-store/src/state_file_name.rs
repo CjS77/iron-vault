@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! State file names: the validated name of one file in the state directory.
 //!
 //! Every file the store reads or writes in the state directory is named by a [`StateFileName`]. The constructors below

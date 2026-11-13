@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Approver changes against the fault filesystem: each failing step, the read-back and the orphan sweep.
 
 use std::io;

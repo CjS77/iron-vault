@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The approver release checks (`design/approval-signers.md`, "Release checks"): what holds across `approver add`,
 //! `approver remove` and `config approve` together, driven through a real service on a vault made by `init`. Every
 //! approver passphrase and key file comes from `init` or `approver add`. Each command's own tests cover its exchange and

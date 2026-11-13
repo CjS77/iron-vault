@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The writer the subscriber holds, which activation can point at another log destination
 //! ([audit logging: switching at activation](../../../../design/audit-logging.md#switching-at-activation)).
 //!

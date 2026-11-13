@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! How each field of a client's first HTTP/2 header block was encoded (RFC 9113 §4.3, RFC 7541 §6).
 //!
 //! An `h2` server decodes HPACK away: h2 0.4.20 drops the never-indexed flag on the floor (`hpack/decoder.rs`, "TODO:

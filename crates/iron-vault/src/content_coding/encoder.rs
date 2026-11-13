@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Response encoders: recompress a scrubbed body for a caller whose `Accept-Encoding` forbids `identity`
 //! ([spec §11][s11], [Q-6][i22]).
 //!

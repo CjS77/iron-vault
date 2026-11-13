@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The filesystem seam: the trait every store read and write goes through, one method per durable-write step.
 //!
 //! Production code passes [`OsFs`]. Tests pass a double (the crate's `fault_fs` module) that fails or crashes at one

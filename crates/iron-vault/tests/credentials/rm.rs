@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `rm` end to end over a real admin socket against a running service context (specification §6, §16, §14;
 //! design/credential-commands.md): refused while a route uses the name and before any prompt, the summary and the
 //! approval passphrase after it, the removal of the record, and the config check that replaces the serving snapshot.

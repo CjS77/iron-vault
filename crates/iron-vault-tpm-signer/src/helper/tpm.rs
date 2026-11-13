@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the TPM commands that create a TPM approval key and sign with it
 //! ([TPM approval signer: the TPM approval key](../../../../design/tpm-approval-signer.md#the-tpm-approval-key),
 //! [helper protocol](../../../../design/tpm-approval-signer.md#helper-protocol)).

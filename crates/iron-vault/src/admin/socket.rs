@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Binds the admin socket ([admin protocol: Admin socket](../../../../design/admin-protocol.md#admin-socket)): `admin.sock` in the runtime
 //! directory, owned by the service account with mode `0600`, and never connectable at a wider mode. The service binds
 //! it at startup and hands it to the admin server.

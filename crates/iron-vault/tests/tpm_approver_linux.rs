@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The TPM approver's release checks that an emulated TPM can show (`design/tpm-approval-signer.md`, "Release checks"), one test
 //! per item, with the real helper binary started per connection against `swtpm`, as the socket unit would. The items that need the
 //! installed package, systemd or a firmware TPM are in `scripts/release/tpm-signer-check.sh`.

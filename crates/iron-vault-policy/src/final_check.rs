@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Checks an outgoing request one last time before its credential leaves the service
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 //! [§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules);

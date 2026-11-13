@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The admin socket end to end, as the unprivileged test user: binding, the peer check, one exchange per connection,
 //! the limits and shutdown. The service account is the test's own uid.
 

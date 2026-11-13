@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The recovery check part of the status report and its field encoding
 //! ([admin protocol: status](../../../../../design/admin-protocol.md#status), tags 13 to 17).
 //!

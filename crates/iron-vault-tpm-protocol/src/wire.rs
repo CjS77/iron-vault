@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Reads and writes the byte conventions every message and blob in this crate shares: big-endian integers, `u64`
 //! length-prefixed fields, and no trailing bytes
 //! ([storage formats: conventions](../../../design/storage-formats.md#conventions)).

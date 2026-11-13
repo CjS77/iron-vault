@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Release check for the Docker Compose profile: caller isolation and container hardening
 # (design/docker-compose.md "Release checks"; spec §7, §14, §17, §19, implementation spec §2).
 #

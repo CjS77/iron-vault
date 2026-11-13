@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault completions SHELL`: the shell completion script, generated from the same [`Cli`] the parser uses so the
 //! two cannot drift. It reads nothing from the service, so a packaging script can run it at build time.
 

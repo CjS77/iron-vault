@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `forget-machine`: checks that a retired machine's recipient key is gone from the vault
 //! ([spec §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration);
 //! [forget-machine](../../../../design/forget-machine.md)).

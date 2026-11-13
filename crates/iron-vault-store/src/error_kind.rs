@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The error kind label: how a log records a library error
 //! ([audit logging, "Library errors"](../../../design/audit-logging.md#library-errors)).
 //!

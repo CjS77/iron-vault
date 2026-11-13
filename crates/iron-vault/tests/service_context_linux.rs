@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The service context end to end: startup Locked with provisional listeners from the unverified config, entering
 //! Checking with a known vault identity (no prompt), the listener rebuild on entry to Ready, and stop (specification
 //! §4, §7, §12, §14, §15).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Scratch directories for tests that use the real filesystem, removed when the guard drops.
 
 use std::path::{Path, PathBuf};

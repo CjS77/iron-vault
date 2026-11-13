@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The upstream client over HTTP/2 against a recording test upstream that offers only ALPN `h2` (specification §9,
 //! §10, §15).
 //!

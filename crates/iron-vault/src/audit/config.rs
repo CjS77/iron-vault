@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Audit events about an approval's reservation and commit, and about what a config check's recovery changed on disk
 //! ([audit logging: catalogue, "Config approvals and checks"](../../../../design/audit-logging.md#catalogue)). The store
 //! returns each fact and does not log it.

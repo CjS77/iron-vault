@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Policy: every decision about who may send which request where, and how the credential goes into it.
 //!
 //! This crate is the policy bounded context. It parses and checks the configuration, identifies callers, selects and

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The bundle header: the migration bundle's first entry and its format version gate
 //! ([migration bundle v1, "Entries"](../../../../design/storage-formats.md#entries)).
 //!

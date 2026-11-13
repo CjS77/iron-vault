@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! HTTP header field names, as a config names them: a header slot's header and a listener's `token_header`.
 
 use std::cmp::Ordering;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Response scrubbing through the proxy handler end to end: a caller on a Unix request socket, the real request server
 //! and pipeline, a Basic credential and a recording TLS test upstream that echoes it back (specification §11, §15).
 //!

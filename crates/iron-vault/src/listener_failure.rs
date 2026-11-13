@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Why an approved or provisional listener did not open, as [`status`][status] reports it.
 //!
 //! A listener that fails to open is left out while the others keep serving, so without a report the owner would learn of

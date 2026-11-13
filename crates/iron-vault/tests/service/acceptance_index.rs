@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `design/v0-acceptance.md`, checked against the files it names.
 //!
 //! The index maps each v0 release check to the tests that show it, as `path::function` relative to the repository root.

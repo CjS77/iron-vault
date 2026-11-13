@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The policy crate's examples, reference configuration and destination checks.
 
 // Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.

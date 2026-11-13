@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The Protected and Container profiles' host unlock at startup (specification §15; design/tpm-unlock.md, "In the service"):
 //! a good unlock handoff takes the service from Starting through Checking to Ready with no `unlock`, and every other
 //! outcome leaves it Locked with passphrase `unlock` still offered.

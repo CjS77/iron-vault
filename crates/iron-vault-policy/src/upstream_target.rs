@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Builds the upstream target: the URL an authorized request is sent to
 //! ([spec §8](../../../design/iron-vault-specification.md#8-request-flow) step 7,
 //! [§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).

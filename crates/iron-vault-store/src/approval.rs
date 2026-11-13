@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Config approvals: what a pinned approver signs, the `config.toml.sig` file that carries the signature, and the
 //! approval state that decides whether a signature still counts
 //! ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),

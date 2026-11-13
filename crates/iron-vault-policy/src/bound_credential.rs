@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Pairs a slot value with the permitted origins of the credential record it came from, for the final
 //! outgoing-request check
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),

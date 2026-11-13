@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Audit events about credentials and caller tokens
 //! ([audit logging: catalogue, "Credentials and vault writes"](../../../../design/audit-logging.md#catalogue)).
 

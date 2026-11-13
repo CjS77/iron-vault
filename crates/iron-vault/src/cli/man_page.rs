@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The Linux package's man pages, `packaging/linux/man/*.1`, generated from the same [`Cli`] the parser uses so they
 //! cannot drift from `--help`. There is one page per command, because `clap_mangen` lists each subcommand as a page of
 //! its own: `iron-vault.1` names `iron-vault-config(1)`, which names `iron-vault-config-approve(1)`.

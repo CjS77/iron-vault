@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Writes credential records through the running service: `add` here, and `replace` and `rm` in [`plan`]
 //! ([specification §6](../../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 //! [§13](../../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),

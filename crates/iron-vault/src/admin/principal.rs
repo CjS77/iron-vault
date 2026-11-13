@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Decides who may use the admin socket: an admin principal, judged only from the uid the kernel reports for the
 //! connecting process ([spec §5: How the service identifies an admin principal][s5]).
 //!

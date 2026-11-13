@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The migration events:
 //!
 //! - the authorization events `migration.challenge-issued`, `migration.authorized` and `migration.authorization-refused`

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The command line: one [`Cli`] parser for running the service (`serve`) and for the thin client commands
 //! ([spec §5](../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns)).
 //!

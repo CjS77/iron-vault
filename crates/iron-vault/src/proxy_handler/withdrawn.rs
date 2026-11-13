@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A response body that fails once the serving snapshot it is served from is withdrawn, so a `lock` or a failed config
 //! check cuts off a response still streaming instead of letting it run on a policy the service no longer serves.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `add`'s arguments and success result ([admin protocol: add](../../../../../design/admin-protocol.md#add)), which `replace` shares.
 //! Only the bounds are checked here: the host stays text, and the service parses the name, the hosts and the material
 //! it prompts for.

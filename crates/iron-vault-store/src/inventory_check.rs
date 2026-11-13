@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The inventory check: how every recipient command opens the recipient inventory, bound to the identity envelope on
 //! disk ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
 //! [§15](../../../design/iron-vault-specification.md#15-service-states-and-errors),

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The approver prompt over a real admin socket with two software approvers pinned (design/approval-signers.md, "The
 //! approver prompt"): the order they are asked in, switching, and a wrong answer that never falls through.
 //!

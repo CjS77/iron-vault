@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The one connection a helper instance answers: it checks the peer, reads one request within a deadline and writes
 //! one response.
 

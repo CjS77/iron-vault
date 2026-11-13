@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The byte reader every store payload decoder uses
 //! ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
 //! [storage formats](../../../design/storage-formats.md#conventions)).

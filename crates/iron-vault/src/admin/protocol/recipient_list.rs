@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The `recipient list` result: one entry per enrolled recipient, in inventory order
 //! ([recipients: Admin protocol](../../../../../design/recipients.md#admin-protocol)). Public keys, roles, labels and times only: no type
 //! here can hold a secret.

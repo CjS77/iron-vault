@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Source-owner methods
 //! ([migration authorization: Source-owner method](../../../../design/migration-authorization.md#source-owner-method)):
 //! the ways the owner proves authority over the vault identity for one migration challenge, and the one path from such a

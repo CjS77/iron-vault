@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Process hardening, checked in a child process because it changes process-wide limits (specification §14).
 //!
 //! The test runs in its own binary: it forks, and a forked child shares the parent's open lock fds until it execs, so

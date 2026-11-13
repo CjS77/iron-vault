@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The control for the no-retry tests in `upstream_client_h2.rs`: reqwest's default retry policy re-sends a request the
 //! HTTP/2 test upstream refused unprocessed, so those tests' refusals are ones reqwest would retry (implementation spec §1).
 //!

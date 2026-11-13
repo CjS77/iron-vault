@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Generates the host unlock identity and seals it to this host's TPM. Run once, as root.
 #
 # The secret text exists only in pipes: it is never a file, an argument or an environment variable. Only the

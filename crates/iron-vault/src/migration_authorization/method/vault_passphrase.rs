@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The vault passphrase as a source-owner method, the one every vault has
 //! ([migration authorization: The v0 method](../../../../../design/migration-authorization.md#the-v0-method-the-vault-passphrase)).
 //!

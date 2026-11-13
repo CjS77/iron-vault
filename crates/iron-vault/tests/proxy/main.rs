@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The proxy's request path: coding, scrubbing, location, serving gate, egress and the request events.
 
 // Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.

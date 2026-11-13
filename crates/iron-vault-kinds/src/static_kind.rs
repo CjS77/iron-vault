@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The `static` kind: sends a stored provider key, unchanged, in a `header` or `query` slot
 //! ([future spec §2.2](../../../design/future-specifications.md#22-credential-kinds)).
 //!

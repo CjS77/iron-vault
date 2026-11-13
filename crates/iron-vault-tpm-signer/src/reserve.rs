@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Decides whether the helper may try a PIN, from the TPM's dictionary-attack state
 //! ([TPM approval signer: lockout reserve](../../../design/tpm-approval-signer.md#lockout-reserve)).
 //!

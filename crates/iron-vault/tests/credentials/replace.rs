@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `replace` end to end over a real admin socket against a running service context (design/credential-commands.md):
 //! the vault change check before any prompt, the summary, owner presence before the secret, a `lock` that cancels the
 //! secret prompt, and the write whose config check serves the new secret. Every test's log goes to one captured buffer

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Where the log goes, and installing the subscriber on it
 //! ([audit logging: log destination](../../../../design/audit-logging.md#log-destination)).
 //!

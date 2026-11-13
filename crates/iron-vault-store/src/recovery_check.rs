@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The recovery check: proves that a recovery key opens the vault on disk, changing nothing
 //! ([spec §16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration),
 //! [what the check proves](../../../design/recovery.md#what-the-check-proves)).

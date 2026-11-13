@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `add`: enrols a new credential record under a name the manifest does not hold (spec [§6][s6], [§16][s16];
 //! [admin protocol: add](../../../../design/admin-protocol.md#add)).
 //!

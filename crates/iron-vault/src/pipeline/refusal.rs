@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The answer to each pipeline refusal ([spec §15][s15]): one status, one fixed body, and the label of a service
 //! defect. The proxy handler sends what this module chooses, so the caller of a refused request sees only a status
 //! and a constant text.

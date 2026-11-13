@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs `approver add` and `approver remove`, which change the set of pinned approvers that may sign a config
 //! approval
 //! ([approval signers: States and the service-wide lock](../../../../design/approval-signers.md#states-and-the-service-wide-lock)).

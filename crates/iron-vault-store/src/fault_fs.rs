@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The fault filesystem: an in-memory [`StoreFs`] that records every call, fails chosen calls and models power loss.
 //!
 //! Durable-write bugs only show after a power cut, which ordinary tests never cause. The store's crash tests, and the

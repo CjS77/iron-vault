@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Release check for the TPM approval signer on a real install of the package: the evidence for implementation spec §3's "TPM
 # authorization and power failure" gate and for product spec §14 to list the TPM approval signer as offered
 # (design/tpm-approval-signer.md, "Release checks"; the item numbers below are that section's). Two runs make the gate:

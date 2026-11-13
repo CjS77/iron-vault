@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The config copy `import` leaves beside the bundle: the bundle's `config.toml` entry, which `config approve` reads in
 //! the CLI because the CLI cannot always read the service's config directory
 //! ([migration bundle: the config copy](../../../../../design/migration-bundle.md#the-config-copy)).

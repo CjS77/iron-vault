@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The real request server and proxy handler on a Unix request socket and an optional loopback TCP listener, in front of
 //! a vault holding test credentials, for the end-to-end tests that point routes at a recording test upstream.
 //!

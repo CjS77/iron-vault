@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Checks the binary's `--version` output and how its deployment profile starts on this machine.
 
 #![cfg(target_os = "linux")]

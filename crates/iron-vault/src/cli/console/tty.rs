@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The controlling terminal, `/dev/tty`: echo is switched with `rustix::termios`, and restored by the guard, and by the
 //! signal watcher when a signal ends the command.
 

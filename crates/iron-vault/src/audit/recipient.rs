@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The recipient events: the inventory check's `recipient.inventory-damaged` and `recipient.change-recovered`, a change's
 //! `recipient.added`, `recipient.removed` and `recipient.change-failed`, and `forget-machine`'s `recipient.forget-checked`
 //! ([recipients: audit events](../../../../design/recipients.md#audit-events)).

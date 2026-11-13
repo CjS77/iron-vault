@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The real helper against `swtpm`, the software TPM
 //! ([TPM approval signer: testing](../../../design/tpm-approval-signer.md#testing)).
 //!

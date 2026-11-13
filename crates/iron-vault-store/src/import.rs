@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Vault import at store level: the [write order](../../../design/migration-bundle.md#write-order) that `import` runs
 //! on the destination, from `import.unfinished` to its removal
 //! ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),

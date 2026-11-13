@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The exact destinations a credential record's secret may reach
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 

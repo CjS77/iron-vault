@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The service's JSON log records, captured for the current thread of a test on a current-thread runtime, where the
 //! request server and every task it spawns run on the test's thread.
 

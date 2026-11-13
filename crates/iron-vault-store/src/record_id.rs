@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The stable identity of one credential record ([spec §3](../../../design/iron-vault-specification.md#3-terms-and-definitions),
 //! [§6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Relays an upstream response to the caller ([spec §8][s8] step 10, [§11][s11]): its status, its headers without
 //! connection-scoped or caller-authentication headers and scrubbed, and its body decoded, scrubbed and, when the caller
 //! requires it, re-encoded chunk by chunk.

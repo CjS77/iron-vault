@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The request form gate ([spec §8][s8] step 2): only an origin-form request that asks for no protocol change goes on.
 //!
 //! A `CONNECT` tunnel, an absolute-form target or an upgrade would carry a request around route selection and the final

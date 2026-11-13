@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The vault manifest: the service's own index of which credential records exist
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 //! [§13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).

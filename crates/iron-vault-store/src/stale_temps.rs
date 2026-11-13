@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The stale temporary file sweep: removes the temporary files that unfinished durable replaces left behind.
 //!
 //! A durable replace of `manifest.age` first writes `.manifest.age.tmp`. A crash before the rename leaves that file

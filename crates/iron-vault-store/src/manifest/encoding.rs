@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The manifest payload v1 encoding: the plaintext a manifest file seals
 //! ([payload format](../../../../design/storage-formats.md#manifest-payload-v1)).
 

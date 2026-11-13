@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A `tpm` approver's TPM approval PIN as a migration authorization method (`design/migration-authorization.md`, "Which
 //! method is asked"; `design/tpm-approval-signer.md`, "Migration"). Over a real admin socket, `recipient add` asks the vault
 //! passphrase first, switches to the TPM approver, and is authorized by the TPM's signature over the challenge's migration

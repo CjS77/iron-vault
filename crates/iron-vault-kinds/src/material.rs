@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Credential material: the decrypted secret fields of one credential record, in the shape its kind consumes
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 //! [future spec §2.2](../../../design/future-specifications.md#22-credential-kinds)).

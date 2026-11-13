@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Looks up the uid of the one account the helper answers, by default the service account `iron-vault`.
 //!
 //! The helper reads `/etc/passwd` directly, where the package's `sysusers.d` file puts the service account, rather

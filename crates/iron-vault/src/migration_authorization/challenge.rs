@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The migration challenge and its binding digest
 //! ([migration authorization: Migration challenge](../../../../design/migration-authorization.md#migration-challenge)).
 //!

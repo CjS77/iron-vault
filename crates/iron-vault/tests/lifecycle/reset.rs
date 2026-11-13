@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `reset` end to end over a real admin socket against a running service context (specification §5, §16;
 //! design/reset.md): the confirmation, the lock-first withdrawal, the discard and the state it leaves, the refusals that
 //! remove nothing, and the audit log.

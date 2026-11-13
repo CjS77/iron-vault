@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A `[routes.<name>]` section: one upstream with the credential sent to it, where the credential goes, and the
 //! restrictions on what callers may send
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),

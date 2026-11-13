@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Verifies the Linux package's and the Compose host's systemd units and prints the service's exposure score.
 #
 # `systemd-analyze verify` is the gate: any complaint fails the script. `systemd-analyze security` only reports a

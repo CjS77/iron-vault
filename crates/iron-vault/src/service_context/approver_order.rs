@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Decides the approver order
 //! ([approval signers: Approver order](../../../../design/approval-signers.md#approver-order)): which pinned approver
 //! the approver prompt asks first, and which each switch moves to.

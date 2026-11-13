@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A TLS test upstream on loopback that records exactly what reaches it (implementation spec §2: "use a mock upstream to
 //! observe exactly which requests and credentials left the service").
 //!

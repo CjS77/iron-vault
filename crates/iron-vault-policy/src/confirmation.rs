@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A route's owner-confirmation policy: whether each request needs fresh owner confirmation
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 //!

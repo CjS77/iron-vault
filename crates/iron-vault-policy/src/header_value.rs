@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! HTTP header field values, as received from callers and as written for upstreams
 //! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!

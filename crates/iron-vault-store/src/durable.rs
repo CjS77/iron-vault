@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Durable writes: replace or remove a file so the change survives power loss, and read a file with a size limit
 //! ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 //!

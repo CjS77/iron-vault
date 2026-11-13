@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The handler registry: which async handler serves each admin command. The admin server looks up the command of each
 //! admin request here, after the admin principal check, and runs its handler. A command with no handler is answered
 //! `unknown-command`.

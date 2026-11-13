@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Encodes and decodes the [approval payload v1](../../../../design/storage-formats.md#approval-payload-v1) and the
 //! [approval envelope v1](../../../../design/storage-formats.md#approval-envelope-v1).
 //!

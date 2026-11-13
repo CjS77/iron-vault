@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The kind boundary: credential material in, slot value and scrub patterns out
 //! ([future spec §2.2](../../../design/future-specifications.md#22-credential-kinds)).
 //!

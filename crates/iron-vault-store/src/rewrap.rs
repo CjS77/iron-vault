@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The recipient change transaction: rewrapping the vault identity for a new recipient set and writing the inventory
 //! that describes it ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
 //! [§14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory),

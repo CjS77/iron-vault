@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The release-check rejection suite for migration authorization (specification §19, §16;
 //! design/migration-authorization.md), driven through a real admin socket. Rows marked *export* run the real `export`
 //! command, and count it authorized once it asks for the new export passphrase, where the test hangs up. The other rows

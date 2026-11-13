@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Decides what the caller sees of an upstream redirect's `Location`
 //! ([spec §8](../../../design/iron-vault-specification.md#8-request-flow),
 //! [§11](../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing)). The service calls

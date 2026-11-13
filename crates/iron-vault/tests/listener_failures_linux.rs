@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `status` lists each approved listener that did not open, with a fixed reason (specification §15, §16;
 //! `design/admin-protocol.md#status`), and an approval that fixes or removes the listener clears the entry.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Reading administrator-installed files: a TLS listener's certificate chain and key, and a route's pinned CA file.
 //!
 //! Whoever can write one of these files can impersonate Iron Vault to TLS callers or send a route's credential to an

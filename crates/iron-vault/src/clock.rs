@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The wall clock ([glossary: *Wall clock*](../../../design/glossary.md#terms)): the one place the service reads the
 //! current UTC time, so the recovery schedule is tested by setting the time instead of waiting for it.
 

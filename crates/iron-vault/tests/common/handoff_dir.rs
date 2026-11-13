@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A host unlock handoff in a private directory, for the tests of the service's host unlock and `import --host-unlock`.
 
 use std::fs;

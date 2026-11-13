@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The one ustar entry header form the migration bundle uses: every field fixed except the name, size and checksum
 //! ([migration bundle v1, "Entry header"](../../../../design/storage-formats.md#entry-header)).
 //!

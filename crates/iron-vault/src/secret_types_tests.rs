@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Compile-time and `Debug` checks for this crate's secret-bearing types ([spec §14][s14], [inventory][inv]).
 //!
 //! A type that gains `Clone`, `Copy`, `Display` or a serde impl would start copying, printing or writing the secret it

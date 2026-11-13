@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Release check 9 (specification §19): "A second writer fails; a damaged credential does not overwrite healthy records;
 //! every durable rename includes its directory fsync." These tests show the middle clause for the write commands.
 //!

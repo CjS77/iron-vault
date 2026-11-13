@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Builds the Linux package (.deb) and checks it against design/linux-package.md.
 #
 # Build tools (not workspace dependencies):

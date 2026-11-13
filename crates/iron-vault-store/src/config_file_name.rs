@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Config file names: the four data files the approval transaction keeps in the config directory
 //! ([config approval](../../../design/config-approval.md#file-layout)).
 //!

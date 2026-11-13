@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Encodes and decodes the helper response `IVTR` v1: a status byte, then the fields that status carries
 //! ([TPM approval signer: helper protocol](../../../design/tpm-approval-signer.md#helper-protocol)).
 //!

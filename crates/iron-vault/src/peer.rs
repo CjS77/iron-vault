@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Who is at the other end of a Unix socket, as the kernel reports it ([spec §5][s5], [§7][s7]).
 //!
 //! Both the admin socket and the request sockets judge a connection only by this answer: the admin socket checks it

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use super::*;
 
 const WALKED_ID: FileId = FileId { dev: 2049, ino: 77 };

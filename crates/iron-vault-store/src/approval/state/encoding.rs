@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Encodes and decodes the plaintext that `approval.age` seals, the
 //! [approval state payload v1](../../../../../design/storage-formats.md#approval-state-payload-v1).
 //!

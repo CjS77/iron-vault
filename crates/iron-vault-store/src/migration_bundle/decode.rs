@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The strict streaming migration bundle decoder for `import`: it accepts only the one encoding
 //! [`super::BundleEncoder`] writes.
 //!

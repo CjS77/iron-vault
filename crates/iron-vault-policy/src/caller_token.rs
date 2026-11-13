@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Caller tokens: the secret a caller presents on a token listener to prove which caller it is
 //! ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
 //!

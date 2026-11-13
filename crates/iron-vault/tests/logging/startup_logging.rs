@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Checks that `iron-vault serve --log-to-stdout` writes its startup event and missing hardening to stdout as JSON Lines, and refuses
 //! stdout when it may be the systemd journal.
 //!

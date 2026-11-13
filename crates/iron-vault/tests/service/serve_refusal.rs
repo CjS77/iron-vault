@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault serve` on an unsafe installation: it refuses to start, exits non-zero and names the failing path
 //! (specification §4, §19 "ownership failures produce explicit safe states").
 //!

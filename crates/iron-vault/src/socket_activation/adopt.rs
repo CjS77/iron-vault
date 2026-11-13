@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Taking the sockets systemd passed and checking each against its listener before anything uses it.
 
 use std::collections::BTreeMap;

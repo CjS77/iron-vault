@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Checks, for one migration operation, that the owner proves now a factor already enrolled for this vault
 //! ([spec §16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration),
 //! [§19](../../../design/iron-vault-specification.md#19-v0-user-acceptance);

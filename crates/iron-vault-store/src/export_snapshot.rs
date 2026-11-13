@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The export snapshot: the vault files `export` checks before any prompt and streams into a migration bundle after its
 //! authorization is consumed
 //! ([spec §16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration) steps 1 and 2;

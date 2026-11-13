@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `approver list` over a real admin socket (design/approval-signers.md, "`approver list`"): the approvers in approver
 //! order, the marker on the signer of the active approval, and the refusal outside Ready.
 

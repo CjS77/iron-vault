@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Log redaction and startup logging checks that install no process-wide subscriber.
 
 // Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.

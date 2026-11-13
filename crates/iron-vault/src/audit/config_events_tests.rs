@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The approval reservation, commit and recovery events: each writes its name, level and exactly its own fields.
 
 use iron_vault_store::{ApprovalVersion, ConfigDigest, ConfigFileName, DiscardedFile, ErrorKindLabel, PublishSet};

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The upstream client against a recording TLS test upstream (specification §8 step 9, §9, §10, §15).
 //!
 //! Each test sends a checked request built through the public policy API and asserts on what the upstream actually

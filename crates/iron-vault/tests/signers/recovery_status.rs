@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `status` reports the recovery check record in every form (design/recovery.md, "Status"), read from disk on each call
 //! with the service's own clock.
 

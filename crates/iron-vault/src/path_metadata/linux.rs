@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Linux path metadata through `lstat` and `readlink`, and the running binary through `/proc/self/exe`.
 
 use std::cell::Cell;

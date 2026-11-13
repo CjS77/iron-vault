@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Enrolling a TPM approver for `approver add --kind tpm`
 //! ([TPM approval signer, "Enrollment"](../../../../../design/tpm-approval-signer.md#enrollment)). The TPM signing
 //! helper makes the key, the service writes its blob as `approver-<approver ID>.tpm`, and the approver is pinned only

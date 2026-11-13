@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The `status` result: the status report and its field encoding
 //! ([admin protocol: `status`](../../../../../design/admin-protocol.md#status)).
 //!

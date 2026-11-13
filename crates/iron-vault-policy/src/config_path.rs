@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Checks absolute filesystem paths named in configuration, such as listener sockets and TLS material
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 //! [§7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).

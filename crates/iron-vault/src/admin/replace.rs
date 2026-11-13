@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `replace`: writes new material and origins under a name the manifest already lists, healthy or damaged
 //! (spec [§6][s6], [§14][s14]; [credential commands: Order of steps](../../../../design/credential-commands.md#order-of-steps)).
 //!

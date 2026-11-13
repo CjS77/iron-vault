@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The offline recovery key: a second, independent way to unwrap the identity envelope when the machine or the
 //! passphrase is lost ([spec §3](../../../design/iron-vault-specification.md#3-terms-and-definitions),
 //! [§14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory),

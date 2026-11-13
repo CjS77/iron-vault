@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The migration authorization step of an admin exchange (design/migration-authorization.md, "Admin exchange", steps 5 to
 //! 7), driven over the admin socket by a stand-in command that runs only that step: the right vault passphrase gives an
 //! authorization, and every refusal gets its error code, retires the challenge, records one closing audit event, and

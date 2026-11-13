@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Approval recovery: the first part of every config check, at startup and on reload
 //! ([config approval, "Recovery"](../../../../design/config-approval.md#recovery);
 //! [spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).

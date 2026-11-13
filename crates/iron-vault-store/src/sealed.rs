@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Sealed files: binary `age` ciphertext encrypted to the vault public key
 //! ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 //!

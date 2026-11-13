@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `export`: releases the vault as a migration bundle sealed to an export passphrase, only after fresh source-owner
 //! authorization ([spec §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration);
 //! [migration bundle: Export](../../../../design/migration-bundle.md#export-1);

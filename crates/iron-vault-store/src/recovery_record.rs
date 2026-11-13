@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The recovery check record: state file `recovery.toml` ([recovery](../../../design/recovery.md#the-recovery-check-record),
 //! [file format](../../../design/storage-formats.md#recovery-check-record)).
 //!

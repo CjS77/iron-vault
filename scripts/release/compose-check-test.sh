@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Tests that compose-check.sh's preflight and compose-unlock-check.sh's preflight_unlock refuse a host without BuildKit before they
 # touch any host path, and that compose-check.sh accepts only an image whose `--version` lists exactly `container`. Every tool is a
 # stub in a mktemp dir ahead of PATH, so it needs no Docker, root or VM and writes nowhere else.

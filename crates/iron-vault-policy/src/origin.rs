@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Parses one permitted origin as the owner writes it when enrolling a credential, as in
 //! `iron-vault add fx_key --origin api.fx.example`
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Comparing admin responses, which have no `PartialEq` because `caller-token`'s result holds a secret.
 
 use iron_vault::admin::protocol::AdminResponse;

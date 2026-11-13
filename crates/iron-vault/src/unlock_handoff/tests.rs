@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;

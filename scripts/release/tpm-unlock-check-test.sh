@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Tests that tpm-unlock-check.sh refuses to start before it changes anything: with no opt-in, as an ordinary user, with the package
 # missing, and off Ubuntu 24.04, where it runs item 14 alone. Every tool is a stub in a mktemp dir ahead of PATH, and each stub that
 # could change a host leaves a marker, so it needs no root, TPM or VM. The script only defines functions when sourced, so each case

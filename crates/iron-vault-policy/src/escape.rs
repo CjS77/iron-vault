@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) character classes and the percent-escape walker shared by every
 //! path parser in this crate.
 //!

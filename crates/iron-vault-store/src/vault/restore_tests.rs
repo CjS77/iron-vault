@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Partial restore end to end: a control file copied back from an older copy, or deleted, after real writes is refused
 //! at open, at approval state load and by every write; a history written normally, or cut short by a failure at any
 //! step, never is.

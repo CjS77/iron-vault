@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the service's part of `recovery check`, which proves the offline recovery key still opens the vault and
 //! records when
 //! ([recovery: States and the service-wide lock](../../../../design/recovery.md#states-and-the-service-wide-lock)).

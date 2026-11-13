@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! An unusable approval passphrase (empty input) is answered as a wrong one, and each path that does so writes exactly one
 //! refusal event with `wrong_passphrase` (design/admin-protocol.md; design/audit-logging.md): `config.approval-refused`
 //! with the config's digest for `config approve`, and `vault.presence-refused` without one for `rm`.

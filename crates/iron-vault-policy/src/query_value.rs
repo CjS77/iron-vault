@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Encodes a credential for a query slot, and decodes caller query parameters to compare with the slot's name
 //! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!

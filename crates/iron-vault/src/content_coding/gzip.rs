@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The gzip engine ([RFC 1952][rfc1952]): members back to back, each a header, a raw deflate stream and a CRC-32 and length trailer.
 //!
 //! flate2's own gzip decoders are pull-based readers; this one parses the framing byte by byte so it can be fed any

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `approver list`: every pinned approver in approver order
 //! ([spec §14](../../../../design/iron-vault-specification.md#14-recipients-startup-and-memory);
 //! [approval signers: `approver list`](../../../../design/approval-signers.md#approver-list)).

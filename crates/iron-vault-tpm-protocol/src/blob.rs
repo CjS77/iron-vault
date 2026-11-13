@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Encodes and decodes the TPM key blob `IVTK` v1, which the store keeps as `approver-<approver ID>.tpm`
 //! ([TPM approval signer: the TPM key blob](../../../design/tpm-approval-signer.md#the-tpm-key-blob)).
 //!

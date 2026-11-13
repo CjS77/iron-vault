@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The proxy handler: serves one caller request end to end, from the request server to the upstream and back
 //! ([spec §8][s8]). It is the request interface's [`RequestHandler`]: the part of the service that turns an approved
 //! route into an upstream call carrying the stored credential, without the caller ever holding that credential.

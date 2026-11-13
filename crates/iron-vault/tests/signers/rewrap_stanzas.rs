@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Release check 8 (specification §19): "Recovery opens the vault through an independent recipient; passphrase envelopes
 //! never create an invalid mixed-recipient `age` file."
 //!

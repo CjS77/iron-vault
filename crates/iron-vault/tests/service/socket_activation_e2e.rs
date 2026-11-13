@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A real passed socket under `systemd-socket-activate`, which sets `LISTEN_*` and passes a listening socket to the
 //! service the way systemd does (specification §7; the end-to-end run `socket_activation.rs` leaves to EP-34).
 //!

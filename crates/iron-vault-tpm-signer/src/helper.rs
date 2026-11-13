@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The binary's I/O: the connection it answers, the account it accepts, and the TPM commands it runs.
 
 mod connection;

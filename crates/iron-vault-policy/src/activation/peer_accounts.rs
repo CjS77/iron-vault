@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Resolves each peer caller's `user` to the uid the kernel will report for it
 //! ([spec §7](../../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)). Activation runs
 //! this once, so identifying a peer caller at request time is a uid comparison.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The request event, `request.completed`, and the `request.defect` audit event that accompanies a service defect
 //! ([audit logging: request event](../../../../design/audit-logging.md#request-event)).
 //!

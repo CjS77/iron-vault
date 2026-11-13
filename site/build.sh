@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Assembles the public website in _site/: the landing page, the brand assets it uses,
 # and (when it has been built) the manual under _site/manual/.
 #

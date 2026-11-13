@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Markers: `{iv:name}` placeholders an SDK may put where its API key belongs
 //! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules),
 //! [implementation spec §2.2 Q-1](../../../design/implementation-specification.md#22-product-decisions-and-resulting-behavior)).

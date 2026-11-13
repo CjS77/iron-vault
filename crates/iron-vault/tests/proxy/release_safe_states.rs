@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The twelfth v0 release check (specification §19): "Locked startup, invalid policy, TLS failures, unsafe listener
 //! configurations, and ownership failures produce explicit safe states."
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Audit events about a damaged vault, from the store's open report and errors
 //! ([audit logging: catalogue, "Corruption"](../../../../design/audit-logging.md#catalogue)).
 //!

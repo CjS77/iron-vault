@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Parses and matches path patterns, the route restriction that decides which upstream paths a route may reach
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)). Authorization
 //! matches them against the request path below the route prefix.

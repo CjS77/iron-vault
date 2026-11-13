@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `init`: creates the vault, its two recovery paths and its first committed approval (spec [§12][s12], [§14][s14],
 //! [§16][s16]; [vault initialization: The exchange](../../../../design/vault-initialization.md#the-exchange)).
 //!

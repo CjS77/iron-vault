@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The `[logging] destination` setting: where the approved config sends the service's log
 //! ([spec §18](../../../design/iron-vault-specification.md#18-logging)).
 //!

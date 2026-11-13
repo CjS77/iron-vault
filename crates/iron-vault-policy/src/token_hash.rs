@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Token hashes: the form in which a config stores a caller token
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 //! [§7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).

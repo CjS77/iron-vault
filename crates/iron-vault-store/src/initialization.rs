@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The initialization state: what the state and config directories hold before a vault is unlocked, and the
 //! `init.unfinished` and `import.unfinished` markers that make `init` and `import` safe to interrupt
 //! ([vault initialization](../../../design/vault-initialization.md#initialization-state),

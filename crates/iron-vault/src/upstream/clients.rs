@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The upstream clients for one active policy: one per upstream trust its routes use
 //! ([spec §10](../../../../design/iron-vault-specification.md#10-outbound-tls-and-environment)). The serving snapshot
 //! holds them, and the proxy handler picks a request's client by route.

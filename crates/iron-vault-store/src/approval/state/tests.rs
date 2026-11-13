@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Approval state operations end to end, and under an injected failure or a power cut at every filesystem step.
 
 use std::io;

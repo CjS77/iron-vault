@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `recipient remove`: removes an enrolled recipient from the identity envelope and the inventory after owner presence
 //! (spec [§14][s14], [§16][s16]; [recipients: `recipient remove <age1…>`](../../../../design/recipients.md#recipient-remove-age1)).
 //!

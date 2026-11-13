@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The Compose reference config (`packaging/compose/config.example.toml`) passes the policy's approval-time checks,
 //! so an administrator who starts from it is not refused for the isolated-network rule.
 

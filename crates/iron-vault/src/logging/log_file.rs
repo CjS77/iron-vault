@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The log directory and `iron-vault.log` in it, written only through a directory descriptor the trust check verified
 //! ([audit logging: trust](../../../../design/audit-logging.md#trust);
 //! [audit logging: log file and rotation](../../../../design/audit-logging.md#log-file-and-rotation)).

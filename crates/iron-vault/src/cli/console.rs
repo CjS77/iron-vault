@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The owner console: collects owner input for the service's prompts, and shows the owner its notices and reveals
 //! ([admin protocol: owner input](../../../../design/admin-protocol.md#owner-input)).
 //!

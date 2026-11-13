@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Approval verification: each check accepts the committed approval and refuses everything else with its own variant.
 
 use ed25519_dalek::{Signer, SigningKey};

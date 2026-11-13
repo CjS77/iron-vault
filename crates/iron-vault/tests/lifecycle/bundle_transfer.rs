@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Bundle data frames over the admin server's exchange (`design/migration-bundle.md`, "Transfer"): the service sends a
 //! bundle and receives one, and each frame and the whole transfer have a deadline.
 

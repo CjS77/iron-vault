@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Encodes and decodes the helper request `IVTQ` v1, the one message the service sends on each helper connection
 //! ([TPM approval signer: helper protocol](../../../design/tpm-approval-signer.md#helper-protocol)).
 //!

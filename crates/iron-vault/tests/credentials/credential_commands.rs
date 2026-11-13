@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The credential commands' release checks (specification §6; §5; §19), run through the `iron-vault`
 //! binary in the development profile, where malware runs as the admin principal and reaches every admin command:
 //!

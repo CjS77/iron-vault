@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Why an upstream exchange failed, with nothing from the failure itself
 //! ([spec §15](../../../../design/iron-vault-specification.md#15-service-states-and-errors)). The proxy handler answers
 //! each class with a fixed status and the request event records its label.

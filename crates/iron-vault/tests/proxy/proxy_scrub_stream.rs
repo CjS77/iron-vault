@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Release checks for streamed-response scrubbing on the assembled service (specification §11, §19, implementation spec §3 "Streamed
 //! response compatibility"): a caller on the Unix request socket, the real request server and pipeline, and a test
 //! upstream that sends scripted chunks, as HTTP/1.1 chunks or as HTTP/2 DATA frames. `design/secret-handling.md` quotes the numbers the measuring tests print.

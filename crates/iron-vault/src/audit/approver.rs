@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The approver events: an approver change's `approver.enrolled`, `approver.removed` and `approver.change-failed`, and
 //! step 3's `approver.orphan-removed` ([approval signers: audit events](../../../../design/approval-signers.md#audit-events)).
 //!

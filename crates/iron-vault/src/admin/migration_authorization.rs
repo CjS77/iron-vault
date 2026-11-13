@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The migration authorization step of an admin exchange (spec [§16][s16], [§19][s19];
 //! [migration authorization: Admin exchange](../../../../design/migration-authorization.md#admin-exchange), steps 5 to 7): issue the
 //! challenge, ask for a source-owner method's secret (the vault passphrase first, then each `tpm` approver's TPM

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Approvers and recipients: who may approve a config and who can open the vault.
 
 // Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.

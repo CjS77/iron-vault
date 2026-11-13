@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The request server ([spec §8][s8] step 1, [implementation spec §3][i3]): HTTP/1.1 on every connection the request
 //! listeners accept, bounded by the operational limits before anyone is authenticated.
 //!

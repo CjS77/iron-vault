@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The three content-coding decisions of [spec §11][s11], each a pure function so the handler only applies them: which
 //! coding the upstream used, which coding the caller needs the response in, and which headers no longer describe the
 //! body.

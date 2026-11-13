@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The upstream client: the only way the service reaches an upstream ([spec §8][s8] step 9, [§10][s10],
 //! [implementation spec §1][i1]).
 //!

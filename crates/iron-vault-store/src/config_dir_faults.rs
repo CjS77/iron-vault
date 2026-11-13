@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Fault-injection and power-loss tests for the config directory's file operations, run against [`FaultFs`].
 
 use std::collections::BTreeSet;

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Checks that the workspace still compiles, with no warnings, for a non-Linux target.
 #
 # v0 runs only on Linux, but the crates are meant to build elsewhere so the later macOS and Windows services start

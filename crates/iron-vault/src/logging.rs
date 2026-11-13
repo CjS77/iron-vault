@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The service's log subscriber: JSON Lines records and the caps on HTTP and TLS dependency logging
 //! ([spec §18](../../../design/iron-vault-specification.md#18-logging);
 //! [audit logging: record shape](../../../design/audit-logging.md#record-shape)). Audit events, request events and

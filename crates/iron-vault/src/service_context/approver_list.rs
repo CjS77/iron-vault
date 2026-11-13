@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs `approver list`, which shows the pinned approvers and which one signed the active approval
 //! ([approval signers: `approver list`](../../../../design/approval-signers.md#approver-list)).
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The three events of `reset` ([reset: logging](../../../../../design/reset.md#logging)). None carries a secret, a
 //! typed confirmation or a file's contents; foreign file names, which the service did not choose, are escaped.
 

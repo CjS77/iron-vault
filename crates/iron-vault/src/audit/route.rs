@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Audit events about routes and the responses they relay
 //! ([audit logging: catalogue, "Routes and responses"](../../../../design/audit-logging.md#catalogue)).
 

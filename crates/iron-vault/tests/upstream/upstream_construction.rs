@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Implementation spec §1 asks for one controlled outbound-client constructor. `clippy.toml` refuses reqwest's named
 //! constructors, but clippy cannot name a trait method such as `Client::default`, so this test searches every Rust
 //! source in the workspace for the forms clippy misses.

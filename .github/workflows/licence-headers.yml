@@ -1,0 +1,19 @@
+# MPL-2.0 applies file by file, so each source file names its licence in a one-line SPDX header. A separate workflow,
+# so a missing header never holds up the build and test jobs in ci.yml. Fix with scripts/check-spdx.sh --fix.
+name: Licence headers
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  spdx:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Every source file has the SPDX header
+        run: scripts/check-spdx.sh

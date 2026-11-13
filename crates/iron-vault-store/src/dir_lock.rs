@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Directory locks: the exclusive file lock that proves one process is the only writer of a directory.
 //!
 //! The state directory (lock file `lock`) and the config directory (lock file `config.toml.lock`) each take one through

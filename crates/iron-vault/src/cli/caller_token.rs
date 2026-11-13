@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault caller-token`: shows a newly issued caller token once, with the `token_hash` line the owner puts in their
 //! config to enroll it ([admin protocol: `caller-token`](../../../../design/admin-protocol.md#caller-token-1)).
 

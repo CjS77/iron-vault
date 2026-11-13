@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The service side of `replace` and `rm` (design/credential-commands.md): the plan's checks before any prompt, owner
 //! presence through the approval passphrase, and the write followed by the config check through
 //! `ServiceEvent::VaultChanged`, which must settle out of Checking even when its caller is dropped (§15).

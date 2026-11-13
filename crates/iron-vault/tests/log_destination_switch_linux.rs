@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! An approved config's `[logging] destination` moves the log at activation (specification §18, §15;
 //! `design/audit-logging.md`, "Switching at activation").
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! What opening or writing the vault found besides its healthy records and its change: the reports the service shows
 //! in `status` and writes to the audit log.
 

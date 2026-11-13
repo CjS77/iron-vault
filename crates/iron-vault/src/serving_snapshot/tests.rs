@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;

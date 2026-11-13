@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! How `init`'s refusals and failures are worded: which step failed, and what the owner does with the recovery key.
 
 use std::io;

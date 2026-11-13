@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The pending slot: the one migration challenge the service holds
 //! ([migration authorization: Lifetime](../../../../design/migration-authorization.md#lifetime)).
 //!

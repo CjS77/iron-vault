@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault list` output: one line per credential, from the service's list. Pure, so the same list always prints the
 //! same bytes. It holds names, kinds, hosts and standing only, so it cannot print a secret.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Parses a route's `upstream` URL into its one canonical form
 //! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!

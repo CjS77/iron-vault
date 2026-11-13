@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the service's part of `export` ([migration bundle: Export](../../../../design/migration-bundle.md#export-1)):
 //! step 3, the snapshot checks before any prompt, and steps 9 and 10, consuming the authorization and streaming the
 //! snapshot.

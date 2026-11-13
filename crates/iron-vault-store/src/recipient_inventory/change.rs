@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The recipient change rule: which inventory a change to the recipient set leads to, or why it is refused
 //! ([spec §14](../../../../design/iron-vault-specification.md#14-recipients-startup-and-memory),
 //! [the recipient change](../../../../design/recipients.md#the-recipient-change)).

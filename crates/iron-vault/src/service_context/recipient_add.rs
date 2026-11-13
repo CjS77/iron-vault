@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the service's part of `recipient add`
 //! ([recipients: `recipient add <age1…>`](../../../../design/recipients.md#recipient-add-age1)): step 3, the
 //! inventory check and the change applied in memory, and steps 9 and 10, consuming the authorization and the rewrap.

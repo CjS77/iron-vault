@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Assembles the outgoing request: the authorized method, the upstream target and the outgoing headers, with the
 //! route's slot filled exactly once ([spec §8](../../../design/iron-vault-specification.md#8-request-flow) step 7,
 //! [§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).

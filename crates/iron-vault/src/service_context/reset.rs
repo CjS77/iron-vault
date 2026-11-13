@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the service's part of `reset` ([reset: The exchange](../../../../design/reset.md#the-exchange)), which
 //! discards a vault whose every way in is lost: the plan read before the summary, and the withdrawal and discard once
 //! the owner has confirmed.

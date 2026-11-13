@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A log record never formats a library error: it records `error_kind = %error.kind_label()` instead (specification
 //! §18, `design/audit-logging.md` "Library errors"). This test searches every log macro in the workspace's sources
 //! for a formatted value bound to an error name (`e`, `err`, `error`, `cause`, `source`) and fails on any that is not

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `import` end to end over a real admin socket: one service exports a vault and another, with a state directory of its
 //! own, imports the bundle (`design/migration-bundle.md`, "Import" and "Admin exchanges"). The destination stays Locked,
 //! `unlock` then leaves it Unavailable with `PolicyInvalid` because the committed config has no signature, and every

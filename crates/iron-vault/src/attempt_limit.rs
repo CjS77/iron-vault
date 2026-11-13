@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The vault passphrase attempt limit ([Passphrase attempt limit][design]): a count of consecutive owner failures that
 //! refuses further attempts for a cooldown which doubles with each failure. `unlock`
 //! and migration authorization prompt for the same passphrase and share one count.

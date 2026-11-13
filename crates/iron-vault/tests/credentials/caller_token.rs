@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `caller-token` over a real admin socket, served by the standard handlers: each call issues a fresh, valid token, and
 //! the service's log names the event without the token or its hash (spec §7, §18).
 

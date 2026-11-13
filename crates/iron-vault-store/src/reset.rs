@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The store half of [`reset`](../../../design/reset.md): what a reset would discard, read without the vault identity, and the discard
 //! itself.
 //!

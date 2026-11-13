@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! What the log file and stdout writers share: the latch a failed write trips, and the `Write` adapter that trips it
 //! ([audit logging: failure behaviour](../../../../design/audit-logging.md#failure-behaviour)).
 //!

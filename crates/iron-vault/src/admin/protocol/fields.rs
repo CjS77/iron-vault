@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The field layer every body uses except the bare values of owner input, reveal and bundle data: a `u16` tag, a `u32`
 //! length and the value, all big-endian, with tags strictly ascending so each body has exactly one encoding.
 //!

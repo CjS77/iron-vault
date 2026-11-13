@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The vault events whose fields are the service context's own steps, refusals and outcomes. Only the service context
 //! emits them, and it is Linux-only, so they are too.
 

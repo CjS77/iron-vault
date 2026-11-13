@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The admin protocol's frames and their pure codec ([admin protocol](../../../../design/admin-protocol.md)). The CLI and the admin server
 //! both encode and decode with it, so the two sides agree on every byte. Nothing here does I/O: the transport hands
 //! [`decode`] the bytes it has read and sends what [`encode`] writes.

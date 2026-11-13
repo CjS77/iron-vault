@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `config approve` refuses a `[logging] destination` that is, or lies inside, the state or config directory, named
 //! directly or through a symlink, before it reserves a version (`design/audit-logging.md`, "Switching at activation").
 

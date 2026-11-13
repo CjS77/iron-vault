@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Operational limits on request size, response size, time and concurrency
 //! ([implementation spec §3](../../../design/implementation-specification.md#3-implementation-gates-and-unresolved-details)).
 //!

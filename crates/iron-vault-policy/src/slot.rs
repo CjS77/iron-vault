@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Slots: where a route writes its credential, the one place in an outgoing request a credential may appear
 //! ([glossary](../../../design/glossary.md#terms), [spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!

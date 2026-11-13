@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Writes, removes and reads the owner-lock file
 //! ([TPM unlock: `lock` across restarts](../../../../design/tpm-unlock.md#lock-across-restarts)). `lock` and `reset`
 //! write it, a passphrase `unlock` removes it, and startup reads it before host unlock, so an owner's `lock` stands

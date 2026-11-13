@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The service as deployed: serve refusals, socket activation, packaging, hardening and the CLI.
 
 // Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.

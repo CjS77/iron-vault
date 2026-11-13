@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Release checks for compressed responses on the assembled service (specification §11, §19, implementation spec §3 "Streamed response
 //! compatibility"): a caller on the Unix request socket, the real request server and pipeline, and a test upstream that
 //! sends scripted, already compressed chunks. `design/secret-handling.md` ("Compressed responses") quotes the numbers

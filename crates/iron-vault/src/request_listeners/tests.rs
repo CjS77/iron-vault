@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Request listeners on real sockets, as the unprivileged test user, which is also the service account.
 //!
 //! Unix sockets live in a fresh `0711` directory under the system temp directory, which the runtime-directory rule

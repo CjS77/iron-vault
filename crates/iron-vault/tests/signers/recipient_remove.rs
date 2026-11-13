@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `recipient remove` end to end over a real admin socket against a running service context on an initialized vault
 //! (`design/recipients.md`, "`recipient remove <age1…>`"): the removal of an enrolled recipient, the refusals that come
 //! before any prompt, the owner presence that must follow the summary, and the sentence about old copies.

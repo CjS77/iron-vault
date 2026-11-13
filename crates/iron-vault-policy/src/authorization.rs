@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Route selection and request authorization ([spec §8](../../../design/iron-vault-specification.md#8-request-flow)
 //! steps 3–4, [§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules),
 //! [§15](../../../design/iron-vault-specification.md#15-service-states-and-errors)).

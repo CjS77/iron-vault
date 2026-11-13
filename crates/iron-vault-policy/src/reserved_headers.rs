@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Reserved headers: those that carry caller authentication or control transport, routing or method semantics
 //! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!

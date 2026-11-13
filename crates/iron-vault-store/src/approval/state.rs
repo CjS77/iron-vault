@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The approval state: the pinned approvers and the approval version counters, kept in `approval.age`
 //! ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),
 //! [§13](../../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).

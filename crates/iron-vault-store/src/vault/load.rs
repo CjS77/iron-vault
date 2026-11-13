@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Loading the record files the manifest lists, each classified against its manifest entry as healthy or damaged.
 
 use std::collections::BTreeMap;

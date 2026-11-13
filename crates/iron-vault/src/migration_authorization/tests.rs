@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::time::Duration;
 
 use iron_vault_store::{RecipientKey, VaultId};

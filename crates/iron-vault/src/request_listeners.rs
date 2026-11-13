@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The request listeners ([spec §7][s7], [§8][s8]): every configured listener open at once, each accepted connection tagged
 //! by the transport with the listener it arrived on and, on a Unix socket, the peer identity the kernel reports.
 //!

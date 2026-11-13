@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The ustar reader: entry headers, entry bytes, padding and the end of the archive, fed in pieces of any size.
 
 use std::collections::BTreeMap;

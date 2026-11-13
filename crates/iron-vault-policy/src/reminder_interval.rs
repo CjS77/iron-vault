@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The `[recovery] reminder_days` setting: how often the service reminds the owner to run a recovery check
 //! ([spec §16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration),
 //! [recovery design](../../../design/recovery.md#reminders)).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The trusted-path report: every trusted path a deployment names, checked in a fixed order, for startup and `status`.
 //!
 //! The service reads every path in the report before it unlocks anything, so startup refuses an unsafe or unchecked

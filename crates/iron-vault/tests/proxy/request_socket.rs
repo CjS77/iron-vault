@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Binding a request socket end to end, as the unprivileged test user: binding at `0666` in a trusted directory,
 //! stale and foreign files at the path, and the admin socket's path. The service account
 //! is the test's own uid.

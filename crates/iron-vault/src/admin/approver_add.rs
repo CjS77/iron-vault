@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `approver add`: enrolls a new approval signer after owner presence from a pinned approver
 //! ([approval signers: `approver add`](../../../../design/approval-signers.md#approver-add)).
 //!

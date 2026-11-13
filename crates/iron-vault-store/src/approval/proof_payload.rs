@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The [presence payload v1](../../../../design/storage-formats.md#presence-payload-v1) and the
 //! [migration proof payload v1](../../../../design/storage-formats.md#migration-proof-payload-v1): the two messages
 //! besides the approval payload that a TPM approver signs

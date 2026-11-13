@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MPL-2.0
 # Purge deletes what the service wrote outside dpkg's knowledge: /etc/iron-vault, /var/log/iron-vault and the listener
 # drop-ins. It deletes the vault, and with it the host unlock blob in /etc/iron-vault-host, only if the owner answers
 # yes to the debconf question, asked now as mariadb-server does; no answer, a non-interactive purge or a missing

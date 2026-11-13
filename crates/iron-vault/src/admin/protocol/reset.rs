@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `reset`'s success result ([reset: Result](../../../../../design/reset.md#result)). The request has no arguments.
 
 use iron_vault_store::VaultId;

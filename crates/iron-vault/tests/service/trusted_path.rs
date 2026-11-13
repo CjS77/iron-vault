@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Trusted-path checks on real files, as the unprivileged test user.
 //!
 //! The trees live under the system temp directory, normally `/tmp`: root-owned, sticky and world-writable. The

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Linux hardening through `rustix`: `RLIMIT_CORE`, `PR_SET_DUMPABLE` and `mlockall`.
 
 use rustix::mm::{MlockAllFlags, mlockall};

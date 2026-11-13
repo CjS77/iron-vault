@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Reading the stanza tags of an `age` v1 header without decrypting anything ([age v1](https://c2sp.org/age)).
 //!
 //! `age` keeps its parsed header private, so the store reads the header's text form itself. Both the sealed-file guard

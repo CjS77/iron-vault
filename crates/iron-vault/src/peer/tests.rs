@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 #[cfg(target_os = "linux")]
 use super::adapter::visible_pid;
 use super::*;

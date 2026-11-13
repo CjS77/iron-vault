@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Shared helpers for the upstream client's integration tests: a recording TLS test upstream, in HTTP/1.1 and HTTP/2
 //! modes, and checked requests built through the public policy API.
 

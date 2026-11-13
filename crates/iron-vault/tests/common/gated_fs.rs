@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A filesystem whose first read of an armed file blocks, so a test can hold a config check mid-way.
 
 use std::ffi::{OsStr, OsString};

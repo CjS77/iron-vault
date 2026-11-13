@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Recipients of the identity envelope: their public keys, the private keys that unwrap it, and the set it is wrapped
 //! for ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
 //! [§14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)).

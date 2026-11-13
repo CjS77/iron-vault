@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `recipient add --recovery` end to end over a real admin socket (`design/recipients.md`, "`recipient add --recovery`"): the
 //! service generates the key and shows it once, enrols it only after the owner confirms and authorizes, and the old recovery
 //! key can then be removed.

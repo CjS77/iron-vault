@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `recipient add`: enrols a recipient key the owner supplies, after migration authorization (spec [§16][s16],
 //! [§19][s19]; [recipients: `recipient add <age1…>`](../../../../design/recipients.md#recipient-add-age1);
 //! [migration authorization: Admin exchange](../../../../design/migration-authorization.md#admin-exchange)).

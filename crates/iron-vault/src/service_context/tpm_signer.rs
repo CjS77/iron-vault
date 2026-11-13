@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Uses a TPM approver's key
 //! ([TPM approval signer: Prompt and proof](../../../../design/tpm-approval-signer.md#prompt-and-proof)). Owner
 //! presence proves the PIN by having the TPM signing helper sign a fresh presence payload, and `config approve` keeps

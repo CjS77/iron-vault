@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The body of an upstream request: the caller's bytes, forwarded as they arrive ([spec §8][s8] step 9, [§9][s9],
 //! [implementation spec §3][i3]).
 //!

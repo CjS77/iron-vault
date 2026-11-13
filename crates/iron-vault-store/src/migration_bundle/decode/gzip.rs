@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The gzip framing, parsed by hand: one member with a flagless header, raw deflate and a checked trailer.
 //!
 //! A general gzip reader accepts file names, comments, extra fields and further members; the bundle allows none

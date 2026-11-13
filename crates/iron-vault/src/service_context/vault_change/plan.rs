@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the service's part of `replace` and `rm`
 //! ([credential commands: Order of steps](../../../../../design/credential-commands.md#order-of-steps)).
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The config check: the work the service does in Checking ([spec §12][s12], [§15][s15], [Q-5][i22]).
 //!
 //! Every entry to Checking (an unlock, a reload, an approval's commit, a repair) calls [`open_and_check`], which opens a

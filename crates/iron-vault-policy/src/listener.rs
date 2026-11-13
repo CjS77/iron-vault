@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A `[listeners.<name>]` section: a Unix socket or TCP address where callers reach the request interface
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 //! [§7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).

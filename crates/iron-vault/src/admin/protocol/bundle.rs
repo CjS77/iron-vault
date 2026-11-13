@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The bundle data frame and the results of `export` and `import` ([migration bundle: Transfer][transfer] and
 //! [Admin exchanges][exchanges]). Neither command's request carries the bundle: it travels as bundle data frames beside
 //! the exchange, so the service never reads or writes a path the owner names.

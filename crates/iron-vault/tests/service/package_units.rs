@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The Linux package's systemd units and `sysusers.d`/`tmpfiles.d` files, read as text from `packaging/linux`.
 //!
 //! The unit decides the account, core-dump, memory-locking and sandbox properties of a protected install, so each

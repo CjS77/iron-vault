@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The proxy handler end to end: a caller on a Unix request socket, the real request server and pipeline, and a
 //! recording TLS test upstream (specification §8 steps 9-10, §15).
 //!

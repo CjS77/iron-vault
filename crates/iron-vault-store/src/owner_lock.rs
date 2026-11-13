@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The owner-lock file: the empty state file `locked-by-owner` that makes an explicit `lock` outlast a crash, a restart
 //! and a reboot ([`lock` across restarts](../../../design/tpm-unlock.md#lock-across-restarts)).
 //!

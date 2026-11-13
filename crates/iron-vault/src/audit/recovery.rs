@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The recovery events: `recovery.checked` and `recovery.reminder` ([recovery: logging](../../../../design/recovery.md#logging)).
 //!
 //! It carries the outcome and fixed labels only: never the key's text, the store's error text or the record's bytes.

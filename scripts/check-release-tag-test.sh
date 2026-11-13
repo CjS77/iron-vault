@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Runs scripts/check-release-tag.sh against the accepted and refused tag names of the release-tag rule
 # (design/linux-package.md, "Building and checking the package").
 set -uo pipefail

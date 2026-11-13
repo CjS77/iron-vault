@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The platform adapter for trusted-path checks: reads the metadata of every component of a path, and identifies the
 //! running binary and invoking user.
 //!

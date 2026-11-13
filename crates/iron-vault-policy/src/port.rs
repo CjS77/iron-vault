@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Upstream TCP ports, as the config, credential records and the final outgoing-request check compare them.
 
 use std::fmt;

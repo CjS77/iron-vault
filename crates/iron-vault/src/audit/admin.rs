@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Audit events about the admin socket ([audit logging: catalogue, "Admin commands"](../../../../design/audit-logging.md#catalogue)).
 
 use super::{AUDIT_TARGET, AuditEvent, EventName};

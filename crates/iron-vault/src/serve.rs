@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault serve`: the service's entry point. [`run`] starts the service in this order:
 //!
 //! ```text

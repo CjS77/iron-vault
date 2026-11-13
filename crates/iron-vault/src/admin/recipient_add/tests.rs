@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use iron_vault_store::{EnvelopeError, RecipientChangeError};
 
 use super::*;

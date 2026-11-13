@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The migration bundle: the gzip-compressed ustar archive `export` writes and `import` reads
 //! ([spec §16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration) steps 2 and 4). The layout is
 //! [migration bundle v1](../../../design/storage-formats.md#migration-bundle-v1).

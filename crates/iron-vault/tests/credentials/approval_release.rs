@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The approval release checks of specification §19, end to end against a running service context:
 //!
 //! - an old config/signature pair fails after a newer approval, on restart and on SIGHUP;

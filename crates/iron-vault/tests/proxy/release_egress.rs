@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The first v0 release check (specification §19) through the running service: credentials added with `add`, routes
 //! approved with `config approve`, and requests sent to the service's own request sockets.
 //!

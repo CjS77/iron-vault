@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The running service: the one owned value that drives the service state model, keeps the vault identity from unlock
 //! until lock or stop, holds the open vault through the serving snapshot, and binds the request listeners
 //! ([spec §4](../../../design/iron-vault-specification.md#4-installation-and-ownership),

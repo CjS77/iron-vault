@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Audit events about the vault: its initialization, unlock refusals, lock drains and the facts of a write report
 //! ([audit logging: catalogue, "Credentials and vault writes" and "Initialization"](../../../../design/audit-logging.md#catalogue)).
 

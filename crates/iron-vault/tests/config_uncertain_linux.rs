@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! An approval-state write whose directory fsync fails is recorded through the JSON layer, in order (specification §12,
 //! §18; `design/audit-logging.md`, "Config approvals and checks"): a settled commit, a reservation, and init's first
 //! approval and approval state.

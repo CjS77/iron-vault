@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The serving gate end to end: a request refused at admission, the admission pause around a snapshot swap, and the
 //! withdrawal of a snapshot from the requests still running on it (specification §12, §15).
 //!

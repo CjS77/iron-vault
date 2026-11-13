@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The service state model from [spec §15](../../../design/iron-vault-specification.md#15-service-states-and-errors):
 //! the states the service can be in, the events that move it between them, and what each state lets callers and the
 //! owner do. The service context drives it; every transition it makes goes through [`next`], so the service cannot

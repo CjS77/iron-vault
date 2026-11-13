@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The approver prompt (spec [§6][s6], [§12][s12]): `config approve` asks it before signing, and `replace`, `rm`,
 //! `recipient remove`, `approver add` and `approver remove` ask it as owner presence
 //! ([credential commands: Owner presence](../../../../design/credential-commands.md#owner-presence)). All of them use this one prompt and

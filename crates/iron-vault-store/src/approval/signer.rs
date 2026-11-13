@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The [`ApprovalSigner`] trait: what signs a config approval for a pinned approver
 //! ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),
 //! [implementation spec §2.2](../../../../design/implementation-specification.md#22-product-decisions-and-resulting-behavior)

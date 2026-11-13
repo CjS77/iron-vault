@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The store-owned files: every name the store writes in the state and config directories
 //! ([removal order](../../../design/reset.md#removal-order)).
 //!

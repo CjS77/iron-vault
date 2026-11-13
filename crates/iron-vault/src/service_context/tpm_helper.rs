@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Talks to the TPM signing helper
 //! ([TPM approval signer: Helper protocol](../../../../design/tpm-approval-signer.md#helper-protocol)), the separate
 //! process that reaches the TPM, so the service never does: one connection per request, one framed request and one

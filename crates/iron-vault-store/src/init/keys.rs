@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Every key initialization generates, before anything is written
 //! ([the exchange](../../../../design/vault-initialization.md#the-exchange)).
 

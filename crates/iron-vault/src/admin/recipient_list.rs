@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `recipient list`: every enrolled recipient of the vault identity
 //! ([spec §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration);
 //! [recipients: `recipient list`](../../../../design/recipients.md#recipient-list)).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `approver remove`'s argument and success result
 //! ([approval signers: Admin protocol](../../../../../design/approval-signers.md#admin-protocol)). The ID travels as 16 raw bytes and stays
 //! raw in the request: the service, not the codec, checks that it is a version 4 UUID (`approver-invalid`), so only a

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `approver remove` end to end over a real admin socket (`design/approval-signers.md`, "`approver remove <approver ID>`"):
 //! retiring a signer with its own passphrase, the refusals before any prompt, step 3's read-back, and a key file that
 //! cannot be deleted.

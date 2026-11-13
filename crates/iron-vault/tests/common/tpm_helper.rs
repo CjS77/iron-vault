@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A stand-in for the TPM signing helper's socket (`design/tpm-approval-signer.md`, "Helper protocol"), for tests of the
 //! service side of enrollment: a stub that holds one P-256 key in memory and answers as told, and a bridge that starts the
 //! real helper binary per connection against `swtpm`, as systemd's socket unit does.

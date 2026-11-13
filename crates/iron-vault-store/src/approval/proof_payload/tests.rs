@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The presence and migration proof payloads: the documented examples, and a refusal for every malformed input.
 
 use proptest::prelude::*;

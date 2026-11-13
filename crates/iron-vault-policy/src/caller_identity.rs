@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Identifies which caller a request comes from, using the listener it arrived on and, on a peer listener, the
 //! connecting process's uid or, on a token listener, the caller token it presents
 //! ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners),

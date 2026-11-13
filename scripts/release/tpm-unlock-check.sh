@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Release check for TPM unlock on a protected Linux install: the evidence for implementation spec §3's "TPM unlock binding" and "TPM
 # authorization and power failure" gates (design/tpm-unlock.md "Release checks"; product spec §14 Recipients, startup, and memory;
 # §15 Service states and errors; §19 V0 user acceptance). Items 1 to 14 below are that section's numbers.

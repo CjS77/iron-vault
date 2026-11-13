@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The decompression budget: how much a single response may decode to ([spec §11][s11], [§15][s15],
 //! [implementation spec §3][i3]). A response over budget fails instead of growing without bound in memory.
 //!

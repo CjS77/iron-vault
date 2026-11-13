@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `init` end to end over a real admin socket against a running service context on a fresh state directory
 //! (specification §5, §12, §14, §15, §16; design/vault-initialization.md): the refusals before any prompt, the
 //! passphrase rules, the recovery key shown once and confirmed before anything is written, the vault `unlock` then

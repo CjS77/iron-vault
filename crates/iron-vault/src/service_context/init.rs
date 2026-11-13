@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the service's part of `init`
 //! ([specification §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration);
 //! [vault initialization: The exchange](../../../../design/vault-initialization.md#the-exchange)): the initialization

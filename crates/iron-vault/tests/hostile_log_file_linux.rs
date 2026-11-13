@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The whole log file after a hostile run holds none of the never-log values (specification §18; `design/audit-logging.md`,
 //! "Never logged"; K-85 and K-95 do the same for the stderr log of the upstream client).
 //!

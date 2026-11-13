@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MPL-2.0
 """Fail if `iron-vault-policy` gains a dependency that could bring I/O into the pure policy crate.
 
 Implementation spec §1 requires `iron-vault-policy` to perform no I/O. This guard reads `cargo metadata` and checks:

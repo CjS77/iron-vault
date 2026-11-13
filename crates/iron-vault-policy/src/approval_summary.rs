@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Describes, in the service's own words, what an approval changes
 //! ([spec §5](../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns),
 //! [config approval: approval summary](../../../design/config-approval.md#approval-summary)). `config approve` shows this

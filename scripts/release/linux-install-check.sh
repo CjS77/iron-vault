@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Release check for a real install of the Linux package (design/linux-package.md;
 # product spec §4 Installation and ownership, §5 Service and CLI separation of concerns, §7 Caller authentication and listeners,
 # §14 Recipients, startup, and memory, §18 Logging, §19 V0 user acceptance).

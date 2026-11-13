@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

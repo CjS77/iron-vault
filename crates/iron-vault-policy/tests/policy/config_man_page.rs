@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The Linux package's config man page (`packaging/linux/man/iron-vault-config.5`) is hand-written, so these tests keep
 //! it in step with the parser: it must name every key and value the parser accepts, and its EXAMPLE section must be a
 //! valid config.

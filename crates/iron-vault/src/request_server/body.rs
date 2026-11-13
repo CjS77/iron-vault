@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The request body counted against the body limit, the response body cut off at the request deadline, and the
 //! outermost response body that carries the request's record.
 

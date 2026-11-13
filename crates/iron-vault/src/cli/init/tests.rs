@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The recovery key watch: which advice the CLI gives when `init` ends without a service answer.
 
 use zeroize::Zeroizing;

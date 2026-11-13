@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The request pipeline: turns an incoming request into a checked request, the only form the upstream client sends,
 //! or into a pipeline refusal ([spec §8][s8] steps 3-8, [§9][s9]). The proxy handler calls it once per request; it
 //! is where the service decides who is asking, what they may do and which credential the request carries.

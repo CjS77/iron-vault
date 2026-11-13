@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The approval transaction end to end, and under an injected failure or a power cut at every filesystem call.
 //!
 //! Every failure is checked against the split that

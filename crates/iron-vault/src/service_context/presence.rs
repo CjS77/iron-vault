@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Opens a pinned approver's key with its approval passphrase or TPM approval PIN
 //! ([specification §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),
 //! [§6](../../../../design/iron-vault-specification.md#6-credential-records-and-configuration)): the one check both

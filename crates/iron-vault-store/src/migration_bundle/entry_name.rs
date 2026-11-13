@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The closed list of migration bundle entry names, in bundle order
 //! ([migration bundle v1, "Entries"](../../../../design/storage-formats.md#entries)).
 

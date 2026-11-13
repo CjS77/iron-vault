@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MPL-2.0
 """mdBook preprocessor: the glossary page, and links that leave the book.
 
 1. A chapter holding the `{{#glossary}}` marker gets `design/glossary.md` in its place, so the book's glossary is the

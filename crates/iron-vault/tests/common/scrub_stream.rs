@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Shared setup for the streamed-response release tests: the credentials the tests scrub for, a proxy serving a scripted
 //! upstream over HTTP/1.1 or HTTP/2, and a caller that reads the chunked response body chunk by chunk while the upstream is still sending it.
 

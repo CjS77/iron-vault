@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Vault writes end to end, and under an injected failure or a power cut at every filesystem step.
 
 use std::collections::BTreeMap;

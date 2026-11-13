@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Converts the TPM's ECC values into the fixed-length forms the helper sends: a 65-byte public point and a 64-byte
 //! signature ([TPM approval signer: the signing key](../../../design/tpm-approval-signer.md#the-signing-key)).
 

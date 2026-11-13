@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The answers `approver add` and `approver remove` share: the error response for each refusal an approver command can
 //! end with.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Owner presence's answers that end before the approver key is checked, driven through an exchange whose CLI end the
 //! test holds: input that cannot be the passphrase is refused as a wrong one, and a `lock` cancels the change.
 

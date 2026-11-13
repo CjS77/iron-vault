@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `forget-machine` end to end over a real admin socket against a running service context on an initialized vault
 //! (`design/forget-machine.md`): a key that is still a recipient is not forgotten and nothing changes, a removed key with a
 //! healthy recovery path is, an overdue recovery check or a broken independence rule is a fact in the result, and the

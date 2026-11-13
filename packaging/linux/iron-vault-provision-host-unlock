@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MPL-2.0
 # Generates the host unlock identity and seals it to this machine's TPM, for iron-vault.service's handoff unit
 # (design/tpm-unlock.md, "Provisioning"). Run once, as root. See iron-vault-provision-host-unlock(8).
 #

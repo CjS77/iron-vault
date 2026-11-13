@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault init`: the CLI's side of creating the vault
 //! ([admin protocol: `init`](../../../../design/admin-protocol.md#init-1)).
 //!

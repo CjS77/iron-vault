@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! What the config check learns about each credential and route beyond the policy: each credential's standing and each
 //! route fault ([glossary: *Credential standing*, *Route fault*](../../../design/glossary.md#terms)). The status report
 //! carries them, and the admin protocol encodes them; neither is defined there, so the domain does not depend on the

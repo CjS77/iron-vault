@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `config approve` end to end over a real admin socket against a running service context (specification §12, §5,
 //! §16): the summary as notices, the confirmation, the approval passphrase, then the transaction, the admission pause
 //! and the config check. Every test's log goes to one captured buffer, which must never hold an approval passphrase.

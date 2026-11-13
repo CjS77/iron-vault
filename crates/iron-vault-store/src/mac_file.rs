@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The MAC'd file frame shared by the vault manifest, the approval state and the recipient inventory
 //! ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
 //! [storage formats](../../../design/storage-formats.md#macd-file-frame)).

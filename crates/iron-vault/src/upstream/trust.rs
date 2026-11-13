@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Upstream trust: the trust anchors an upstream's certificate must chain to
 //! ([spec §10](../../../../design/iron-vault-specification.md#10-outbound-tls-and-environment)). The upstream client
 //! builds its TLS config from an [`UpstreamTrust`], so this module decides which certificates the service accepts.

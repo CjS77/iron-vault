@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The vault's life: init, reset, migration, bundle transfer, export and the admin socket.
 
 // Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.

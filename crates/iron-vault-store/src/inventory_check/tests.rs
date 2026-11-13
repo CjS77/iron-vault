@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use super::*;
 use crate::recipient_inventory::seal_with_role_code;
 use crate::test_vault::{TestVault, entry};

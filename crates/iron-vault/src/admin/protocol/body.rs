@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The bodies of every frame kind except owner input, which is never read as fields.
 
 use super::fields::{self, exact, first, read_flag, read_profile, read_text, read_u16, read_u64};

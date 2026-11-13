@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The slot value: the secret text a kind hands to slot filling
 //! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules),
 //! [§14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory),

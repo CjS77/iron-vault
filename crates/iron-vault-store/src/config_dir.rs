@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Durable file operations on the config directory: write the pending config and the staged approval, publish them,
 //! and clean up after a crash.
 //!

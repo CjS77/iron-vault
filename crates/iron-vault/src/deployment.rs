@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Decides where the service keeps its files and which account runs it, from the deployment profile this binary was
 //! built for. `main` resolves the profile once at startup; everything else in the service takes the resulting
 //! [`ServicePaths`], and library crates never see the profile at all.

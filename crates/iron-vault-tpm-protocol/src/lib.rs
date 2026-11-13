@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The shared language between the service and the TPM signing helper: the helper's wire protocol, the TPM key blob,
 //! and the TPM approval PIN with the authorization value derived from it
 //! ([TPM approval signer](../../../design/tpm-approval-signer.md)).

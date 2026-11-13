@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A host account table for tests that activate configs with peer callers.
 
 use std::collections::BTreeMap;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The upstream client in an environment a user controls (specification §10; §15 for diagnostics).
 //!
 //! Each test name starts with the rule it proves: a §10 rule, or §11's for the redirect. A test sets hostile

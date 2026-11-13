@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the task that accepts on the request listeners, and the
 //! [listener rebuild](../../../../design/glossary.md#terms) that replaces it without cutting off the requests already
 //! being served.

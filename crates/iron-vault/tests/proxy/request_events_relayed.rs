@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The request event of each request answered by relaying an upstream response, end to end: written once when the
 //! relayed body ends, cleanly or not, or when the relay refuses the upstream's head (specification §18;
 //! `design/audit-logging.md`, "Request event").

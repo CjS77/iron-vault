@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Serves the admin socket ([admin protocol: Admin socket](../../../../design/admin-protocol.md#admin-socket)): one
 //! exchange per connection, and nothing reaches a handler unless the kernel reports the peer as an admin principal.
 //!

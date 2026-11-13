@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The vault change check ([glossary: *Vault change check*][gl], [design][design]): the dry run `replace` and `rm` make
 //! before any prompt. It activates the active config against the credential catalog as it would be after the change
 //! and keeps only the failures the change causes, so every name the active config references stays in the vault

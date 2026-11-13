@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The vault identity and its public key ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 //!
 //! The vault identity is the one `age` X25519 private key that opens every sealed file in the vault. It stays in

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Compile-time and `Debug` checks for this crate's secret-bearing types
 //! ([spec §14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory),
 //! [secret handling](../../../design/secret-handling.md#inventory)).

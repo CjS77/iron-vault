@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The config check against real files in temporary directories: a vault, an approval state and a config directory
 //! built through the stores' public API, and the published pair tampered with by hand.
 

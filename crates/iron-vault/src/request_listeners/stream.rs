@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! An accepted connection and the stream it becomes once its TLS handshake, if any, has run.
 
 use std::fmt;

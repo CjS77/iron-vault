@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `approver add`'s arguments and success result
 //! ([approval signers: Admin protocol](../../../../../design/approval-signers.md#admin-protocol)). Only the
 //! bounds are checked here: the label stays text, and the service validates it, so a bad one is `approver-invalid`. A

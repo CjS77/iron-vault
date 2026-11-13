@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // The integration tests' checked-request builder, so these tests build their request through the public policy API too.
 #[path = "../../../tests/common/checked.rs"]
 mod checked;

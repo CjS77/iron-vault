@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Creating an empty vault for `init`: the first manifest, which every later write builds on.
 
 use std::collections::BTreeMap;

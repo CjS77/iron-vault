@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::num::NonZeroU32;
 
 use proptest::prelude::*;

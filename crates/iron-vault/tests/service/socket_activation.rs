@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Checking a socket systemd passed against its listener, on real sockets the test creates in place of systemd: the
 //! socket type, whether it listens, its exact local address, and for a Unix socket its directory. The service account
 //! is the test's own uid.

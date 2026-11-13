@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Renders rejected configuration text and caller names inside error messages.
 //!
 //! Error messages reach logs and the owner's terminal, so any text that came from a config or a caller is escaped

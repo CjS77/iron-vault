@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // Brands the manual's menu bar to match the landing page: the IronVault lockup replaces the book title and links back to
 // the landing page, which the website serves one level above the manual (site/build.sh puts the book in _site/manual/).
 // The theme list keeps Auto, Light and Dark; iron-vault.css maps mdbook's other themes onto these two.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Finds short secrets: stored secret fields so short that they are probably a mistake
 //! ([spec §11](../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing),
 //! [§18](../../../design/iron-vault-specification.md#18-logging)).

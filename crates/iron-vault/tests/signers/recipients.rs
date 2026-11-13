@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The recipient epic's promises end to end through a real service on a vault made by `init` (`design/recipients.md`,
 //! "Release checks"): a rewrap never loses the vault and never touches a credential, a removal reaches only future
 //! envelopes, adding a key needs the vault passphrase even while Ready, and no secret reaches the log. The per-command

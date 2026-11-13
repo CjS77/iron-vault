@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the service's part of `recipient remove`
 //! ([recipients: `recipient remove <age1…>`](../../../../design/recipients.md#recipient-remove-age1)).
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Approver changes: enrolls or removes one approver, and keeps `approval.age` and the approvers' key files
 //! (`approver-<approver ID>.age` for software, `approver-<approver ID>.tpm` for TPM) consistent
 //! ([approval signers, "Approver changes"](../../../../design/approval-signers.md#approver-changes)). The service runs these for

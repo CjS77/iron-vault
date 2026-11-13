@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Checks a release tag name, for .github/workflows/release.yml.
 #
 # Usage: scripts/check-release-tag.sh <tag> [crate-version]

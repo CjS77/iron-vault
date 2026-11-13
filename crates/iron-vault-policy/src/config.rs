@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Parses the configuration document: listeners, callers, routes and limits, from TOML bytes
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 //!

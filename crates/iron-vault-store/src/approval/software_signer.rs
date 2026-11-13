@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The software signer: an Ed25519 approval key kept in its approver key envelope, `approver-<approver ID>.age`, sealed
 //! under the approval passphrase
 //! ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).

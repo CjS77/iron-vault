@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs `unlock`'s checks before the passphrase. Unlock needs an initialized vault
 //! ([vault initialization: State before and after](../../../../design/vault-initialization.md#state-before-and-after)).
 //! The state directories are read before the passphrase prompt and again under the context's mutex, so no passphrase

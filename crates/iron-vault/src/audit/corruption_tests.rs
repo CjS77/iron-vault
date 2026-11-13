@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The corruption events, the short-secret and commit-uncertain events: exact field sets, and the open that emits them.
 
 use std::collections::BTreeMap;

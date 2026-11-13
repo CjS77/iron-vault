@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Generated hostile requests through the assembled proxy, judged by what reached the recording upstreams (specification
 //! §19, second v0 release check; implementation spec §2).
 //!

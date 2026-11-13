@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The recovery reminder schedule against a running service context (specification §16, §18; design/recovery.md,
 //! "Reminders"), with a test clock for the wall time and a paused tokio clock for the 7-day spacing.
 //!

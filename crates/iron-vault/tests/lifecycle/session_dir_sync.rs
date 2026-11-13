@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Release check 9 over a whole session (specification §19): "Durable-write fault injection succeeds for each write
 //! boundary, and every durable rename includes its directory fsync."
 //!

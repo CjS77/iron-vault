@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs `config approve`: the approval transaction that makes a new config active
 //! ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload);
 //! [config approval: The transaction](../../../../design/config-approval.md#the-transaction)). The admin handler

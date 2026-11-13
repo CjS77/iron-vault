@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The book's reference pages, checked against the code they describe.
 //!
 //! `book/src/reference/errors.md` must give every admin `ErrorCode` a table row that starts with its number and name, and

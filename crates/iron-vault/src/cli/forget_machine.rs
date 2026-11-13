@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault forget-machine`: the CLI's side of the retired-machine check ([forget machine](../../../../design/forget-machine.md)).
 //!
 //! The service reports two facts; everything else printed here is fixed text. The CLI spawns no process: the commands in

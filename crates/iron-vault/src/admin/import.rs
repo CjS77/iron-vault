@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `import`: makes a vault from a migration bundle that `export` wrote on another machine
 //! ([spec §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration) steps 3 to 6;
 //! [migration bundle: Admin exchanges, Import](../../../../design/migration-bundle.md#import-1)).

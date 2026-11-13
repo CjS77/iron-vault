@@ -29,6 +29,10 @@ Keep domain logic pure, with I/O at the edges.
   code to audit, and its traits don't interoperate. Before adding or bumping one, check `Cargo.lock`; when an upstream
   crate forces a second version, say which crate in the ticket.
 - Run `cargo fmt` before committing.
+- Every new source file (`.rs`, `.sh`, `.py`, `.js`, or any script with a shebang) starts with the one-line licence
+  header `// SPDX-License-Identifier: MPL-2.0` (`#` instead of `//` outside Rust and JavaScript), on the line after
+  the shebang if there is one. MPL-2.0 applies file by file, so each file names its licence. `scripts/check-spdx.sh`
+  checks this in CI (the Licence headers workflow); `--fix` adds missing headers.
 
 ## Specification
 

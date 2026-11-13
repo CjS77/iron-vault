@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The stdout writer, for Docker, where the container runtime collects the records
 //! ([audit logging: stdout is never the journal](../../../../design/audit-logging.md#stdout-is-never-the-journal)).
 

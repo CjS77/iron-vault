@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The TPM signing helper's decisions that need no TPM: which messages it signs, the lockout reserve, and the
 //! encoding of its signatures ([TPM approval signer](../../../design/tpm-approval-signer.md)).
 //!

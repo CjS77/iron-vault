@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault recipient add --recovery`: the CLI's side of rotating the offline recovery key
 //! ([recipients: `recipient add --recovery`](../../../../design/recipients.md#recipient-add---recovery)).
 //!

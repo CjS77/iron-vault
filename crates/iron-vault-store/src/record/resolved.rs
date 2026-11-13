@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! One record's resolution for one request, kept with that record's permitted origins
 //! ([spec §6](../../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 //! [future spec §2.2](../../../../design/future-specifications.md#22-credential-kinds)).

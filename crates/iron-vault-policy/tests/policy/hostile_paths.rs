@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Property tests over hostile caller request paths
 //! ([spec §9](../../../../design/iron-vault-specification.md#9-url-header-and-slot-rules),
 //! [implementation spec §2](../../../../design/implementation-specification.md#2-verification-and-deferred-security-work)).

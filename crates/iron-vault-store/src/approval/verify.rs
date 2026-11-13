@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Verifies a config approval against the approval state
 //! ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),
 //! [§19](../../../../design/iron-vault-specification.md#19-v0-user-acceptance)). Every config check, at startup and on reload, calls

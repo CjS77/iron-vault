@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A reqwest error formats its request URL, so a query-slot credential would reach a log that formatted it; its error
 //! kind label must hold nothing of the URL (specification §18, `design/audit-logging.md` "Library errors").
 //!

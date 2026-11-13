@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Process hardening: turn off core dumps and keep memory out of swap before the service holds any secret.
 //!
 //! A core dump or a swapped-out page would leave the vault identity and credential values on disk in plain text

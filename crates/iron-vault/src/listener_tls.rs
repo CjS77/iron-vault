@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! TLS listeners ([spec §7][s7]): a TCP listener that terminates TLS with the certificate chain and private
 //! key the administrator installed for it, so a network observer can neither read caller tokens and request bodies
 //! nor change them.

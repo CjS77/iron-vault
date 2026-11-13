@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The admin socket client: runs one exchange per connection over a blocking Unix stream, and tells the owner how it went
 //! ([admin protocol: CLI client](../../../../design/admin-protocol.md#cli-client)).
 //!

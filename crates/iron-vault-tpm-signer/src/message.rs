@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Recognises the three messages the helper signs
 //! ([TPM approval signer: what the helper signs](../../../design/tpm-approval-signer.md#what-the-helper-signs)).
 //!

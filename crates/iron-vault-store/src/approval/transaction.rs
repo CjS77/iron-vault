@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the durable steps of a config approval: the six steps of
 //! [spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload), each durable before
 //! the next starts ([config approval, "The transaction"](../../../../design/config-approval.md#the-transaction)). The

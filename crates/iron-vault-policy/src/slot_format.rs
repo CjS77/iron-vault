@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Slot formats: the fixed text around a credential written into a header slot
 //! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).
 //!

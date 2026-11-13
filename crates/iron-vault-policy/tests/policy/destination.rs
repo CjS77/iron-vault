@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Property tests for the destination invariant
 //! ([spec §6](../../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 //! [§9](../../../../design/iron-vault-specification.md#9-url-header-and-slot-rules);

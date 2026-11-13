@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Library errors and their error kind labels ([Library errors][design], [spec §18][s18]).
 //!
 //! A library error's `Display` and `Debug` may hold a URL with its query, a header value or a path, and a query-slot

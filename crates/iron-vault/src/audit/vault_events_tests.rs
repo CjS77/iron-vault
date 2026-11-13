@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The vault, credential, caller, route and response events: each writes its name, level and exactly its own fields.
 
 use iron_vault_kinds::SecretField;

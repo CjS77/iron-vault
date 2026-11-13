@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The open vault: the store's view of the credential records, which the service opens at `unlock` and writes for
 //! `add`, `replace` and `rm`
 //! ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Binding the service's Unix socket files ([spec §7][s7], [Admin socket][admin]): a socket owned by the service account
 //! at one fixed mode, never connectable at any other.
 //!

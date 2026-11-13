@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Redirect `Location` handling through the proxy handler end to end: a caller on a Unix request socket, the real
 //! request server and pipeline, an FX route with a query slot and a Brave route with a header slot, each in front of a
 //! recording TLS test upstream (specification §8, §11, §15).

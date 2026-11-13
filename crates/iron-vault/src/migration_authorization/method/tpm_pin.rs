@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A `tpm` approver's TPM approval PIN as a source-owner method
 //! ([TPM approval signer: Migration](../../../../../design/tpm-approval-signer.md#migration);
 //! [migration authorization: Source-owner method](../../../../../design/migration-authorization.md#source-owner-method)).

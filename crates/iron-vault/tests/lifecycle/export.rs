@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `export` end to end against a running service on a vault whose envelopes open with a vault passphrase
 //! (`design/migration-bundle.md`, "Export" and "Transfer"). A bundle leaves only after the vault passphrase, sealed to an
 //! export passphrase; every other ending leaves no bundle and no partial file, and no secret reaches a file, the output

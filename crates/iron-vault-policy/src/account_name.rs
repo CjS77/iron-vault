@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The OS account a `peer` caller must connect as
 //! ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
 //!

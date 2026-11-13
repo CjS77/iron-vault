@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The migration release checks ([§19](../../../design/iron-vault-specification.md); design/migration-bundle.md,
 //! "Release checks"): one test per part of "Export/import preserves records, counters, recovery access, and the service
 //! boundary without writing plaintext secret artifacts". Each moves a vault from a source service to a destination

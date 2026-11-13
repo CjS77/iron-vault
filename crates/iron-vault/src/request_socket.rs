@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Binding a request socket ([spec §7][s7]): a Unix socket on which callers reach the request interface.
 //!
 //! Any local account may connect, so the socket has mode `0666` and the mode grants nothing: each connection carries

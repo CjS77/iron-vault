@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The connection tags the transport sets on every request ([spec §7][s7]): the listener it arrived on and, on a Unix
 //! socket, the peer's uid. Caller authentication trusts them because no request can set them. They live outside the
 //! Linux-only request server so the request pipeline, which reads them, stays pure and builds on every platform.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Checked requests for the test upstream, built through the public policy API exactly as the service builds them:
 //! parse a config, activate it, authorize, assemble and run the final check.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The fixed config and the hostile request-path generators that the property-test files share
 //! ([spec §9](../../../../design/iron-vault-specification.md#9-url-header-and-slot-rules);
 //! [implementation spec §2](../../../../design/implementation-specification.md#2-verification-and-deferred-security-work)).

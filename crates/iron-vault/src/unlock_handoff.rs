@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Reading the host unlock handoff: the file through which the host gives a Protected or Container service the host
 //! unlock identity ([Host unlock][hu], [spec §17][s17]).
 //!

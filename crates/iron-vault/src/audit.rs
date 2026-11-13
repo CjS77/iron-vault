@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Audit events: the typed records of administrative and security facts, such as a lock transition or a config approval
 //! ([spec §18](../../../design/iron-vault-specification.md#18-logging);
 //! [audit logging: audit events](../../../design/audit-logging.md#audit-events)). Each submodule holds one subject's

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Trusted-path rules: whether the service may rely on its binary, config, state and runtime paths.
 //!
 //! Encryption cannot protect a vault whose binary, config or state directory a caller can replace, so before it

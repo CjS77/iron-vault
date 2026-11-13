@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Converts an upstream host to its one canonical form, so hosts compare byte for byte.
 //!
 //! For example, `API.Example.com.` becomes `api.example.com`, and `bücher.example` becomes

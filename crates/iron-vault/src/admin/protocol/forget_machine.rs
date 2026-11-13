@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The `forget-machine` result ([admin protocol: forget-machine](../../../../../design/admin-protocol.md#forget-machine)): the
 //! independence rule's failure, if any, and the recovery check state in `status`'s encoding. The request is
 //! `recipient remove`'s: one key, as text.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Vault initialization at store level: the [write order](../../../design/vault-initialization.md#write-order), from
 //! `init.unfinished` to committed approval version 1
 //! ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),

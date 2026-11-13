@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The fourth v0 release check (specification §19): "Rate limits and path/method restrictions apply under concurrency;
 //! unavailable touch requirements never degrade to unconfirmed access."
 //!

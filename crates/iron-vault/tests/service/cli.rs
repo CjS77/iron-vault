@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The CLI binary end to end against an in-process admin server on a temporary socket, reached with `--admin-socket`:
 //! its output, its exit codes and the hints it gives. The service account is the test's own uid.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `recipient add`'s arguments and success result ([recipients: Admin protocol](../../../../../design/recipients.md#admin-protocol)).
 //! Only the bounds are checked here: the key and the label stay text, and the service parses and validates them, so a
 //! bad one is `recipient-invalid`.

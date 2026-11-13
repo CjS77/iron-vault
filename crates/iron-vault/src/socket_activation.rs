@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Socket activation ([spec §7][s7]): request listeners that systemd binds and passes to the service by name.
 //!
 //! A service that binds its own TCP port leaves a gap at every restart in which another local process can bind the

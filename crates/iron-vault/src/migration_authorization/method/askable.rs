@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The source-owner methods step 6 of the admin exchange can ask
 //! ([migration authorization: Which method is asked](../../../../../design/migration-authorization.md#which-method-is-asked)):
 //! the vault passphrase first, then each `tpm` approver in approver order, in one prompt the owner can switch between

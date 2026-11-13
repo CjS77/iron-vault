@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `list`: names, kinds, permitted origins and standing of every credential in the open vault, never a secret
 //! ([spec §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration);
 //! [admin protocol: list](../../../../design/admin-protocol.md#list)).

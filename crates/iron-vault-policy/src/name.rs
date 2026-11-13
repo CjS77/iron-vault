@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Names for callers, routes, listeners and credentials, valid on construction.
 //!
 //! Names reach logs and audit events, so every name type shares one strict rule that leaves no room for log

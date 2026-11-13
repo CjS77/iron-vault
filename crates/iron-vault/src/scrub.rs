@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The scrubber: replaces every occurrence of a request's scrub patterns in a streamed response body and in the
 //! response headers ([spec §11][s11]). It is the response stage's backstop: if an upstream echoes the injected
 //! credential in any of the forms its credential kind lists as scrub patterns, the caller sees [`SCRUB_REPLACEMENT`]

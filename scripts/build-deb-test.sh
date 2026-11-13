@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Runs build-deb.sh's feature check against `--version` outputs (design/linux-package.md, "Building and checking the package"):
 # only a binary built with no feature may be packaged.
 set -uo pipefail

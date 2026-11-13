@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Migration authorization in a running service context (specification §16, §19;
 //! design/migration-authorization.md): the vault passphrase method proving a challenge against the envelopes on disk,
 //! each refusal retiring the challenge, the passphrase attempt limit across challenges, and a `lock` during the check.

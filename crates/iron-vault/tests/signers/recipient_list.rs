@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `recipient list` end to end over a real admin socket against a running service context on an initialized vault
 //! (`design/recipients.md`, "`recipient list`"): the two entries `init` enrols, the refusal outside Ready, and a damaged
 //! inventory, which is reported by its code and label and leaves every file as it was.

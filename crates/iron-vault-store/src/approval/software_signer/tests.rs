@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The software signer: generate, seal, open against the pinned approver, sign, and verify with `verify_approval`.
 
 use super::*;

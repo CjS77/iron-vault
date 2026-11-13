@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MPL-2.0
 # On remove, stops and disables the listener socket instances before the generated snippet stops the service, and
 # stops the host unlock handoff unit after it.
 # cargo-deb generates nothing for the template unit (its name contains '@'). The listeners go first so that no

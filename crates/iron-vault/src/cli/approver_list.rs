@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault approver list` output: one line per approver, from the service's list. Pure, so the same list always prints
 //! the same bytes. It holds approver IDs, kinds, times and owner labels only, so it cannot print a secret.
 

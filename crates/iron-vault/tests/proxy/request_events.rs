@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The request event of each request that ends before a response head is relayed, end to end: the real request server,
 //! pipeline and proxy handler in front of a recording test upstream (specification §18; `design/audit-logging.md`,
 //! "Request event").

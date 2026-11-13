@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The HTTP/2 mode of the test upstream: a TLS server on loopback that offers ALPN `h2` only and records what each
 //! request's HEADERS frame carried, including how HPACK encoded every field.
 //!

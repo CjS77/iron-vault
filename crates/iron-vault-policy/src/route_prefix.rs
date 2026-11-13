@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Route prefixes: the leading request-path segments that select a route
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 //! [§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)).

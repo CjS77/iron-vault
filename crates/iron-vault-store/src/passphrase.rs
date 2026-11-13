@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Passphrase unlock: the operational identity and the passphrase envelope that holds it
 //! ([spec §14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory),
 //! [§15](../../../design/iron-vault-specification.md#15-service-states-and-errors),

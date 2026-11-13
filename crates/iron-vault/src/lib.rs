@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Iron Vault service library: the parts of the `iron-vault` binary that are tested on their own or shared between its
 //! modules. The binary is both the service (`iron-vault serve`) and the owner's CLI, which talks to the service over
 //! the admin socket ([spec §5](../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns)).

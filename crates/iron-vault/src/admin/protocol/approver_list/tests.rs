@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use super::super::{Decoded, Frame, FrameKind, put_frame};
 use super::*;
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Generating caller tokens from the operating system's random source
 //! ([spec §7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)). `iron-vault caller-token`
 //! prints one; the owner puts its hash in the config and gives the token to one caller.

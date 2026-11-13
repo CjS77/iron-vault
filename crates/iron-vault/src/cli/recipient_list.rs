@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault recipient list` output: one line per recipient, from the service's list. Pure, so the same inventory always
 //! prints the same bytes. It holds public keys, roles, times and owner labels only, so it cannot print a secret.
 

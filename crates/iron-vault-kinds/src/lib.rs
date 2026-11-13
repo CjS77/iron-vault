@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Kinds: the code that turns a stored credential into the secret text one request carries.
 //!
 //! This crate is the kinds bounded context. The store decrypts a credential record into [`CredentialMaterial`] and

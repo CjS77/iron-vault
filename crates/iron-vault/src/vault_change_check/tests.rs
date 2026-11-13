@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::collections::{BTreeMap, BTreeSet};
 
 use iron_vault_policy::{AccountName, Host, ParsedConfig, Port};

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The streaming migration bundle encoder for `export`: one gzip member around a ustar archive of the bundle's entries
 //! ([migration bundle v1, "Entry header"](../../../../design/storage-formats.md#entry-header)).
 

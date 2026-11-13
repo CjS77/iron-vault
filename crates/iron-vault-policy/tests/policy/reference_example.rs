@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The configuration reference's annotated example (`book/src/reference/configuration-example.toml`) must stay a
 //! valid configuration, and must keep showing every table and every kind of listener, caller and slot the reference
 //! describes.

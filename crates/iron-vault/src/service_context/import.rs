@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the service's part of `import`
 //! ([specification §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration),
 //! migration steps 4 and 5; [migration bundle: Import](../../../../design/migration-bundle.md#import-1)): the import

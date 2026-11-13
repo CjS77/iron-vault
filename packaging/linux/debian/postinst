@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MPL-2.0
 # The snippets cargo-deb generates (the debhelper token below) create the service account and its directories (sysusers.d and
 # tmpfiles.d), reload systemd, and enable and start iron-vault.service, or restart it on an upgrade. No listener socket
 # unit is enabled: the administrator creates those. Messages go to stderr because debconf's confmodule owns stdout.

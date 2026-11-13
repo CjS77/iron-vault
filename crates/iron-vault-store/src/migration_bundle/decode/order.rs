@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Bundle order: the fixed entries one after another, then approvers and records strictly ascending, numbering the header's counts
 //! ([migration bundle v1, "Entries"](../../../../../design/storage-formats.md#entries)).
 

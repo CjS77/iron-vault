@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The unfinished import: its classification, its discard by either command and the marker swap.
 
 use super::*;

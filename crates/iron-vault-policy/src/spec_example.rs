@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The [spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) configuration
 //! example, shared by tests that parse, validate and activate it.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Vault writes: adds, replaces or removes one credential record, or records the approval state in the manifest
 //! ([spec §6](../../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 //! [spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),

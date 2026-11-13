@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault reset`: the CLI's side of discarding the vault
 //! ([admin protocol: `reset`](../../../../design/admin-protocol.md#reset-1)).
 //!

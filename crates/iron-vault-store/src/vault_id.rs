@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The stable identity of one vault ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 
 use std::fmt;

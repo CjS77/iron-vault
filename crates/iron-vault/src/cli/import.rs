@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault import <bundle>`: the CLI's side of making a vault from a migration bundle
 //! ([migration bundle: transfer](../../../../design/migration-bundle.md#transfer)).
 //!

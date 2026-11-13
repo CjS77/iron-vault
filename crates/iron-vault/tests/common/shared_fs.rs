@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A [`FaultFs`] behind a lock, so a running service and the test can share one fault filesystem.
 
 use std::ffi::OsString;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The migration bundle file `export` writes ([Transfer](../../../design/migration-bundle.md#transfer)), through the store's file-system
 //! seam so the same durable-write checks that cover the vault's files cover the bundle too.
 //!

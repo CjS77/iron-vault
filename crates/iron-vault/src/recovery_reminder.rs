@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! When a recovery reminder is due ([Reminders](../../../design/recovery.md#reminders)). Every rule of the schedule is in
 //! [`reminder_due`], which reads no clock and no file: the service passes in the record, the interval, how long ago it
 //! last reminded and the time.

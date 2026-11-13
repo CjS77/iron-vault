@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The record payload v1 encoding: the plaintext a credential file encrypts
 //! ([record payload v1](../../../../design/storage-formats.md#record-payload-v1)).
 //!

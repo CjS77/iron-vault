@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the host unlock at startup
 //! ([Docker Compose: In the container](../../../../design/docker-compose.md#in-the-container);
 //! [specification §15](../../../../design/iron-vault-specification.md#15-service-states-and-errors)). A Protected or

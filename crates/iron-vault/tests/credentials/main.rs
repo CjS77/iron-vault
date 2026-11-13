@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Credential commands, caller tokens and config approval.
 
 // Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.

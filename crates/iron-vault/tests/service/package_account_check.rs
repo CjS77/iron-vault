@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The Linux package's `postinst` check of an `iron-vault` account or group that existed before the package.
 //!
 //! The check is the block of `packaging/linux/debian/postinst` between its BEGIN and END markers. Each test runs that

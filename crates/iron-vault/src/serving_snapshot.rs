@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Holds what the request side serves with, and swaps it as one unit
 //! ([spec §8](../../../design/iron-vault-specification.md#8-request-flow),
 //! [§12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).

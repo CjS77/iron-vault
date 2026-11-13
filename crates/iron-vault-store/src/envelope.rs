@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The identity envelope: the vault identity wrapped for every enrolled recipient in `identity.age`
 //! ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
 //! [§14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)).

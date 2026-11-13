@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The `config approve` test harness: a vault holding `fx_key` with a software approver, a running service context on it
 //! (over the real filesystem or any [`StoreFs`]), the admin conversation that drives `config approve`, and a captured
 //! log that must never hold an approval passphrase.

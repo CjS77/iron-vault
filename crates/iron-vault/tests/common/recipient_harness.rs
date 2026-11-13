@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A real service on an empty state directory, driven over the admin socket by the recipient command tests: `init`,
 //! `unlock`, and a snapshot of every state file's bytes.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `rm`: removes a credential record after owner presence (spec [§6][s6], [§16][s16];
 //! [admin protocol: rm](../../../../design/admin-protocol.md#rm); [credential commands](../../../../design/credential-commands.md)).
 //!

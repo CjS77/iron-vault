@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Scrub patterns: the byte forms of an injected secret that response scrubbing removes
 //! ([spec §11](../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing)).
 //!

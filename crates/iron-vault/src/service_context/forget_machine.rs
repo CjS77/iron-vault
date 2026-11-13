@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the service's part of `forget-machine`
 //! ([forget machine: What it checks](../../../../design/forget-machine.md#what-it-checks)), which checks that a
 //! retired machine's recipient key no longer opens the vault.

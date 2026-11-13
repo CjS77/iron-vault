@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `recipient add` end to end over a real admin socket against a running service on an initialized, unlocked vault
 //! (`design/recipients.md`, "`recipient add <age1…>`"; `design/migration-authorization.md`, "Admin exchange"). The key is
 //! enrolled only after a fresh vault passphrase; every other ending leaves `identity.age` and the inventory as they were.

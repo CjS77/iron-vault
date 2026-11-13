@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use iron_vault::hardening::MemoryProtection;
 use iron_vault::service_context::HostUnlockOutcome;
 use iron_vault::standing::RouteFaultKind;

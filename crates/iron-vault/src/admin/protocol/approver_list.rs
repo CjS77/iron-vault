@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The `approver list` result: one entry per pinned approver, in approver order
 //! ([approval signers: Admin protocol](../../../../../design/approval-signers.md#admin-protocol)). Approver IDs, kinds, labels and times
 //! only: no type here can hold a key or a secret.

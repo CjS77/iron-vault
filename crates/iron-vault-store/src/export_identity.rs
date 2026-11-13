@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The sealed entries of a migration bundle that hold keys: the exported identity envelope and the bundled approver keys
 //! ([spec §16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration) step 2;
 //! [exported identity envelope](../../../design/storage-formats.md#exported-identity-envelope),

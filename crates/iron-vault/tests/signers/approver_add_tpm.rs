@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A TPM approver end to end over a real admin socket (`design/tpm-approval-signer.md`, "Enrollment" and "Prompt and proof"):
 //! `approver add --kind tpm`, then `config approve` and `replace` asking the enrolled approver for its PIN. A stand-in for the
 //! TPM signing helper runs in the default suite; the same flows against the real helper and `swtpm` are `#[ignore]`d (see the

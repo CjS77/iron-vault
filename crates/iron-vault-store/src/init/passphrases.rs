@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The two passphrases the owner chooses at initialization, checked together against the
 //! [passphrase rules](../../../../design/vault-initialization.md#passphrase-rules).
 

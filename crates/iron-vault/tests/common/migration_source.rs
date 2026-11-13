@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A migration bundle exported from a real source vault, for the tests of `import`: one source service exports once per
 //! test binary, and the bundle's bytes are read back through the store, so a test compares the destination with what the
 //! source held. The source fixture stays alive, because the bundled config names a listener socket inside its directory.

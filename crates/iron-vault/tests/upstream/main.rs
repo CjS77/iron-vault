@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The outbound HTTPS client: construction, h1 and h2 behaviour, hostile environments and retry control.
 
 // Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.

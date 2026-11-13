@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Response decoders: turn a content-coded response body back into the bytes the scrubber screens ([spec §11][s11],
 //! [Q-6][i22], [implementation spec §3][i3]).
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Charges each authorized request against its route's and its caller's rate limits, safely under concurrency
 //! ([spec §8](../../../design/iron-vault-specification.md#8-request-flow),
 //! [§15](../../../design/iron-vault-specification.md#15-service-states-and-errors),

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The vault change summary ([glossary: *Vault change summary*][gl], [design][design]): the service's own account of one
 //! `replace` or `rm`, which the owner reads before owner presence ([spec §5][s5]). The CLI's display of it
 //! is never evidence of what the owner authorized.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The pinned approvers: each approval signer the approval state records, with the ID and label it is known by
 //! ([spec §12](../../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),
 //! [§14](../../../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)).

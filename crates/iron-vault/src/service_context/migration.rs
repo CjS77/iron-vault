@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs migration authorization in the service
 //! ([migration authorization: Admin exchange](../../../../design/migration-authorization.md#admin-exchange), steps 5
 //! to 7): issuing the migration challenge, the passphrase attempt limit before the prompt, and running a source-owner

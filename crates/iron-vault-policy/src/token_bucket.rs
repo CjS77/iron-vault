@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The token bucket that enforces a route's [`RateLimit`]
 //! ([spec §8](../../../design/iron-vault-specification.md#8-request-flow),
 //! [§15](../../../design/iron-vault-specification.md#15-service-states-and-errors)).

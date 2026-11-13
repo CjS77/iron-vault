@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault import` run as a child process: on a pseudo-terminal that is its controlling terminal, where it shows the
 //! recovery key, with the owner's answers typed into its stdin.
 

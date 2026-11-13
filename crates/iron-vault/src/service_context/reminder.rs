@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the recovery reminder schedule ([recovery: Reminders](../../../../design/recovery.md#reminders)), which
 //! writes `recovery.reminder` when the owner has not proved the recovery key for longer than the configured interval.
 //!

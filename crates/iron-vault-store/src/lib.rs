@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Iron Vault's on-disk store: the files the service keeps in its state and config directories, and the rules for
 //! reading and writing them ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 //!

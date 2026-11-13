@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `reset`: discards the vault and the config after a confirmation typed at a terminal
 //! ([reset: The exchange](../../../../design/reset.md#the-exchange)).
 //!

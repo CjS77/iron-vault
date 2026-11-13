@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Import exchange steps 3 and 4: opens a decoded migration bundle with the export passphrase, then verifies that its
 //! contents belong together before `import` trusts or writes any of it
 //! ([spec §16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration) steps 3 to 5;

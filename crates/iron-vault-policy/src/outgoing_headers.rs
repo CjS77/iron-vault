@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The header list an upstream request carries
 //! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)). [`sanitize()`] builds it
 //! from the caller's headers.

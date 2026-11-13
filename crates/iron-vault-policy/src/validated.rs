@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Runs the cross-section checks that turn a parsed config into one the rest of the system can trust
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) to
 //! [§9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules)). Every config the service checks or

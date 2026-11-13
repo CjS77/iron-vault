@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The recipient inventory payload v1 encoding: the plaintext an inventory file seals
 //! ([payload format](../../../../design/storage-formats.md#recipient-inventory-payload-v1)).
 

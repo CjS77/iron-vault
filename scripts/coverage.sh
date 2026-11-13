@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Measures test coverage of the workspace with cargo-llvm-cov, the same way locally and in CI.
 #
 # Usage: scripts/coverage.sh [html|lcov]

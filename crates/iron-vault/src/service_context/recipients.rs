@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Holds what the recipient commands share: the
 //! [inventory check](../../../../design/recipients.md#the-inventory-check) under the service-wide lock, and the vault
 //! the service holds while it is Ready

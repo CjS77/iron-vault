@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The `list` result: a flag set if and only if a vault is open, then one entry per credential with its kind and
 //! permitted origins ([admin protocol: list](../../../../../design/admin-protocol.md#list)). Names, kinds, hosts and ports only: no type
 //! here can hold a secret value or a record digest.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `unlock`: opens the vault with the passphrase the service prompts for (spec [§14][s14], [§15][s15],
 //! [§16][s16]).
 //!

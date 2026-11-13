@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Request bodies for the upstream client's tests, and a wait for a test upstream to finish recording.
 
 use std::collections::VecDeque;

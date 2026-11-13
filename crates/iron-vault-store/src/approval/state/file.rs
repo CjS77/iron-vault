@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Seals and opens the [approval state file v1](../../../../../design/storage-formats.md#approval-state-file-v1), `approval.age`: a clear
 //! header, the payload sealed to the vault public key, then a MAC.
 //!

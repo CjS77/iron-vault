@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The `iron-vault` binary: the service (`iron-vault serve`) and the owner's CLI, whose commands talk to the service over
 //! the admin socket ([spec §5](../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns)).
 //! This file only dispatches a parsed command; the library crate holds the service and its rules.

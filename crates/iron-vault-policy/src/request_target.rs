@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Parses a caller's request target into the one path representation used for both authorization and forwarding
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 //! [§8](../../../design/iron-vault-specification.md#8-request-flow) steps 2 and 4,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault-tpm-signer`, the TPM signing helper: the one process that opens the TPM to create and use TPM approval
 //! keys for the service ([TPM approval signer: the helper process](../../../design/tpm-approval-signer.md#the-helper-process)).
 //!

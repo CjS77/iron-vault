@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use rcgen::{BasicConstraints, Certificate, CertificateParams, DnType, IsCa, Issuer, KeyPair};
 // Calling the verifier needs its trait in scope; these tests only drive the WebPKI verifier and implement nothing.
 #[allow(clippy::disallowed_types)]

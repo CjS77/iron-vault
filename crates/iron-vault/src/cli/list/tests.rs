@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use iron_vault::standing::Standing;
 use iron_vault_policy::CredentialKind;
 use iron_vault_store::RecordDamage;

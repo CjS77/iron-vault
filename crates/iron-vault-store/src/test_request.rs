@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! An authorized request and its route's slot, for tests that resolve a credential record.
 
 use iron_vault_policy::{

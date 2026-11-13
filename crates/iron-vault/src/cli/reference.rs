@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The command reference in the book, `book/src/reference/cli.md`, generated from the same [`Cli`] the parser uses so
 //! the page names every command and option and cannot drift from `--help`.
 //!

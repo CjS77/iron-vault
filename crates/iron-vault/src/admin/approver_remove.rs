@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `approver remove`: unpins an approval signer after owner presence from any pinned approver, the removed one included
 //! ([approval signers: `approver remove <approver ID>`](../../../../design/approval-signers.md#approver-remove-approver-id)).
 //!

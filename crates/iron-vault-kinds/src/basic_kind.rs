@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The `basic` kind: sends a username and password as HTTP `Basic` authorization
 //! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules),
 //! [future spec §2.2](../../../design/future-specifications.md#22-credential-kinds),

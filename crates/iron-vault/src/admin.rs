@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The admin interface: how the owner's CLI asks the running service to change the vault, over the admin socket
 //! ([spec §5](../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns);
 //! [admin protocol](../../../design/admin-protocol.md)).

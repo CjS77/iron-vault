@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Frames each helper message: a `u32` big-endian length, at most [`MAX_FRAME_LEN`], then the body.
 //!
 //! The length comes first so a reader can refuse an oversized message before it allocates or reads the body.

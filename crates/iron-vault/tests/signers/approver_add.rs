@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `approver add` end to end over a real admin socket (`design/approval-signers.md`, "`approver add`"): enrolling a second
 //! software approver that then approves a config, the refusals before any prompt, owner presence that only a pinned
 //! approver can give, the new passphrase's rules, step 3's read-back and orphan sweep, and a log with no passphrase.

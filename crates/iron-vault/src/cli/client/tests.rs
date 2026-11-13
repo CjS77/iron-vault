@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The client's exchange end to end over a socket pair, against the admin server in process: the service prompts, the
 //! client answers from piped input. Logs from both ends are captured at TRACE.
 

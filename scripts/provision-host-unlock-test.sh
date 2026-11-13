@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Tests the Linux package's provisioning helper, packaging/linux/iron-vault-provision-host-unlock, without root or a TPM
 # (design/tpm-unlock.md, "Provisioning"). id, age-keygen, systemd-creds, install, logger, findmnt, cryptsetup, luksmeta and
 # lsinitramfs are stubs in a mktemp dir ahead of PATH, and the helper's /etc, /sys and /boot paths are pointed into that

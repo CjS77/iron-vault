@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Checks the TPM approval PIN and derives the authorization value the TPM approval key is created under
 //! ([TPM approval signer: the approval PIN](../../../design/tpm-approval-signer.md#the-approval-pin)).
 //!

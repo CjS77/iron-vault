@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! One test per gzip framing rule of
 //! [migration bundle v1, "One encoding per bundle"](../../../../../../design/storage-formats.md#one-encoding-per-bundle).
 

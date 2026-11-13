@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The signal watcher. Once the owner console is open, in either mode, SIGINT, SIGQUIT, SIGTERM and SIGHUP end the
 //! command through it, so it can restore the terminal and tell the owner what to do with a recovery key already shown.
 

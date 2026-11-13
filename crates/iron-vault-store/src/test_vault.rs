@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! A vault as `init` leaves it, on the fault filesystem, for tests of recipient changes and the inventory check: an
 //! identity envelope for an operational and a recovery recipient, the inventory that describes it, a manifest and one
 //! credential record.

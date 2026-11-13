@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Names a credential record's kind, so activation can check that a route's slot suits it
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 //! [future spec §2.2](../../../design/future-specifications.md#22-credential-kinds)).

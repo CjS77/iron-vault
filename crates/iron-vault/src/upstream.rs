@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The outbound side of the proxy: how the service reaches an upstream ([spec §10][s10]). The proxy handler hands this
 //! module a checked request and gets back the upstream's response, streaming; nothing else in the service opens a
 //! connection to an upstream.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The request server on real sockets, with a stub handler, speaking raw HTTP/1.1 so each limit is hit to the byte.
 
 use std::sync::Mutex;

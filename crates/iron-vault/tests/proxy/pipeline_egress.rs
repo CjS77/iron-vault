@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! What leaves the service, observed at a recording TLS upstream (specification §19 first two v0 release checks, implementation spec §2).
 //!
 //! The real request server, pipeline and upstream client run behind a Unix request socket and a loopback TCP listener,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! An HTTP/2 server that refuses every request before processing it, written in raw frames.
 //!
 //! `h2`'s server cannot do this: it counts a stream as processed as soon as its HEADERS frame is read, so any GOAWAY it

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `iron-vault status` output: one field per line, in a fixed order, from the service's status report. Pure, so the same
 //! report always prints the same bytes.
 

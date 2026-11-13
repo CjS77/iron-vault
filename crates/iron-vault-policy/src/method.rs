@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The HTTP methods a route may allow in its `methods` list
 //! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 //! [§8](../../../design/iron-vault-specification.md#8-request-flow)).

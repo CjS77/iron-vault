@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! `config approve`: the approval transaction on the owner's proposed config (spec [§5][s5], [§12][s12], [§16][s16];
 //! [admin protocol: config approve](../../../../design/admin-protocol.md#config-approve)).
 //!
