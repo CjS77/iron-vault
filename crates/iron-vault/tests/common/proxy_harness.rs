@@ -21,7 +21,6 @@ use iron_vault::request_server::RequestServer;
 use iron_vault::serving_snapshot::{ServingSnapshot, SnapshotHolder};
 use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
-use iron_vault::upstream::client::TransportLimits;
 use iron_vault::upstream::clients::UpstreamClients;
 use iron_vault::upstream::trust::PinnedCaError;
 use iron_vault_kinds::CredentialMaterial;
@@ -120,6 +119,7 @@ pub struct Setup<'a> {
     pub tcp: bool,
     pub request_timeout_secs: u64,
     /// Further `[limits]` keys, one per line, such as `max_decompressed_response_bytes = 10`; empty for the defaults.
+    /// `upstream_timeout_secs` is `request_timeout_secs` unless set here.
     pub limits: &'static str,
 }
 
@@ -128,12 +128,16 @@ impl Setup<'_> {
         let tcp = tcp_port.map_or_else(String::new, |port| {
             format!("\n[listeners.loopback]\naddress = \"127.0.0.1:{port}\"\n")
         });
+        let upstream_timeout = match self.limits.contains("upstream_timeout_secs") {
+            true => String::new(),
+            false => format!("upstream_timeout_secs = {}", self.request_timeout_secs),
+        };
         let toml = format!(
             r#"schema_version = 1
 
 [limits]
 request_timeout_secs = {timeout}
-upstream_timeout_secs = {timeout}
+{upstream_timeout}
 {limits}
 
 [listeners.local]
@@ -159,7 +163,7 @@ fn snapshot(setup: Setup<'_>, config: &ValidatedConfig, state_dir: &Path) -> Ser
     let vault = vault(setup.credentials, state_dir);
     let policy = activate(config, &vault, &NoAccounts).unwrap();
     let trust = setup.ca.trust();
-    let clients = UpstreamClients::with_pinned_loader(&policy, TransportLimits::default(), |path| match path == Path::new(UNLOADABLE_CA) {
+    let clients = UpstreamClients::with_pinned_loader(&policy, |path| match path == Path::new(UNLOADABLE_CA) {
         true => Err(PinnedCaError::NoCertificates { path: path.to_path_buf() }),
         false => Ok(trust.clone()),
     })

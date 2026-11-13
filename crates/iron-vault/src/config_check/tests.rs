@@ -232,7 +232,7 @@ impl Fixture {
 
 /// Upstream settings that read each pinned CA file through the development profile's trusted-path rule.
 fn development() -> UpstreamSettings {
-    UpstreamSettings::new(DeploymentProfile::Development, ExpectedOwner { uid: 0 }, TransportLimits::default())
+    UpstreamSettings::new(DeploymentProfile::Development, ExpectedOwner { uid: 0 })
 }
 
 fn failure(result: Result<ServingSnapshot, CheckFailure>) -> CheckFailure {

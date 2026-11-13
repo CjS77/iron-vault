@@ -32,7 +32,6 @@ use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::DeploymentProfile;
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::ServiceContext;
-use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::CredentialKind;
 use iron_vault_store::RecoveryKey;
 use iron_vault_store::fault_fs::{FsCall, assert_trace_properties};
@@ -279,10 +278,7 @@ async fn every_rename_and_unlink_in_a_whole_session_syncs_its_directory() {
     let _one = super::export::one_at_a_time().await;
     let ca = TestCa::new("session dir sync CA");
     let upstream = MockUpstream::start(&ca, Reply::ok("ok")).await;
-    let settings = || {
-        UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap(), TransportLimits::default())
-            .with_pinned_trust(ca.trust())
-    };
+    let settings = || UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap()).with_pinned_trust(ca.trust());
     let steps = Steps::new();
     let (source, dest) = (Fixture::new(), Fixture::new());
     let service = source.start_on(settings(), steps.fs.clone());

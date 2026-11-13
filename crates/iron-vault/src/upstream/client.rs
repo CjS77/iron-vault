@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_core::Stream;
-use iron_vault_policy::{CheckedRequest, HeaderName, HeaderValue, Method};
+use iron_vault_policy::{CheckedRequest, HeaderName, HeaderValue, Limits, Method};
 use reqwest::header::{self, HeaderMap};
 use reqwest::redirect::Policy;
 use reqwest::retry;
@@ -34,9 +34,14 @@ use super::trust::{ClientConfigError, UpstreamTrust};
 /// The ALPN protocols the client offers, most preferred first: HTTP/2, then HTTP/1.1.
 const ALPN_PROTOCOLS: [&[u8]; 2] = [b"h2", b"http/1.1"];
 
+/// The time allowed to open an upstream's TCP connection and complete the TLS handshake. The config has no key for it.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// How long the client waits on an upstream before giving up with [`TransportError::Timeout`].
 ///
-/// `serve` builds every client with [`TransportLimits::default`]. The request deadline still bounds the whole request.
+/// [`UpstreamClients`](super::clients::UpstreamClients) builds a policy's clients with [`TransportLimits::of`] its
+/// `[limits]`, so an approved `upstream_timeout_secs` takes effect with the snapshot that serves it. The request deadline
+/// still bounds the whole request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransportLimits {
     /// The time allowed to open the TCP connection and complete the TLS handshake.
@@ -47,14 +52,21 @@ pub struct TransportLimits {
     pub response_headers: Duration,
 }
 
-impl Default for TransportLimits {
-    /// Returns 10 seconds to connect and 300 seconds until the response headers arrive: a language model may take
-    /// minutes before it answers a non-streamed request.
-    fn default() -> Self {
+impl TransportLimits {
+    /// The deadlines for a policy with `limits`: the fixed connect timeout, and `upstream_timeout_secs` until the
+    /// response headers arrive.
+    pub fn of(limits: &Limits) -> Self {
         Self {
-            connect: Duration::from_secs(10),
-            response_headers: Duration::from_secs(300),
+            connect: CONNECT_TIMEOUT,
+            response_headers: Duration::from_secs(limits.upstream_timeout_secs()),
         }
+    }
+}
+
+impl Default for TransportLimits {
+    /// Returns the deadlines for the default `[limits]`.
+    fn default() -> Self {
+        Self::of(&Limits::default())
     }
 }
 

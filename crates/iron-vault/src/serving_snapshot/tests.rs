@@ -10,7 +10,6 @@ use super::*;
 use crate::deployment::DeploymentProfile;
 use crate::secret_types_tests::{MARKER, assert_hides_marker};
 use crate::trusted_path::ExpectedOwner;
-use crate::upstream::client::TransportLimits;
 
 fn config(route: &str, credential: &str) -> String {
     format!(
@@ -93,13 +92,7 @@ fn policy(route: &str, credential: &str, vault: &Vault) -> ActivePolicy {
 }
 
 fn parts(policy: &ActivePolicy) -> (UpstreamClients, RateLimiter) {
-    let clients = UpstreamClients::new(
-        policy,
-        DeploymentProfile::Development,
-        ExpectedOwner { uid: 0 },
-        TransportLimits::default(),
-    )
-    .unwrap();
+    let clients = UpstreamClients::new(policy, DeploymentProfile::Development, ExpectedOwner { uid: 0 }).unwrap();
     (clients, RateLimiter::new(policy, Instant::now()))
 }
 

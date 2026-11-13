@@ -21,7 +21,6 @@ use iron_vault::deployment::DeploymentProfile;
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::ServiceContext;
 use iron_vault::service_state::ServiceState;
-use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::CredentialKind;
 use iron_vault_store::{RecipientIdentity, RecipientKey, RecipientRole, RecoveryKey, open_manifest, unwrap_identity};
 use secrecy::{ExposeSecret, SecretString};
@@ -55,7 +54,7 @@ impl Session {
         let ca = TestCa::new("recipients e2e CA");
         let upstream = MockUpstream::start(&ca, Reply::ok("ok")).await;
         let fixture = Fixture::new();
-        let settings = UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap(), TransportLimits::default());
+        let settings = UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap());
         let service = fixture.start_with(settings.with_pinned_trust(ca.trust()));
         let recovery_key = common::recipient_harness::init(&service).await;
         unlock(&service).await;

@@ -37,7 +37,6 @@ use iron_vault::service_context::{ServiceContext, ServiceSetup};
 use iron_vault::service_state::{FailureReason, ServiceState};
 use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
-use iron_vault::upstream::client::TransportLimits;
 use iron_vault_store::fault_fs::FsCall;
 use iron_vault_store::migration_bundle::{BundleDecoder, EntryName, MAX_BUNDLE_LEN};
 use iron_vault_store::{OsFs, RecipientRole, RecoveryKey, RecoveryKeySecret, StoreFs, VaultIdentity, open_manifest, unwrap_identity};
@@ -97,7 +96,7 @@ impl Dest {
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
             paths,
             fs,
-            upstream: UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap(), TransportLimits::default())
+            upstream: UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap())
                 .with_pinned_trust(source.fixture.ca().trust()),
             hardening: HardeningReport {
                 core_dumps: CoreDumps::Disabled,

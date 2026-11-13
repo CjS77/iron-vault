@@ -50,7 +50,6 @@ use iron_vault::serving_snapshot::{Admission, SnapshotHolder};
 use iron_vault::socket_activation::{AdoptedSocket, PassedSockets};
 use iron_vault::standing::{CredentialStanding, Standing};
 use iron_vault::trusted_path_report::ServicePaths;
-use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::{CredentialKind, ListenerName};
 use iron_vault_store::{
@@ -287,8 +286,7 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
             paths,
             fs,
-            upstream: UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap(), TransportLimits::default())
-                .with_pinned_trust(self.ca.trust()),
+            upstream: UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap()).with_pinned_trust(self.ca.trust()),
             hardening: HardeningReport {
                 core_dumps: CoreDumps::Disabled,
                 memory,

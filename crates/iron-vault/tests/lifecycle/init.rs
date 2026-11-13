@@ -36,7 +36,6 @@ use iron_vault::service_state::{ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::Admission;
 use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
-use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::CredentialKind;
 use iron_vault_store::{
     ApprovalEnvelope, ApprovalPassphrase, INITIAL_CONFIG, InitPassphrases, NewVaultKeys, OsFs, Passphrase, RecoveryKeySecret, SealingKeys,
@@ -124,8 +123,7 @@ impl Fixture {
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
             paths,
             fs: OsFs,
-            upstream: UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap(), TransportLimits::default())
-                .with_pinned_trust(self.ca.trust()),
+            upstream: UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap()).with_pinned_trust(self.ca.trust()),
             hardening: HardeningReport {
                 core_dumps: CoreDumps::Disabled,
                 memory,

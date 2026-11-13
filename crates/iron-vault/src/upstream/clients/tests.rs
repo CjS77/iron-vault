@@ -133,7 +133,7 @@ fn broken() -> PinnedCaError {
 
 /// Builds the clients with a loader that fails for [`BROKEN_CA`], recording every path it is asked for.
 fn build(loaded: &RefCell<Vec<PathBuf>>) -> UpstreamClients {
-    UpstreamClients::build(&policy(), TransportLimits::default(), |path| {
+    UpstreamClients::build(&policy(), |path| {
         loaded.borrow_mut().push(path.to_path_buf());
         match path == Path::new(BROKEN_CA) {
             true => Err(broken()),
@@ -218,11 +218,9 @@ fn marking_makes_only_the_routes_of_a_failed_ca_unavailable() {
 
 #[test]
 fn a_route_unavailable_for_both_causes_reports_both() {
-    let clients = UpstreamClients::build(&policy(), TransportLimits::default(), |path| {
-        match path == Path::new(UNAVAILABLE_CA) {
-            true => Err(broken()),
-            false => Ok(UpstreamTrust::BuiltIn),
-        }
+    let clients = UpstreamClients::build(&policy(), |path| match path == Path::new(UNAVAILABLE_CA) {
+        true => Err(broken()),
+        false => Ok(UpstreamTrust::BuiltIn),
     })
     .unwrap();
     let policy = clients.mark_unusable_routes(policy());

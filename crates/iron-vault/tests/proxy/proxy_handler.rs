@@ -282,3 +282,49 @@ async fn a_route_whose_pinned_ca_did_not_load_is_503_and_reaches_no_upstream() {
     assert_eq!(proxy.get("/fx-plain/latest").await.status, 200);
     assert_eq!(upstream.requests().len(), 1);
 }
+
+/// The proxy's [`Setup`] for the `fx` route with a 30-second request timeout and these extra `[limits]`.
+fn setup_with_limits<'a>(ca: &'a TestCa, port: u16, limits: &'static str) -> Setup<'a> {
+    Setup {
+        ca,
+        callers_and_routes: callers_and_routes(port),
+        credentials: vec![Credential {
+            name: "fx_key",
+            material: CredentialMaterial::Static { key: SECRET.into() },
+            port,
+        }],
+        tcp: false,
+        request_timeout_secs: 30,
+        limits,
+    }
+}
+
+#[tokio::test]
+async fn the_approved_upstream_timeout_bounds_the_wait_for_response_headers() {
+    let ca = TestCa::new("proxy test CA");
+    let delayed = Reply::Delayed {
+        delay: Duration::from_secs(3),
+        body: "late".into(),
+    };
+    let upstream = MockUpstream::start(&ca, delayed).await;
+    let proxy = Proxy::start(setup_with_limits(&ca, upstream.port(), "upstream_timeout_secs = 1")).await;
+
+    let started = Instant::now();
+    let response = proxy.get("/fx/latest").await;
+
+    assert_eq!(response.status, 504);
+    let waited = started.elapsed();
+    assert!(
+        waited >= Duration::from_secs(1) && waited < Duration::from_secs(3),
+        "waited {waited:?}"
+    );
+
+    // A newly served config raises the limit for the next request, with no restart.
+    proxy
+        .holder()
+        .serve(proxy.snapshot(setup_with_limits(&ca, upstream.port(), "upstream_timeout_secs = 10")));
+    let response = proxy.get("/fx/latest").await;
+
+    assert_eq!(response.status, 200);
+    assert!(response.body.contains("late"), "{}", response.body);
+}

@@ -100,6 +100,13 @@ pub enum Reply {
     },
     /// Never answers, holding the connection open.
     Stall,
+    /// Answers `200` with this body once `delay` has passed, so the response headers arrive late.
+    Delayed {
+        /// How long the upstream waits before it answers.
+        delay: Duration,
+        /// The body.
+        body: String,
+    },
     /// Answers `200` with a chunked body: `first`, then `second` once `gate` is notified, so a test can prove the
     /// first chunk was relayed before the second existed.
     TwoChunks {
@@ -418,6 +425,11 @@ impl Server {
         match &*self.reply {
             Reply::KeepAlive(body) => self.keep_alive(tls, body).await,
             Reply::Stall => tokio::time::sleep(Duration::from_secs(3600)).await,
+            Reply::Delayed { delay, body } => {
+                tokio::time::sleep(*delay).await;
+                let _ = tls.write_all(&response(200, &[], body.as_bytes())).await;
+                let _ = tls.shutdown().await;
+            }
             Reply::Respond { status, headers, body } => {
                 // A header value may name the upstream's own origin, whose port is known only once it runs.
                 let origin = format!("https://localhost:{}", tls.get_ref().0.local_addr().map_or(0, |addr| addr.port()));

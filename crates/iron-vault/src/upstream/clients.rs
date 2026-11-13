@@ -3,7 +3,9 @@
 //! holds them, and the proxy handler picks a request's client by route.
 //!
 //! Built once when a policy is activated, so a request never builds a client or reads a CA file. Routes with the
-//! built-in roots share one client, and routes that pin the same CA file share that file's client.
+//! built-in roots share one client, and routes that pin the same CA file share that file's client. Every client waits
+//! for response headers as long as the policy's `upstream_timeout_secs`, so an approved change takes effect with the
+//! snapshot that holds the new clients, without a restart.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -64,13 +66,8 @@ impl UpstreamClients {
     /// passes them to [`mark_unusable_routes`](Self::mark_unusable_routes) before the policy serves, so a request to
     /// one is refused before it reaches [`for_route`](Self::for_route). A route already unavailable through its
     /// credential is tried too, so it reports both causes.
-    pub fn new(
-        policy: &ActivePolicy,
-        profile: DeploymentProfile,
-        owner: ExpectedOwner,
-        limits: TransportLimits,
-    ) -> Result<Self, ClientBuildError> {
-        Self::build(policy, limits, |path| UpstreamTrust::pinned(path, profile, owner))
+    pub fn new(policy: &ActivePolicy, profile: DeploymentProfile, owner: ExpectedOwner) -> Result<Self, ClientBuildError> {
+        Self::build(policy, |path| UpstreamTrust::pinned(path, profile, owner))
     }
 
     /// [`new`](Self::new) with the pinned-CA loader passed in, so integration tests can pin a test CA without a
@@ -79,10 +76,9 @@ impl UpstreamClients {
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_pinned_loader(
         policy: &ActivePolicy,
-        limits: TransportLimits,
         load_pinned: impl Fn(&Path) -> Result<UpstreamTrust, PinnedCaError>,
     ) -> Result<Self, ClientBuildError> {
-        Self::build(policy, limits, load_pinned)
+        Self::build(policy, load_pinned)
     }
 
     /// Returns the client for `route`, or why it has none.
@@ -120,11 +116,8 @@ impl UpstreamClients {
     }
 
     /// [`new`](Self::new) with the pinned-CA loader passed in, so it is testable without a trusted path on disk.
-    fn build(
-        policy: &ActivePolicy,
-        limits: TransportLimits,
-        load_pinned: impl Fn(&Path) -> Result<UpstreamTrust, PinnedCaError>,
-    ) -> Result<Self, ClientBuildError> {
+    fn build(policy: &ActivePolicy, load_pinned: impl Fn(&Path) -> Result<UpstreamTrust, PinnedCaError>) -> Result<Self, ClientBuildError> {
+        let limits = TransportLimits::of(policy.config().limits());
         let built_in = UpstreamClient::new(&UpstreamTrust::BuiltIn, limits)?;
         let ca_files = route_ca_files(policy);
         let loaded: BTreeMap<PathBuf, Result<UpstreamClient, PinnedClientError>> = ca_files

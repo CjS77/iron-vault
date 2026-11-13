@@ -15,7 +15,6 @@ use crate::deployment::DeploymentProfile;
 use crate::secret_types_tests::{MARKER, assert_hides_marker};
 use crate::serving_snapshot::tests::Scratch;
 use crate::trusted_path::ExpectedOwner;
-use crate::upstream::client::TransportLimits;
 use crate::upstream::clients::UpstreamClients;
 
 mod refusal;
@@ -518,13 +517,7 @@ fn prepare_reads_a_serving_snapshot() {
         vault.add(&lock, &OsFs, name, material, origins(&host)).unwrap();
     });
     let policy = activate(&validated(), &vault, &Accounts).unwrap();
-    let clients = UpstreamClients::new(
-        &policy,
-        DeploymentProfile::Development,
-        ExpectedOwner { uid: 0 },
-        TransportLimits::default(),
-    )
-    .unwrap();
+    let clients = UpstreamClients::new(&policy, DeploymentProfile::Development, ExpectedOwner { uid: 0 }).unwrap();
     let start = Instant::now();
     let limiter = RateLimiter::new(&policy, start);
     let snapshot = ServingSnapshot::new(policy, vault, clients, limiter).unwrap();

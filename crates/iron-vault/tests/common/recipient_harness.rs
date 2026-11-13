@@ -16,7 +16,6 @@ use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::{ServiceContext, ServiceSetup};
 use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
-use iron_vault::upstream::client::TransportLimits;
 use iron_vault_store::{OsFs, RecipientEntry, StoreFs};
 use tokio::net::UnixStream;
 use zeroize::Zeroizing;
@@ -43,11 +42,7 @@ impl Fixture {
 
     /// Starts the service as `serve` does, without systemd sockets: Locked, waiting for an unlock or an init.
     pub fn start(&self) -> Arc<ServiceContext> {
-        self.start_with(UpstreamSettings::new(
-            DeploymentProfile::Development,
-            invoking_user().unwrap(),
-            TransportLimits::default(),
-        ))
+        self.start_with(UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap()))
     }
 
     /// [`start`](Self::start) with `upstream` settings, such as a pinned test CA for a mock upstream.
@@ -62,7 +57,7 @@ impl Fixture {
 
     /// [`start`](Self::start) with the `tpm` approver kind offered through the helper socket at `socket`.
     pub fn start_offering_tpm(&self, socket: &Path) -> Arc<ServiceContext> {
-        let upstream = UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap(), TransportLimits::default());
+        let upstream = UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap());
         Arc::new(self.context(upstream, OsFs).with_tpm_socket(socket.to_owned()))
     }
 

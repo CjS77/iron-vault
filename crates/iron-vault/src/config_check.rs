@@ -51,7 +51,7 @@ use crate::service_state::{FailureReason, UnavailableReason};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotError};
 use crate::standing::{CredentialStanding, RouteFault};
 use crate::trusted_path::ExpectedOwner;
-use crate::upstream::client::{ClientBuildError, TransportLimits};
+use crate::upstream::client::ClientBuildError;
 use crate::upstream::clients::UpstreamClients;
 #[cfg(any(test, feature = "test-support"))]
 use crate::upstream::trust::{PinnedCaError, UpstreamTrust};
@@ -63,8 +63,6 @@ pub struct UpstreamSettings {
     profile: DeploymentProfile,
     /// The owner a pinned CA file must have.
     owner: ExpectedOwner,
-    /// The transport deadlines.
-    limits: TransportLimits,
     /// What every pinned CA route gets instead of its file, for integration tests: a trust, or a load failure.
     #[cfg(any(test, feature = "test-support"))]
     pinned: Option<Result<UpstreamTrust, PinnedCaError>>,
@@ -72,11 +70,10 @@ pub struct UpstreamSettings {
 
 impl UpstreamSettings {
     /// Creates settings that read each pinned CA file through its trusted-path rule for `profile` and `owner`.
-    pub fn new(profile: DeploymentProfile, owner: ExpectedOwner, limits: TransportLimits) -> Self {
+    pub fn new(profile: DeploymentProfile, owner: ExpectedOwner) -> Self {
         Self {
             profile,
             owner,
-            limits,
             #[cfg(any(test, feature = "test-support"))]
             pinned: None,
         }
@@ -106,9 +103,9 @@ impl UpstreamSettings {
     pub(crate) fn clients(&self, policy: &ActivePolicy) -> Result<UpstreamClients, ClientBuildError> {
         #[cfg(any(test, feature = "test-support"))]
         if let Some(pinned) = &self.pinned {
-            return UpstreamClients::with_pinned_loader(policy, self.limits, |_| pinned.clone());
+            return UpstreamClients::with_pinned_loader(policy, |_| pinned.clone());
         }
-        UpstreamClients::new(policy, self.profile, self.owner, self.limits)
+        UpstreamClients::new(policy, self.profile, self.owner)
     }
 }
 
