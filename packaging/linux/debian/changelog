@@ -1,3 +1,12 @@
+iron-vault (0.4.0~alpha-1) unstable; urgency=medium
+
+  * Package the TPM signing helper, its socket and service units, and the host
+    unlock handoff unit and provisioning helper.
+  * Refuse an existing iron-vault login account, or an iron-vault group with a
+    password, administrators or members, at configure.
+
+ -- Iron Vault maintainers <noreply@example.invalid>  Fri, 13 Nov 2026 00:00:00 +0000
+
 iron-vault (0.3.0~alpha-1) unstable; urgency=medium
 
   * First Linux package of Iron Vault.

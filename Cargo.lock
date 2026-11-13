@@ -1402,7 +1402,7 @@ checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 
 [[package]]
 name = "iron-vault"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1456,7 +1456,7 @@ dependencies = [
 
 [[package]]
 name = "iron-vault-kinds"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "base64 0.23.1",
  "iron-vault-policy",
@@ -1468,7 +1468,7 @@ dependencies = [
 
 [[package]]
 name = "iron-vault-policy"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "base64 0.23.1",
  "blake2",
@@ -1485,7 +1485,7 @@ dependencies = [
 
 [[package]]
 name = "iron-vault-store"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "age",
  "blake2",
@@ -1512,7 +1512,7 @@ dependencies = [
 
 [[package]]
 name = "iron-vault-tpm-protocol"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "blake2",
  "static_assertions",
@@ -1523,7 +1523,7 @@ dependencies = [
 
 [[package]]
 name = "iron-vault-tpm-signer"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "anyhow",
  "bitfield",
