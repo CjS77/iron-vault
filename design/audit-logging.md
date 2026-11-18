@@ -97,12 +97,6 @@ Rejected:
 - **A separate event name for the request server's refusals.** Every dashboard would have to query two names for one
   stream; `reason` already says which check refused.
 
-### Owner notifications come in v1
-
-v0 has no owner notifications: the owner placed them in v1, in EP-40. In v0 this design has no notification channel,
-and every fact it records goes to the log only. [owner-notifications.md](owner-notifications.md) designs them for v1,
-recording each one as the audit event `owner.notified` ([Catalogue](#catalogue)).
-
 ### Departure: no `tracing-appender`
 
 **For the owner to confirm.** Decision 2 names `tracing-appender`. With one fixed file rotated by `logrotate` (D2) and
@@ -780,13 +774,6 @@ The `recipient.forget-checked` event ([forget-machine.md](forget-machine.md#audi
 | `migration.imported` | INFO | the import's step 10 is durable | `vault_id`, `records`, `approvers`, `committed_version`, `highest_reserved`, `recipients`: the enrolled roles' names |
 | `migration.import-failed` | WARN | an import write step failed | `step`, `error_kind` |
 
-**Owner notifications** (v1; not emitted in v0.
-[owner-notifications.md](owner-notifications.md#which-events-notify) gives which events raise one):
-
-| Event | Level | When | Fields |
-|---|---|---|---|
-| `owner.notified` | INFO | right after the record of an audit event that notifies the owner | `topic`, `source_event`, `urgency`, `title`, `body`, `remediation` |
-
 ### Event fields
 
 The fields that only one event uses, or that only audit events use:
@@ -848,11 +835,6 @@ The fields that only one event uses, or that only audit events use:
 | `method` | string | A source-owner method's label: `vault_passphrase` or `tpm_pin` |
 | `destination_recipient` | string | The recipient key a migration adds, in its `age1…` text, which is public |
 | `retry_after` | number | Whole seconds left in the passphrase attempt limit's cooldown, rounded up |
-| `topic` | string | A notification topic label, such as `vault_changed` |
-| `source_event` | string | The event name of the audit event an owner notification was made from |
-| `urgency` | string | `normal` or `critical` |
-| `title` | string | An owner notification's title, a fixed phrase per topic |
-| `body` | string | An owner notification's body, built from its source event's fields; at most 1024 bytes |
 
 ### Renamed and retyped fields
 
@@ -1242,7 +1224,4 @@ Checked against [§18](iron-vault-specification.md#18-logging),
 [§15](iron-vault-specification.md#15-service-states-and-errors) and
 [§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances). The request event carries every field
 §18 lists (time, caller, route, credential name, upstream host, method, status, sizes, duration, scrubbing), and
-every rejected request Iron Vault's code sees writes one. Owner notifications
-([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)) come in v1, in EP-40, as the specification's release
-plan places them; in v0 this design has none, and v1 adds the audit event `owner.notified`
-([owner-notifications.md](owner-notifications.md)).
+every rejected request Iron Vault's code sees writes one.

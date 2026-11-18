@@ -915,8 +915,8 @@ never a path or a key. A later approval that fixes the cause, or removes the lis
 
 A healthy TPM service restarts unattended using a policy such as `Restart=on-failure`. Passphrase-only and later
 YubiKey-only profiles remain locked until the owner supplies the required input. The YubiKey profile reports
-`locked: needs a touch` and notifies the owner. The implementation must verify how unclean power loss affects its
-chosen TPM session and dictionary-attack state; it must not assume that repeated power loss cannot cause lockout.
+`locked: needs a touch`. The implementation must verify how unclean power loss affects its chosen TPM session and
+dictionary-attack state; it must not assume that repeated power loss cannot cause lockout.
 
 In a protected install whose memory is not locked, the service remains Locked. Requests receive `503` with reason
 `locked`, `status` reports the memory protection failure, and `unlock` is refused with `memory-unprotected` before
@@ -955,8 +955,7 @@ and require the owner to confirm that they saved it.
 
 Recommend an independent password manager or paper storage. 
 
-v0 schedules recovery reminders every few months through redacted logs; from v1, desktop notifications also carry
-them when available.
+The service schedules recovery reminders every few months through redacted audit log records.
 
 `recovery check` must prove that the supplied key opens the current envelope, without changing recipients or
 approval state. The approved config names every routed credential and its upstream host, and `iron-vault list`
@@ -1061,8 +1060,8 @@ The [Compose install guide](../book/src/installation/compose-install.md) walks a
 
 **Application containers**
 
-- Receive no vault mounts, unlock material, admin socket, notification socket (from v1), host PID namespace,
-  privileged mode or Docker management socket.
+- Receive no vault mounts, unlock material, admin socket, host PID namespace, privileged mode or Docker management
+  socket.
 - Malware confined to an isolated sibling container can use that caller's granted routes but cannot extract provider
   credentials.
 - An ordinary host account without runtime access stays outside Iron Vault's private storage and process memory.
@@ -1125,8 +1124,7 @@ Escape caller-controlled labels and reject control characters in configured name
 
 Never log request or response bodies, header values, raw query strings, passwords, caller tokens, provider tokens,
 private keys, signature PINs, or unfiltered library errors containing URLs. No trace setting may re-enable raw
-HTTP/TLS traffic. When owner notifications ship (v1), they contain the operation summary and remediation, not
-secrets.
+HTTP/TLS traffic.
 
 ## 19. V0 user acceptance
 

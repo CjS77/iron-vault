@@ -1,16 +1,15 @@
 ## 1. Implementation structure
 
 Build one Rust workspace using edition 2024 with a pinned toolchain and shared dependency versions. Keep policy
-decisions pure and perform filesystem, HTTP, process, device, and notification I/O through adapters. Establish
-bounded contexts before adding abstractions; crates must not reach into each other's private storage models.
+decisions pure and perform filesystem, HTTP, process, and device I/O through adapters. Establish bounded contexts
+before adding abstractions; crates must not reach into each other's private storage models.
 
 | Crate               | Responsibility                                                                                                                         |
 |---------------------|----------------------------------------------------------------------------------------------------------------------------------------|
 | `iron-vault-policy` | Caller grants, routes, slots, markers, path/method rules, confirmation requirements, and the final outgoing-request decision; no I/O   |
 | `iron-vault-kinds`  | Credential resolution, token lifecycle, provider signing rules, and constrained token-endpoint adapters                                |
 | `iron-vault-store`  | Vault identity, recipient envelopes, record files, manifests, approval metadata, durable transactions, recovery, and connector storage |
-| `iron-vault`        | Service binary, HTTP/admin interfaces, CLI client, config loading, deployment adapters, scrubbing, logging, and notifications          |
-| `iron-vault-notify` | From v1: desktop notification agent; runs as the owner's login account; no access to vault, config or admin interfaces                 |
+| `iron-vault`        | Service binary, HTTP/admin interfaces, CLI client, config loading, deployment adapters, scrubbing, and logging                         |
 
 Use value objects that reject invalid hosts, ports, paths, names, versions, and slots on construction. Libraries
 return typed errors with `thiserror`; the binary may use `anyhow` for context. Avoid `unwrap`, `expect`, and `panic!`
