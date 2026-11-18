@@ -1,7 +1,28 @@
 # Changelog
 
 All notable changes to Iron Vault are recorded here. Versions follow [Semantic Versioning](https://semver.org/); the
-Linux package carries the same version with `~` before the pre-release tag (`0.4.0-alpha` is `0.4.0~alpha-1`).
+Linux package carries the same version with `~` before the pre-release tag (`0.5.0-alpha` is `0.5.0~alpha-1`).
+
+## [0.5.0-alpha] - 2026-11-18
+
+### Added
+
+- **`iron-vault config check FILE`** parses and validates a config file offline, so it needs no running service, vault
+  or root. It prints `Config ok` and exits 0, exits 1 with the parser's message and the line and column when the config
+  is not valid (every cross-section failure is listed), and exits 2 when the file cannot be read or is over the
+  61440-byte limit. The check is advisory: credentials, origins, peer accounts, upstream TLS and the log destination are
+  still checked by `config approve`.
+
+### Changed
+
+- `config approve` and `config check` share one config validation path and one file reader, so both enforce the same
+  size limit and neither echoes file bytes.
+- The CI workflow no longer builds for a non-Linux target, and `scripts/check-non-linux.sh` is removed. Iron Vault is
+  Linux-only.
+
+### Fixed
+
+- The socket-activation tests keep the admin socket path under the Unix path limit.
 
 ## [0.4.0-alpha] - 2026-11-13
 
@@ -110,4 +131,5 @@ it again.
 - sha2: (new) => 0.10.9
 - tss-esapi: (new) => 7.7.0
 
+[0.5.0-alpha]: https://github.com/CjS77/iron-vault/compare/v0.4.0-alpha...v0.5.0-alpha
 [0.4.0-alpha]: https://github.com/CjS77/iron-vault/compare/v0.3.0-alpha...v0.4.0-alpha
