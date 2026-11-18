@@ -1,6 +1,7 @@
 name: Release
 
-# Package checks run only for releases: when a release is published, or when a release tag is pushed.
+# Package checks run only for releases: when a release is published, or when a release tag is pushed. The image is
+# published only for the `release` event.
 #
 # GitHub's tag filters are globs and cannot express the whole release-tag rule (they let through v1.0.0-, v01.2.3 and
 # v1.2.3-alpha_1), so they are a coarse filter and scripts/check-release-tag.sh applies the exact rule. In a filter,
@@ -67,8 +68,11 @@ jobs:
           if-no-files-found: error
 
   # A separate job so that only this one holds a token that can write packages. The image is built from the container
-  # Dockerfile with the docker CLI that ships on the runner, so no third-party action touches the token.
+  # Dockerfile with the docker CLI that ships on the runner, so no third-party action touches the token. It runs only for
+  # the `release` event, after `deb` has checked the tag and the package, so the queued tag-push run never pushes again.
   image:
+    if: github.event_name == 'release'
+    needs: deb
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -77,11 +81,6 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Tag is a release tag and names the crate version
-        run: |
-          scripts/check-release-tag-test.sh
-          rustup toolchain install
-          scripts/check-release-tag.sh "$TAG"
       # The image is tagged with the version without its leading v (v0.5.0-alpha is 0.5.0-alpha). `latest` moves only for a
       # final release: a tag with a pre-release suffix has a hyphen. A re-run overwrites the same version tag.
       - name: Build and push the image to ghcr.io
@@ -96,9 +95,9 @@ jobs:
           case "$version" in *-*) ;; *) tags+=(-t "$image:latest") ;; esac
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
           docker build -f packaging/compose/Dockerfile \
-            --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.version=$version" \
-            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             "${tags[@]}" .
           docker push --all-tags "$image"
 
