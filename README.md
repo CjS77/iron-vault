@@ -181,6 +181,7 @@ rate_limit = { requests = 30, per_seconds = 60, burst = 5 }
 ```
 
 ```sh
+iron-vault config check dev-config.toml              # offline: prints Config ok, or what to fix
 iron-vault config approve dev-config.toml            # shows a summary; type yes, then the approval passphrase
 curl -s -H "Proxy-Authorization: Bearer $(cat ~/.iron-vault-tokens/me)" http://127.0.0.1:7878/httpbin/headers
 ```

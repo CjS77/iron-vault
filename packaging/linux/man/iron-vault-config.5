@@ -18,6 +18,11 @@ Write your own copy, anywhere you like, and approve it:
 \fBsudo iron\-vault config approve\fR \fIFILE\fR
 .RE
 .PP
+To catch mistakes first, run \fBiron\-vault config check\fR \fIFILE\fR.
+It needs no service and no root, prints \fBConfig ok\fR when the file parses and its sections agree, and otherwise exits 1 with
+the line and column.
+It does not check credentials, accounts or upstream settings, so \fBconfig approve\fR can still refuse the file.
+.PP
 The service checks the file, shows its own summary of what changes, and asks you to type \fByes\fR and then the
 approval passphrase.
 It then signs the config, publishes it as \fIconfig.toml\fR with its signature \fIconfig.toml.sig\fR, and puts it into

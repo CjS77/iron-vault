@@ -18,3 +18,6 @@ Print help
 .TP
 iron\-vault\-config\-approve(1)
 Propose FILE as the new config: the service shows its summary, asks for confirmation and the approval passphrase, then commits, publishes and activates it. Stdin is not read for the config, because it carries the answers to the prompts when it is not a terminal
+.TP
+iron\-vault\-config\-check(1)
+Parse and validate FILE without contacting the service: no running service, vault or root is needed. It prints `Config ok` and exits 0, or prints why the config is not valid, with the line and column, and exits 1; it exits 2 when FILE cannot be read or is longer than the limit. It does not check what only an approval can: that each credential exists and permits its route\*(Aqs host, that a peer caller\*(Aqs account exists, or the upstream TLS and log destination settings. A config that passes can still be refused by `config approve`

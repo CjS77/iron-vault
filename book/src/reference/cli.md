@@ -29,7 +29,7 @@ The CLI is a thin client. It opens nothing itself: each command sends one admin 
 **admin socket** and shows the answer
 ([admin protocol](../../../design/admin-protocol.md)). The service decides what to prompt for, and judges whoever
 connects by the account the connection comes from. `serve` is the only command that runs the service; `completions`
-is the only one that never contacts it.
+and `config check` never contact it, so any account can run them.
 
 The socket is `admin.sock` in the service's runtime directory: `/run/iron-vault/` in a protected installation, and
 `$XDG_RUNTIME_DIR/iron-vault-dev/` in development mode ([Files and locations](files.md)). `--admin-socket PATH`
@@ -256,6 +256,17 @@ iron-vault config approve [OPTIONS] <FILE>
 Propose FILE as the new config: the service shows its summary, asks for confirmation and the approval passphrase, then commits, publishes and activates it. Stdin is not read for the config, because it carries the answers to the prompts when it is not a terminal.
 
 - `<FILE>`: The proposed config file.
+  - required
+
+## `iron-vault config check`
+
+```text
+iron-vault config check [OPTIONS] <FILE>
+```
+
+Parse and validate FILE without contacting the service: no running service, vault or root is needed. It prints `Config ok` and exits 0, or prints why the config is not valid, with the line and column, and exits 1; it exits 2 when FILE cannot be read or is longer than the limit. It does not check what only an approval can: that each credential exists and permits its route's host, that a peer caller's account exists, or the upstream TLS and log destination settings. A config that passes can still be refused by `config approve`.
+
+- `<FILE>`: The config file to check.
   - required
 
 ## `iron-vault recovery`

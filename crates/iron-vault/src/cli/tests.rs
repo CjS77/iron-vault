@@ -175,6 +175,16 @@ fn config_approve_takes_one_required_file() {
 }
 
 #[test]
+fn config_check_takes_one_required_file() {
+    let command = Command::Config(ConfigCommand::Check {
+        file: PathBuf::from("proposed.toml"),
+    });
+    assert_eq!(parse(&["config", "check", "proposed.toml"]).unwrap().command, command);
+    assert_eq!(parse(&["config", "check"]).unwrap_err().exit_code(), 2);
+    assert_eq!(parse(&["config", "check", "a.toml", "b.toml"]).unwrap_err().exit_code(), 2);
+}
+
+#[test]
 fn admin_socket_overrides_the_path_before_or_after_the_command() {
     let before = parse(&["--admin-socket", "/tmp/fwd.sock", "ping"]).unwrap();
     let after = parse(&["ping", "--admin-socket", "/tmp/fwd.sock"]).unwrap();
