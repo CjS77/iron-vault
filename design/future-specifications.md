@@ -78,8 +78,8 @@ credential in `needs login`. Never reuse the previous refresh token to see wheth
 durable completion clears the uncertainty in the same record update; leftover temporary files must not erase a
 valid completion or imply one that never committed.
 
-`invalid_grant`, revoked consent, and an unrecoverable refresh outcome put the record in `needs login`. Notify the
-owner and fail affected routes with `503`; keep unrelated credentials available. Retry only failures for which the
+`invalid_grant`, revoked consent, and an unrecoverable refresh outcome put the record in `needs login`. Record the
+change in the audit log and fail affected routes with `503`; keep unrelated credentials available. Retry only failures for which the
 implementation can establish that replay does not reuse a potentially retired token. If it cannot establish that,
 require a new login. A fresh, owner-authorized login replaces the failed token record and clears the marker.
 

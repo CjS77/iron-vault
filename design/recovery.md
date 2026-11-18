@@ -165,10 +165,8 @@ zero days, so a clock fault delays a reminder by at most the size of the jump an
 
 ## Reminders
 
-A **recovery reminder** is the audit event `recovery.reminder`, which tells the owner to run a recovery check. v0
-reminds through the log only ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)); from
-v1, EP-40's owner notifications carry it as the topic `recovery_reminder`
-([owner-notifications.md](owner-notifications.md#which-events-notify)).
+A **recovery reminder** is the audit event `recovery.reminder`, which tells the owner to run a recovery check. The
+service reminds through the audit log ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)).
 
 **The interval.** The approved config sets it:
 
@@ -270,10 +268,9 @@ type. No event carries the recovery key's text, any key material or the record's
 | `recovery.reminder` | INFO | a reminder evaluation found a reminder due | `recovery_record` (`checked`, `never_checked` or `unusable`); `last_checked` when checked; `reminders_since` when never checked; `error_kind` when unusable; `reminder_days`; `remediation` |
 
 `recovery_outcome` is `opened`, `failed` (the text is a recovery key and does not open this vault), `invalid` (the text
-is not a recovery key) or `unavailable` (the check could not run). Only `failed` says the key is bad, so only it
-raises the v1 `recovery_check_failed` notification. `recovery.checked` is raised for `invalid` when the text does not
-parse, and otherwise only when the check ended after the key parsed and the lock was taken: `opened`, `failed`, or
-`unavailable` for a file the check read. Every other end records only the admin server's `admin.command` event, whose
+is not a recovery key) or `unavailable` (the check could not run). Only `failed` says the key is bad.
+`recovery.checked` is raised for `invalid` when the text does not parse, and otherwise only when the check ended after
+the key parsed and the lock was taken: `opened`, `failed`, or `unavailable` for a file the check read. Every other end records only the admin server's `admin.command` event, whose
 `command` is `recovery_check`:
 
 - a refusal before the prompt: `wrong-state`, `memory-unprotected`, or `recovery-check-unavailable` for a vault that

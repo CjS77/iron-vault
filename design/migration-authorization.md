@@ -240,8 +240,7 @@ consecutive failures never limit.
   unreadable envelope, an interrupted open, a cancelled prompt and a refusal for state, initialization or memory do
   not. An open of the vault clears the count even when the config check then leaves the service Unavailable.
 - **Visible.** Every refused attempt is a WARN audit record: `migration.authorization-refused` with `wrong_passphrase`
-  here, `vault.unlock-refused` for `unlock`. In v1 the `migration_refused` owner notification also shows it on the
-  desktop.
+  here, `vault.unlock-refused` for `unlock`.
 
 Whether the limit is configurable is not decided; v0 fixes the constants.
 
@@ -378,9 +377,6 @@ The records of one exchange follow two rules, so the log shows how each attempt 
 without consuming the authorization, at its own step 8 or with `wrong-state` at step 9, drops the authorization unused
 and adds no migration record. An exchange refused before it issues a challenge, at step 5 or earlier, records no
 migration event.
-
-The owner notification topic `migration_refused` is reserved for `migration.authorization-refused`
-([owner-notifications.md](owner-notifications.md#reserved-topics)). It is v1 work, like every owner notification.
 
 ## Release checks
 
