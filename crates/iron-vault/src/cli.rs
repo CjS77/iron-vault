@@ -35,6 +35,9 @@ mod caller_token;
 mod client;
 mod completions;
 pub use completions::completions;
+// Offline: it parses a config file and never contacts the service, so it is not Linux-only.
+mod config_check;
+pub use config_check::config_check;
 #[cfg(target_os = "linux")]
 mod console;
 #[cfg(target_os = "linux")]
@@ -322,6 +325,15 @@ pub enum ConfigCommand {
     /// answers to the prompts when it is not a terminal.
     Approve {
         /// The proposed config file.
+        file: PathBuf,
+    },
+    /// Parse and validate FILE without contacting the service: no running service, vault or root is needed. It prints
+    /// `Config ok` and exits 0, or prints why the config is not valid, with the line and column, and exits 1; it exits 2
+    /// when FILE cannot be read or is longer than the limit. It does not check what only an approval can: that each
+    /// credential exists and permits its route's host, that a peer caller's account exists, or the upstream TLS and log
+    /// destination settings. A config that passes can still be refused by `config approve`.
+    Check {
+        /// The config file to check.
         file: PathBuf,
     },
 }

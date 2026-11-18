@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-config-check 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-config\-check \- Parse and validate FILE without contacting the service: no running service, vault or root is needed. It prints `Config ok` and exits 0, or prints why the config is not valid, with the line and column, and exits 1; it exits 2 when FILE cannot be read or is longer than the limit. It does not check what only an approval can: that each credential exists and permits its route\*(Aqs host, that a peer caller\*(Aqs account exists, or the upstream TLS and log destination settings. A config that passes can still be refused by `config approve`
+.SH SYNOPSIS
+\fBiron\-vault config check\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIFILE\fR> 
+.SH DESCRIPTION
+Parse and validate FILE without contacting the service: no running service, vault or root is needed. It prints `Config ok` and exits 0, or prints why the config is not valid, with the line and column, and exits 1; it exits 2 when FILE cannot be read or is longer than the limit. It does not check what only an approval can: that each credential exists and permits its route\*(Aqs host, that a peer caller\*(Aqs account exists, or the upstream TLS and log destination settings. A config that passes can still be refused by `config approve`
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIFILE\fR>
+The config file to check

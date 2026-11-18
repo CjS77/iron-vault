@@ -6,6 +6,21 @@ crate checks the config, and every refusal below is copied from its code. Terms 
 and the [specification](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) is the
 source of the rules.
 
+## Check a config first
+
+To catch mistakes before you approve, check the file. This needs no running service, no vault and no `sudo`:
+
+```sh
+iron-vault config check my-config.toml
+```
+
+It prints `Config ok` and exits 0 when the file parses and its sections agree with each other. Otherwise it exits 1 and
+prints why, with the line and column; a file that cannot be read, or is longer than 61440 bytes, exits 2.
+
+The check is advisory. It does not look at the vault or the host, so it cannot tell whether each route's credential
+exists, permits the route's host and fits its slot, whether a caller's account exists, or whether the upstream TLS and
+log destination settings work. `config approve` checks all of those, and can still refuse a file that passed.
+
 ## How approval works
 
 You never edit the config the service runs. You edit your own copy, anywhere you like, and approve it:

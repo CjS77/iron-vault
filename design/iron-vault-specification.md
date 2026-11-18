@@ -186,6 +186,8 @@ runtime administration by a host administrator, which the threat model excludes 
 ### CLI
 
 The CLI sends commands to the service.
+The one exception is `config check`, which parses and validates a config file without contacting the service. Its result is
+advisory: it cannot run activation, which needs the vault and the host, and the service never relies on it.
 The CLI may hold values that the owner enters, but it must not receive stored provider secrets, private signing keys, 
 refresh tokens, or PKCE verifiers.
 Prompted values must not appear in arguments, shell history, command diagnostics, or normal logs.
@@ -935,6 +937,7 @@ release check in [implementation spec §3](implementation-specification.md#3-imp
 | `iron-vault replace <name>`                      | Obtain owner presence, re-enter secret and destination policy, and update affected references explicitly             | v0                                        |
 | `iron-vault rm <name>`                           | Require owner presence and remove the record; refused while any route uses the name                                  | v0                                        |
 | `iron-vault config approve`                      | Run the service-owned pending-config and versioned-signature transaction                                             | v0                                        |
+| `iron-vault config check <file>`                 | Offline and without root: parse and validate a config file; print `Config ok`, or the failure and a non-zero status    | v0                                        |
 | `iron-vault lock` / `unlock`                     | Clear or recover the in-memory vault identity and cached secrets                                                     | v0                                        |
 | `iron-vault status`                              | Report service, vault, approval version, affected credential states and listeners not open, without secrets        | v0                                        |
 | `iron-vault recovery check`                      | Prompt for the offline recovery identity and verify that it opens the current vault identity                         | v0                                        |

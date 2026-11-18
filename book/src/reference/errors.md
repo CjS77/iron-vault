@@ -29,6 +29,11 @@ came back (the service is not running, this account may not connect, the exchang
 secret value the service sent could not be shown on a terminal), and `4` when `status` found the service in a state
 other than Ready, or `list` found no vault open.
 
+`config check` never reaches the service, so it has no error codes. It exits `0` for a config that parses and validates,
+`1` for one that does not (the line on stderr names the key, line and column), and `2` when the file cannot be read or is
+longer than 61440 bytes. A config that passes can still be refused by `config approve` with `config-invalid`, because
+only the service can check the credentials, accounts and upstream settings.
+
 ### Protocol and connection
 
 These can happen on any command.

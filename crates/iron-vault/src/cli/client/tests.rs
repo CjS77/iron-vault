@@ -16,6 +16,7 @@ use iron_vault::path_metadata::invoking_user;
 
 use super::*;
 use crate::cli::console::{InputError, OwnerConsole, Piped};
+use iron_vault::admin::protocol::MAX_CONFIG_LEN;
 
 /// Distinctive enough that finding it in a log or an error can only be the typed value leaking.
 const MARKER: &str = "MARKER-secret-5d1c9e";

@@ -77,6 +77,8 @@ fn run() -> anyhow::Result<ExitCode> {
             Ok(run_client(|| cli::approver_remove(cli.admin_socket.as_deref(), approver)))
         }
         Command::Recovery(RecoveryCommand::Check) => Ok(run_client(|| cli::recovery_check(cli.admin_socket.as_deref()))),
+        // Not a client command either: it parses the file here and never contacts the service.
+        Command::Config(ConfigCommand::Check { file }) => Ok(cli::config_check(&file)),
         Command::Config(ConfigCommand::Approve { file }) => Ok(run_client(|| cli::config_approve(cli.admin_socket.as_deref(), &file))),
     }
 }
