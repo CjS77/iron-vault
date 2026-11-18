@@ -2,34 +2,15 @@
 
 *Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `cc59b80`.*
 
-At the end of this recipe two Venice API keys each have one job, each used by its own caller:
+Give two Venice API keys one job each, each used by its own caller:
 
 | Credential    | Caller | Route         | Allows                                                        |
 |---------------|--------|---------------|---------------------------------------------------------------|
 | `venice_chat` | `chat` | `venice-chat` | `POST` to chat completions only, at most 6 requests a minute  |
 | `venice_dev`  | `dev`  | `venice-dev`  | `GET` or `POST` anywhere under `/api/v1`, up to 600 a minute  |
 
-A program holding the `chat` token can chat, slowly, and do nothing else. A program holding the `dev` token can use
-the rest of the API with the other key.
-
-```mermaid
-flowchart LR
-    CH[program with the chat token] -- "/venice-chat/..." --> RC
-    DV[program with the dev token] -- "/venice-dev/..." --> RD
-    CH -. "/venice-dev/... refused: 403" .-x RD
-    subgraph Iron Vault
-        RC["route venice-chat<br/>POST /chat/completions<br/>6 a minute"]
-        RD["route venice-dev<br/>GET, POST /**<br/>600 a minute"]
-        KC[(venice_chat)] -. key .-> RC
-        KD[(venice_dev)] -. key .-> RD
-    end
-    RC -- HTTPS --> V[api.venice.ai]
-    RD -- HTTPS --> V
-```
-
-**What was really run.** Each `pass show` below was replaced by `echo` with a dummy Venice key; every other command
-was run as shown. So the chat requests that Iron Vault forwarded got Venice's real `401` refusal, and the model list,
-which Venice serves without a key, came back for real. With real keys, the chat requests get answers instead.
+The output below was captured with a dummy Venice key in place of each `pass show`, so forwarded chat requests show
+Venice's `401`. With real keys they get answers.
 
 ## Prerequisites
 
@@ -105,13 +86,9 @@ paths = ["/**"]
 rate_limit = { requests = 600, per_seconds = 60, burst = 100 }
 ```
 
-- **A caller reaches only the routes it lists.** `chat` lists only `venice-chat`.
-- **Paths leave out the upstream's base path.** `/venice-chat/chat/completions` reaches Venice as
-  `/api/v1/chat/completions`, and `paths` names `/chat/completions`. `**` matches any number of segments, `*` exactly
-  one.
-- **The rate limit is a token bucket.** It holds up to `burst` requests and refills at `requests` every `per_seconds`.
-  The chat route can send 6 at once, then one every 10 seconds. The bucket is shared by every caller of the route.
-- **Every route needs a rate limit.** A route you don't want to limit gets a generous one.
+`chat` reaches only the routes it lists. `paths` leave out the upstream's base path, so `/chat/completions`, not
+`/api/v1/chat/completions`. The chat route allows 6 at once, then one every 10 seconds. See
+[configuration](../reference/configuration.md) for path patterns and rate limits.
 
 Approve it:
 
@@ -196,8 +173,8 @@ The log says why (fields trimmed):
 
 ### 6. Check the rate limit
 
-The route's bucket [starts empty](getting-started.md#rate-limits-start-empty) when the approval makes the service
-Ready, so wait a minute for it to fill, then send seven requests at once:
+The route's bucket [starts empty](../reference/configuration.md#rate_limit-the-token-bucket), so wait a minute for it to
+fill, then send seven requests at once:
 
 ```sh
 sleep 60
@@ -220,22 +197,20 @@ wait
 401
 ```
 
-Six went to Venice (and got `401` because the keys were dummies); the seventh was refused at once with `429`, without
-reaching Venice. The order of the lines varies: the `429` comes back first because it never leaves the machine. Its
-log record has `"reason":"rate_limited"`.
+Six reach Venice (`401` with a dummy key); the seventh gets `429` without leaving the machine, often first. Its log
+record has `"reason":"rate_limited"`.
 
 ## What can go wrong
 
-- **All seven requests get `429`.** The bucket was not full. It [starts empty](getting-started.md#rate-limits-start-empty)
-  each time the service becomes Ready and refills at one request every 10 seconds on this route, a full burst after a
-  minute. Sent straight after the approval, all seven were refused.
+- **All seven requests get `429`.** The bucket was not full: it
+  [starts empty](../reference/configuration.md#rate_limit-the-token-bucket). Wait the full minute.
 - **`401 Unauthorized` from Iron Vault, `unauthorized` in the body.** The token is missing, wrong, or was replaced
-  by a newer approval. The log's `reason` is `unauthenticated`.
+  by a newer approval (`reason`: `unauthenticated`).
 - **`iron-vault: the service answered error 7 (config-invalid): the proposed config is invalid: caller chat is
   granted route venice-admin, which is not defined`.** A caller's `routes` names a route the config does not define.
   Add the route or take it out of the list.
-- **`403` with `path_not_allowed` on the chat route.** `paths` is matched against the path after the route prefix, so
-  `/chat/completions`, not `/api/v1/chat/completions`.
+- **`403` with `path_not_allowed` on the chat route.** `paths` leave out the upstream's base path: `/chat/completions`,
+  not `/api/v1/chat/completions`.
 
 ## Reference
 

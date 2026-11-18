@@ -2,9 +2,8 @@
 
 *Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `cc59b80`.*
 
-At the end of this recipe you will have Iron Vault running as your own user, with a vault, one stored credential and
-one route to [httpbin.org](https://httpbin.org). You will send a request through it, see that httpbin received the
-credential, and see the credential scrubbed from the echo before it reached you.
+Run Iron Vault as your own user with one credential and one route to [httpbin.org](https://httpbin.org), and send a
+request through it.
 
 Development mode gives **no isolation from malware running as you**. Use it to learn Iron Vault, never to protect
 real secrets. For that, use the [protected Linux install](../installation/linux-install.md).
@@ -30,8 +29,7 @@ iron-vault --version
 iron-vault 0.2.0-alpha (features: dev-mode)
 ```
 
-The service refuses to run a binary that another account could replace, so the binary and every directory above it
-must be owned by you or root and not writable by group or others. That is what the `chmod` is for.
+The `chmod` matters: the service refuses to run a binary that another account could replace.
 
 ### 2. Start the service
 
@@ -41,9 +39,8 @@ In a terminal of its own:
 iron-vault serve --log-to-stdout | tee -a ~/iron-vault-dev.log
 ```
 
-The log is JSON, one record per line. Three of the first records are expected in development mode: `service started`,
-`process hardening is incomplete` (ERROR, because memory can't be locked against swap unless you raised
-`RLIMIT_MEMLOCK`) and the development-mode warning:
+Expect `service started`, `process hardening is incomplete` (ERROR, unless you raised `RLIMIT_MEMLOCK`) and the
+development-mode warning:
 
 ```json
 {"service":"iron-vault","service_version":"0.2.0-alpha","schema_version":1,"deployment_profile":"development","level":"WARN","message":"development mode: no isolation from malware running as alice","target":"iron_vault"}
@@ -69,7 +66,7 @@ recovery last checked: unknown (the vault is not initialized)
 credentials: unknown while the vault is locked
 ```
 
-`status` exits with 4 while the service is not Ready. That is expected here.
+`status` exits with 4 while the service is not Ready, as here.
 
 ### 3. Create the vault
 
@@ -77,7 +74,7 @@ credentials: unknown while the vault is locked
 iron-vault init
 ```
 
-`init` asks for two passphrases, each twice. Each must be at least 12 characters, and the two must differ:
+`init` asks for two passphrases, each twice, at least 12 characters and different from each other:
 
 - the **vault passphrase** unlocks the vault each time the service starts;
 - the **approval passphrase** approves config changes and confirms `replace` and `rm`.
@@ -100,8 +97,7 @@ initialized vault 4b3faa85-…: approval version 1 committed
 run iron-vault unlock to start serving
 ```
 
-`init` refuses to run without a controlling terminal, because it shows the recovery key there. With one, the
-passphrases may also be piped in on stdin, one per line. The service stays Locked.
+`init` needs a controlling terminal. The service stays Locked.
 
 ### 4. Unlock
 
@@ -134,7 +130,7 @@ Run `unlock` again each time you restart the service.
 
 ### 5. Check the recovery key
 
-Prove that the key you saved opens the vault. The service asks for it with echo off, or reads it from stdin:
+Prove that the key you saved opens the vault:
 
 ```sh
 iron-vault recovery check
@@ -145,18 +141,12 @@ Recovery key:
 the recovery key opens vault 4b3faa85-…: checked 2026-11-07T09:43:48Z
 ```
 
-The check changes nothing in the vault. It records only the time, which `status` then shows under
-`recovery last checked`.
+`status` then shows the time under `recovery last checked`.
 
-### 6. List the recipients and rotate the recovery key
+### 6. Store a credential
 
-`iron-vault recipient list` shows who can open the vault: your vault passphrase and the recovery key. To replace the
-recovery key, follow [rotate the recovery key](recipients.md). You can skip this step for now.
-
-### 7. Store a credential
-
-`add` takes the credential's name and the origins it may ever be sent to. It prompts for the secret; no argument ever
-takes one. httpbin checks no keys, so use a test value such as `not-a-real-key-123`:
+`add` takes the credential's name and the origins it may be sent to, and prompts for the secret. httpbin checks no
+keys, so type a test value such as `not-a-real-key-123`:
 
 ```sh
 iron-vault add httpbin_key --origin httpbin.org
@@ -169,12 +159,12 @@ added httpbin_key (static) as record 531d79af-…
 httpbin_key  static  httpbin.org:443  healthy
 ```
 
-For a real secret, pipe it in so it never reaches your shell history: `pass show brave | iron-vault add brave
+For a real secret, pipe it in so it stays out of your shell history: `pass show brave | iron-vault add brave
 --origin api.search.brave.com`.
 
-### 8. Issue a caller token
+### 7. Issue a caller token
 
-A TCP caller proves who it is with a caller token. Keep tokens in a directory only you can read:
+Keep tokens in a directory only you can read:
 
 ```sh
 mkdir -m 700 -p ~/.iron-vault-tokens
@@ -192,7 +182,7 @@ The token works only once that config is approved and active; the caller's old t
 
 Anyone who can read the token file can use its routes.
 
-### 9. Write and approve a config
+### 8. Write and approve a config
 
 Save this as `dev-config.toml`, anywhere you like, with your own `token_hash` line:
 
@@ -217,12 +207,7 @@ paths = ["/anything/**", "/headers"]
 rate_limit = { requests = 30, per_seconds = 60, burst = 5 }
 ```
 
-- The **listener** is plain HTTP on loopback.
-- The **caller** `me` arrives on that listener and presents the token.
-- The **route** maps `/httpbin/...` to `https://httpbin.org/...`, puts the credential in `Authorization`, and allows
-  only `GET` on the listed paths, at no more than 30 requests a minute.
-
-Approve it:
+The [configuration reference](../reference/configuration.md) explains each table. Approve it:
 
 ```sh
 iron-vault config approve dev-config.toml
@@ -248,10 +233,10 @@ approved version 2 (blake2b:f08dc490…)
 callers: 1 added; route grants: 1 added; routes: 1 added; listeners: 1 added; limits: none; logging: none; recovery: none
 ```
 
-The service publishes its own signed copy of the config to `~/.config/iron-vault-dev/config.toml` and opens the
-listener without a restart. Keep editing `dev-config.toml`, never the published copy.
+The listener opens without a restart. Keep editing `dev-config.toml`, never the service's published copy in
+`~/.config/iron-vault-dev/config.toml`.
 
-### 10. Send a request
+### 9. Send a request
 
 ```sh
 TOKEN=$(cat ~/.iron-vault-tokens/me)
@@ -270,31 +255,17 @@ curl -s -H "Proxy-Authorization: Bearer $TOKEN" http://127.0.0.1:7878/httpbin/he
 }
 ```
 
-httpbin received `Authorization: Bearer not-a-real-key-123` and echoed it back. Iron Vault replaced the secret with
-`[iron-vault:scrubbed]` before the response reached you. Your caller token never reached httpbin: there is no
-`Proxy-Authorization` in the echo.
+httpbin received the secret and echoed it back; Iron Vault scrubbed it from the response. There is no
+`Proxy-Authorization` in the echo: your caller token never left the machine.
 
-```mermaid
-sequenceDiagram
-    participant C as curl
-    participant V as Iron Vault
-    participant H as httpbin.org
-    C->>V: GET /httpbin/headers<br/>Proxy-Authorization: Bearer (caller token)
-    Note over V: checks the token, the route, the method,<br/>the path and the rate limit
-    V->>H: GET /headers over verified TLS<br/>Authorization: Bearer not-a-real-key-123
-    H-->>V: 200, echo containing the secret
-    Note over V: scrubs the secret from the response
-    V-->>C: 200, echo with Bearer [iron-vault:scrubbed]
-```
-
-The service's terminal shows the request and the scrub, trimmed here to the useful fields:
+The service's log shows the request and the scrub (trimmed):
 
 ```json
 {"level":"INFO","message":"request completed","event":"request.completed","listener":"loopback","http_method":"GET","caller":"me","route":"httpbin","credential":"httpbin_key","upstream_host":"httpbin.org","status":200,"request_bytes":0,"response_bytes":199,"duration_ms":308,"scrubbed":true,"outcome":"success","target":"iron-vault.request"}
 {"level":"WARN","message":"scrubbed a secret from a response","event":"response.scrubbed","route":"httpbin","credential":"httpbin_key","matches":1,"target":"iron-vault.audit"}
 ```
 
-### 11. See the policy refuse
+### 10. See the policy refuse
 
 ```sh
 AUTH="Proxy-Authorization: Bearer $TOKEN"
@@ -321,34 +292,25 @@ content-length: 9
 forbidden
 ```
 
-Each one is refused before anything leaves the machine. The response says only `unauthorized` or `forbidden`; the
-log says why, in the `reason` field: `unauthenticated`, `method_not_allowed` and `path_not_allowed`.
-
-## Rate limits start empty
-
-Each route's token bucket starts **empty** every time the service becomes Ready: when you unlock, after each
-`config approve`, after a reload on SIGHUP, and after `replace` or `rm`. (`add` doesn't reset it.) The bucket then
-refills at `requests / per_seconds` up to `burst`. The `httpbin` route above refills at one request every 2 seconds, so
-straight after an approval its first request may get `429 Too Many Requests`, and its full burst of 5 is there after
-10 seconds. This stops a restart or a reload from handing out a fresh allowance.
+Nothing leaves the machine. The log's `reason` field says why: `unauthenticated`, `method_not_allowed` and
+`path_not_allowed`.
 
 ## What can go wrong
 
 - **``iron-vault: refusing to start: /home/alice/projects/iron-vault/target/debug/iron-vault is not trusted:
-  /home/alice/projects is writable by group 1001; run `chmod g-w /home/alice/projects` ``.** The binary, or a directory above it, could be replaced by
-  another account. A build run straight from `target/` in a group-writable checkout gets this. Install under
-  `~/.local` and run the `chmod` in step 1. A group with a name is shown quoted, as in `group 'alice'`.
+  /home/alice/projects is writable by group 1001; run `chmod g-w /home/alice/projects` ``.** Run the binary from `~/.local`, not
+  from `target/` in a group-writable checkout, and run the `chmod` in step 1.
 - **`iron-vault: refusing to start: … is not trusted: /tmp is a shared directory other users can write; move the state
-  directory, config, TLS key or certificate out of /tmp rather than changing its permissions`.** `XDG_CONFIG_HOME` or
-  `XDG_STATE_HOME` points under `/tmp`. Use directories in your home.
-- **`iron-vault: the Iron Vault service is not running: there is no admin socket at …`.** The service is not running,
-  or it was started with a different `XDG_RUNTIME_DIR`.
+  directory, config, TLS key or certificate out of /tmp rather than changing its permissions`.** Point `XDG_CONFIG_HOME` and
+  `XDG_STATE_HOME` at directories in your home.
+- **`iron-vault: the Iron Vault service is not running: there is no admin socket at …`.** Start the service, with the same
+  `XDG_RUNTIME_DIR` as the CLI.
 - **`iron-vault: the service answered error 14 (unlock-denied): wrong passphrase`.** After 5 wrong vault passphrases,
   `unlock` is refused for a cooldown that starts at 30 s and doubles up to 15 min.
 - **``iron-vault: the service answered error 20 (name-taken): credential httpbin_key already exists, healthy or
   damaged; `add` never overwrites``.** Use `replace` to change an existing credential.
-- **`429 Too Many Requests` on the first requests after an approval.** The route's bucket
-  [starts empty](#rate-limits-start-empty).
+- **`429 Too Many Requests` on the first requests after an unlock or approval.** The route's bucket
+  [starts empty](../reference/configuration.md#rate_limit-the-token-bucket); wait a few seconds.
 - **`503` from the proxy.** The service is Locked: run `iron-vault unlock`.
 
 ## Reference

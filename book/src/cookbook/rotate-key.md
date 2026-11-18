@@ -78,7 +78,7 @@ httpbin_key  static  httpbin.org:443  healthy
 ```
 
 httpbin echoed the new secret, and the scrubber, which now knows the new secret, removed it. The service becomes
-Ready again after a `replace`, so the route's rate limit [starts empty](getting-started.md#rate-limits-start-empty)
+Ready again after a `replace`, so the route's rate limit [starts empty](../reference/configuration.md#rate_limit-the-token-bucket)
 and the first request may get `429`. While the switch is in progress, requests get `503` with reason `checking`.
 
 ### 3. Find the change in the log
@@ -132,7 +132,7 @@ before                    httpbin.org                       https://httpbin.org
   `vault.presence-refused` record with `"refusal":"wrong_passphrase"`.
 - **`iron-vault: the service answered error 24 (credential-in-use): …`.** The new origins or kind don't suit a route
   that uses the credential, as [above](#changing-the-origins-or-the-kind).
-- **`429` on the first request afterwards.** The bucket [starts empty](getting-started.md#rate-limits-start-empty)
+- **`429` on the first request afterwards.** The bucket [starts empty](../reference/configuration.md#rate_limit-the-token-bucket)
   after a `replace`.
 - **The provider refuses the new key.** Iron Vault sends what you typed. Check for a stray space or a truncated paste,
   then `replace` again.

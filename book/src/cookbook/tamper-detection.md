@@ -138,7 +138,7 @@ approval committed: 10
 approval highest reserved: 10
 ```
 
-The service is Ready again. Its rate limit [starts empty](getting-started.md#rate-limits-start-empty), so the first
+The service is Ready again. Its rate limit [starts empty](../reference/configuration.md#rate_limit-the-token-bucket), so the first
 request may get `429`.
 
 ## What can go wrong

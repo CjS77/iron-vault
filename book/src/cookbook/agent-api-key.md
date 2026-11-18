@@ -2,9 +2,8 @@
 
 *Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `cc59b80`.*
 
-At the end of this recipe an agent or MCP server can call Brave Search, Venice and an FX API through Iron Vault. Its
-configuration holds a base URL, a placeholder key and a caller token, never a provider key. The three routes show the
-three slot shapes:
+Let an agent or MCP server call Brave Search, Venice and an FX API through Iron Vault, holding a base URL, a placeholder
+key and a caller token, never a provider key:
 
 | Provider     | Slot                                                         | The agent's base URL            |
 |--------------|--------------------------------------------------------------|---------------------------------|
@@ -12,18 +11,9 @@ three slot shapes:
 | Venice       | a header with a format: `Authorization: Bearer {}`           | `http://127.0.0.1:7878/venice`  |
 | An FX API    | a query parameter: `app_id`                                  | `http://127.0.0.1:7878/fx`      |
 
-The routes are the ones in the [specification's example config](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
-with one change to the FX route. The spec's FX upstream, `api.fx.example`, is a placeholder that doesn't resolve, so
-this recipe uses [OpenExchangeRates](https://openexchangerates.org), which takes its key in an `app_id` query
-parameter. Its endpoints are files, so the paths change too: `/latest.json` (current rates), `/historical/*` (one
-file per date, such as `/historical/2026-11-01.json`), `/currencies.json` and `/usage.json`. OpenExchangeRates'
-free plan serves rates against a USD base only, so a request should not set `base`. Set `paths` to the endpoints
-your own FX provider uses.
-
-**What was really run.** The Brave and Venice steps were run with a dummy key, each reaching the real provider, and
-the provider's real refusal is shown. The FX route was changed to OpenExchangeRates afterwards and its output was not
-re-checked: the FX approval summary, the FX request and its answer below are not captured from a run. With a real key
-in the vault, the same request gets the provider's answer instead.
+The FX route uses [OpenExchangeRates](https://openexchangerates.org), which takes its key in an `app_id` query
+parameter; set `paths` to the endpoints your own FX provider uses. The Brave and Venice output below comes from runs
+with a dummy key; the FX approval summary and request were not captured from a run.
 
 ## Prerequisites
 
@@ -35,8 +25,7 @@ in the vault, the same request gets the provider's answer instead.
 
 ### 1. Store the keys
 
-`add` prompts for each key with echo off, so it never reaches your shell history. Each `--origin` names the only
-host its key may ever be sent to:
+`add` prompts for each key with echo off. Each `--origin` names the only host its key may be sent to:
 
 ```sh
 iron-vault add brave  --origin api.search.brave.com
@@ -107,21 +96,9 @@ paths = ["/latest.json", "/historical/*", "/currencies.json", "/usage.json"]
 rate_limit = { requests = 10, per_seconds = 60, burst = 2 }
 ```
 
-- A header slot with no `format` sends the key as the whole header value.
-- `paths` match the path after the route prefix, without the upstream's base path. The Venice upstream ends in
-  `/api/v1`, so the agent's `/venice/chat/completions` reaches Venice as `/api/v1/chat/completions`, and `paths` names
-  `/chat/completions`:
-
-  ```text
-  the agent sends     http://127.0.0.1:7878/venice/chat/completions
-                                           └─────┘└───────────────┘
-                                           prefix path, matched against paths
-
-  Venice receives     https://api.venice.ai/api/v1/chat/completions
-                      └──────────────────────────┘└───────────────┘
-                      upstream                    path
-  ```
-- Each route allows only the methods and paths the agent needs. Widen them when it needs more.
+`paths` match the path after the route prefix, without the upstream's base path: the agent's
+`/venice/chat/completions` reaches Venice as `/api/v1/chat/completions`, and `paths` names `/chat/completions`. See
+[configuration](../reference/configuration.md) for slots and path patterns.
 
 Approve it:
 
@@ -180,23 +157,20 @@ With a dummy key, Venice answers `401 Unauthorized` with:
 {"error":"Authentication failed"}
 ```
 
-**FX.** Iron Vault appends `app_id=<key>` to the query and removes any `app_id` the agent sent. The request sets no
-`base`, because the free plan serves USD rates only. This step was not re-checked against OpenExchangeRates.
+**FX.** Iron Vault appends `app_id=<key>` to the query. Set no `base`: the free plan serves USD rates only.
 
 ```sh
 curl -s -H "$AG" 'http://127.0.0.1:7878/fx/latest.json?symbols=EUR'
 ```
 
-The Brave and Venice answers came from the provider, so those requests left Iron Vault with a key in their slots. The
-log agrees (fields trimmed):
+A provider's own refusal shows the request reached it with a key in the slot. The log (trimmed):
 
 ```json
 {"event":"request.completed","caller":"agent","route":"brave","status":422,"outcome":"success"}
 {"event":"request.completed","caller":"agent","route":"venice","status":401,"outcome":"success"}
 ```
 
-`outcome` describes Iron Vault's part only: `success` means it forwarded the request and relayed the answer. The
-provider's status does not change it.
+`outcome` is `success` whenever Iron Vault forwarded the request, whatever the provider answered.
 
 ### 5. Configure the agent
 
@@ -204,17 +178,15 @@ Give the agent three things:
 
 - **Base URL:** the route's prefix on the listener, from the table at the top. The agent appends its usual API path.
   For Venice, an OpenAI-compatible client sets its base URL to `http://127.0.0.1:7878/venice`.
-- **API key:** any placeholder, such as `placeholder`, because many SDKs refuse to start without a key. Iron Vault
-  removes every copy of the slot's header or query parameter and writes the real key in its place.
+- **API key:** any placeholder, such as `placeholder`. Iron Vault replaces it with the real key.
 - **Caller token:** sent as `Proxy-Authorization: Bearer <token>` on every request. If the agent can only add a header
   with a fixed name, see [point a real application at Iron Vault](real-application.md#3-send-the-caller-token).
 
-The client settings above were not tried with a particular agent or MCP server; the `curl` requests in step 4 were.
-Before relying on an agent, check that it really uses the base URL for every request, as
-[point a real application at Iron Vault](real-application.md#4-check-that-a-client-supports-base-url-mode) describes.
+These settings were not tried with a particular agent. Before relying on one,
+[check that it uses the base URL for every request](real-application.md#4-check-that-a-client-supports-base-url-mode).
 
 In a [protected install](../installation/linux-install.md), run the agent as its own OS account and make it a peer
-caller on the Unix socket. The kernel then identifies it, and there is no token file to steal:
+caller on the Unix socket, so there is no token file to steal:
 
 ```toml
 [callers.fx-mcp]
@@ -227,8 +199,7 @@ routes = ["fx"]
 ## What can go wrong
 
 - **`iron-vault: the service answered error 7 (config-invalid): the proposed config is invalid: route fx sends
-  credential fx_key to an origin its record does not permit`.** The route's upstream is not one of the credential's origins; this is what the spec's
-  `https://api.fx.example` upstream gets against a key added for `openexchangerates.org`. Fix the upstream, or
+  credential fx_key to an origin its record does not permit`.** The route's upstream is not one of the credential's origins. Fix the upstream, or
   `replace` the credential with the right `--origin`. No version is used up.
 - **`403 Forbidden` from Iron Vault.** The method or path is not in the route. The log's `reason` says which:
   `method_not_allowed` or `path_not_allowed`. Remember that `paths` leave out the upstream's base path.
@@ -237,7 +208,7 @@ routes = ["fx"]
 - **`400 Bad Request` with `foreign_marker` in the log.** The agent put a marker such as `{iv:brave}` in the slot of a
   route whose credential is not `brave`.
 - **`429 Too Many Requests` right after an approval or unlock.** Each route's token bucket
-  [starts empty](getting-started.md#rate-limits-start-empty) whenever the service becomes Ready; wait a few seconds.
+  [starts empty](../reference/configuration.md#rate_limit-the-token-bucket) whenever the service becomes Ready; wait a few seconds.
 
 ## Reference
 

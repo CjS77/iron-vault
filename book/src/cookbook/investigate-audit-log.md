@@ -56,7 +56,7 @@ What each one points at:
 | `unauthenticated` | 401 | a missing, wrong or [revoked](caller-token.md) caller token; such records name no caller |
 | `not_granted`, `method_not_allowed`, `path_not_allowed` | 403 | the caller's `routes`, or the route's `methods` and `paths` ([widen or narrow a route](change-route.md)) |
 | `no_route` | 404 | a base URL missing the route prefix |
-| `rate_limited` | 429 | the route's `rate_limit`; a burst of these straight after an unlock, approval, reload, `replace` or `rm` is the bucket [starting empty](getting-started.md#rate-limits-start-empty) |
+| `rate_limited` | 429 | the route's `rate_limit`; a burst of these straight after an unlock, approval, reload, `replace` or `rm` is the bucket [starting empty](../reference/configuration.md#rate_limit-the-token-bucket) |
 | `locked` | 503 | the service is Locked: [unlock it](lock-unlock-restart.md) |
 | `policy_invalid` | 503 | the config check failed: see [tamper detection](tamper-detection.md) |
 

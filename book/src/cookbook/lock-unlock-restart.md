@@ -143,7 +143,7 @@ credential httpbin_key: healthy
 
 ### 5. Expect `429` for a moment
 
-The rate limit [starts empty](getting-started.md#rate-limits-start-empty) on every unlock. Straight after it:
+The rate limit [starts empty](../reference/configuration.md#rate_limit-the-token-bucket) on every unlock. Straight after it:
 
 ```sh
 curl -si -H "$AUTH" http://127.0.0.1:7878/httpbin/headers | head -1

@@ -93,7 +93,7 @@ HTTP/1.1 403 Forbidden
 ```
 
 The log gives the reason `path_not_allowed`. Each approval makes the service Ready again, so the route's rate limit
-[starts empty](getting-started.md#rate-limits-start-empty).
+[starts empty](../reference/configuration.md#rate_limit-the-token-bucket).
 
 ### 3. Read the summary, and say no when it's wrong
 
@@ -138,7 +138,7 @@ What to check in a summary:
   allowed only on loopback`. Check the [configuration reference](../reference/configuration.md) for that table.
 - **`403` with `path_not_allowed` after widening.** Patterns match the path after the route prefix, which leaves out
   the upstream's base path.
-- **`429` straight after the approval.** The bucket [starts empty](getting-started.md#rate-limits-start-empty).
+- **`429` straight after the approval.** The bucket [starts empty](../reference/configuration.md#rate_limit-the-token-bucket).
 
 ## Reference
 

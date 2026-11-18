@@ -2,13 +2,9 @@
 
 *Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `cc59b80`.*
 
-At the end of this recipe Iron Vault holds a username and password and sends them to an upstream as
-`Authorization: Basic …`, so the caller holds neither. The recipe tests against httpbin's
-`/basic-auth/<user>/<password>` endpoint, which answers `200` if and only if the `Authorization` header carries the
-username and password named in the path. Because that test endpoint puts both values in its path, the caller here
-knows them. A real upstream checks only the header, and the caller's requests carry neither value.
-
-Every command below was run against the real httpbin.org.
+Store a username and password and have Iron Vault send them upstream as `Authorization: Basic …`. The test endpoint,
+httpbin's `/basic-auth/<user>/<password>`, puts both values in its path; a real upstream's caller knows neither.
+Every command below was run against httpbin.org.
 
 ## Prerequisites
 
@@ -19,7 +15,7 @@ Every command below was run against the real httpbin.org.
 
 ### 1. Store the username and password
 
-`--kind basic` makes `add` ask for two values. Both are secret, so neither is echoed:
+`--kind basic` makes `add` ask for two values, neither echoed:
 
 ```sh
 iron-vault add httpbin_basic --kind basic --origin httpbin.org
@@ -31,8 +27,7 @@ Password for httpbin_basic:
 added httpbin_basic (basic) as record 5c4cd8bd-…
 ```
 
-This run used the username `alice` and the password `test-basic-pass-77`. Piped in, the first line is the username
-and the second the password.
+This run used `alice` and `test-basic-pass-77`. Piped in, the first line is the username and the second the password.
 
 ```sh
 iron-vault list
@@ -47,8 +42,7 @@ httpbin_key  static  httpbin.org:443  healthy
 
 ### 2. Add a route with the Basic slot
 
-The Basic slot is the bare string `"basic"`: it takes no header name or format, because it always writes
-`Authorization`. Add the route to `dev-config.toml`, and grant it to `me`:
+The Basic slot is the bare string `"basic"`. Add the route to `dev-config.toml`, and grant it to `me`:
 
 ```toml
 [callers.me]
@@ -65,8 +59,6 @@ methods = ["GET"]
 paths = ["/basic-auth/alice/*", "/headers"]
 rate_limit = { requests = 30, per_seconds = 60, burst = 5 }
 ```
-
-Two routes may share an upstream; each needs its own prefix.
 
 ```sh
 iron-vault config approve dev-config.toml
@@ -95,7 +87,7 @@ AUTH="Proxy-Authorization: Bearer $(cat ~/.iron-vault-tokens/me)"
 curl -s -H "$AUTH" http://127.0.0.1:7878/httpbin-basic/basic-auth/alice/test-basic-pass-77
 ```
 
-httpbin checked the username and password Iron Vault sent:
+httpbin accepted the username and password Iron Vault sent:
 
 ```json
 {
@@ -123,13 +115,10 @@ curl -s -H "$AUTH" http://127.0.0.1:7878/httpbin-basic/headers
 }
 ```
 
-The whole `Basic …` value was scrubbed, and the log has a `response.scrubbed` record with `"matches":1`.
+The whole `Basic …` value is scrubbed, and the log has a `response.scrubbed` record with `"matches":1`. A caller's own
+`Authorization` header, such as `curl -u placeholder:placeholder`, is replaced by the stored one.
 
-If the caller sends an `Authorization` header of its own, such as a client that insists on a username and password,
-Iron Vault removes it and writes the stored one. With `curl -u placeholder:placeholder`, the echo is the same as
-above.
-
-A password that doesn't match is refused by httpbin, not by Iron Vault:
+A wrong password in the path is refused by httpbin, not by Iron Vault:
 
 ```sh
 curl -si -H "$AUTH" http://127.0.0.1:7878/httpbin-basic/basic-auth/alice/wrong
@@ -143,16 +132,13 @@ www-authenticate: Basic realm="Fake Realm"
 
 ## What can go wrong
 
-- **The username is not scrubbed from bodies.** In the first response, `"user": "alice"` came back unchanged. For a
-  Basic credential the scrubber watches for the Basic token, the complete `Basic <token>` value, `username:password`
-  and the password, each with its encoded forms. It watches for the username alone only when the password is empty,
-  because the username is then the secret.
+- **The username is not scrubbed from bodies.** `"user": "alice"` comes back unchanged. The username alone is scrubbed only
+  when the password is empty.
 - **`403` with `path_not_allowed`.** This route allows only `alice`'s path; `/basic-auth/bob/x` is refused before
   anything leaves the machine.
 - **`429` right after the approval.** The route's token bucket
-  [starts empty](getting-started.md#rate-limits-start-empty) each time the service becomes Ready, and refills at one
-  request every 2 seconds. In this run the wrong-password request, sent straight after the other two, got
-  `429` and went through a few seconds later.
+  [starts empty](../reference/configuration.md#rate_limit-the-token-bucket) and refills at one request every 2 seconds;
+  wait a few seconds.
 - **`401` from the upstream.** The stored username or password is wrong. `replace httpbin_basic --kind basic
   --origin httpbin.org` stores new ones.
 
