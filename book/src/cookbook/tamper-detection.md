@@ -2,22 +2,10 @@
 
 *Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `378d57d`.*
 
-At the end of this recipe you will have seen what the service does when its published config is changed without an
-approval, and brought it back. The service publishes each approved config as `config.toml` with its signature,
-`config.toml.sig`, beside it. When it reloads, it checks the pair against the approved version. A config that nobody
-approved is refused, and the service stops proxying instead of running it:
+Change the published config without an approval, see the service stop proxying, and bring it back. See the
+[config approval design](../../../design/config-approval.md#reload) for the check.
 
-```mermaid
-flowchart LR
-    E["config.toml changed<br/>without approval"] --> R["reload (SIGHUP)"]
-    R --> C{"config.toml and<br/>config.toml.sig match the<br/>committed version?"}
-    C -- yes --> Ready
-    C -- no --> U["Unavailable:<br/>503 policy invalid"]
-    U -->|config approve| Ready
-```
-
-Every command below was run as shown, against the real httpbin.org. Step 1 plays the attacker. Don't do it to a
-service that holds real keys.
+Step 1 plays the attacker. **Don't do it to a service that holds real keys.**
 
 ## Prerequisites
 
@@ -29,8 +17,7 @@ service that holds real keys.
 
 ### 1. Change the published config
 
-Raise the rate limit directly in the published copy, as malware that could write the file might, then ask the
-service to reload:
+Raise the rate limit in the published copy, then ask the service to reload:
 
 ```sh
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/iron-vault-dev/config.toml"
@@ -81,15 +68,13 @@ jq -c 'select(.event == "config.reload-failed")' ~/iron-vault-dev.log
 {"service":"iron-vault","service_version":"0.2.0-alpha","schema_version":1,"deployment_profile":"development","timestamp":"2026-11-07T10:24:23.474848Z","level":"WARN","message":"the reload failed, the service stops proxying","event":"config.reload-failed","committed_version":9,"unavailable_reason":"policy_invalid","detail":"the published config is not committed version 9: the config has changed since it was approved; approve it again","target":"iron-vault.audit"}
 ```
 
-A `config.check-failed` record with the same `detail` comes just before it. The service keeps none of the old route
-policy: it serves nothing instead of guessing which config is real.
+A `config.check-failed` record with the same `detail` comes just before it.
 
 ### 3. Find out how it happened
 
-In development mode the published config is in your own config directory, so anything running as you can write it.
-In a protected install only the `iron-vault` service account and root can, so a changed file there means something
-ran as one of them. Look at what else changed, and [read the admin trail](investigate-audit-log.md#5-read-the-admin-trail)
-for approvals and credential changes you didn't make.
+In a protected install only the `iron-vault` service account and root can write the published config. Look at what
+else changed, and [read the admin trail](investigate-audit-log.md#5-read-the-admin-trail) for approvals and
+credential changes you didn't make.
 
 ### 4. Approve your config again
 
@@ -99,7 +84,7 @@ Never fix the published copy by hand. Approve your own copy, after checking it i
 iron-vault config approve dev-config.toml
 ```
 
-The service lists everything as added, because no config is active:
+No config is active, so everything is listed as added:
 
 ```text
 Approval summary
@@ -122,8 +107,7 @@ approved version 10 (blake2b:f8020a2b…)
 callers: 1 added; route grants: 1 added; routes: 1 added; listeners: 1 added; limits: none; logging: none; recovery: none
 ```
 
-Read every line of it: this is the whole policy, not a diff. Here the digest is the same as version 9's, because the
-file is the same as the one last approved.
+Read every line: this is the whole policy, not a diff.
 
 ```sh
 iron-vault status | head -6
@@ -138,15 +122,14 @@ approval committed: 10
 approval highest reserved: 10
 ```
 
-The service is Ready again. Its rate limit [starts empty](../reference/configuration.md#rate_limit-the-token-bucket), so the first
-request may get `429`.
+The first request may get `429`: the rate limit
+[starts empty](../reference/configuration.md#rate_limit-the-token-bucket).
 
 ## What can go wrong
 
 - **`status` shows `vault: locked` while Unavailable, but the secrets are not out of memory.** Unavailable keeps the
-  vault identity in memory; it holds no policy and no credential records. That is why the approval above worked
-  without an `unlock`. To clear the vault identity while you investigate, run `iron-vault lock`, then `iron-vault
-  unlock` before you approve. See [service states](../reference/states.md).
+  vault identity in memory. To clear it while you investigate, run `iron-vault lock`, then `iron-vault unlock` before
+  you approve. See [service states](../reference/states.md).
 - **You don't have the config you last approved.** Write a new one from scratch and approve it. The summary lists it
   all as added either way.
 

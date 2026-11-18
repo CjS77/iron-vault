@@ -2,16 +2,12 @@
 
 *Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `378d57d`.*
 
-At the end of this recipe a development install has no vault, no config and no log, and the service starts as it did
-the first time, ready for `init`. Do this when you have finished experimenting, or to try a recipe from a clean start.
-It deletes every credential in the development vault, and the recovery key cannot bring them back.
+Delete a development install's vault, config and log, so the service starts ready for `init`. **This deletes every
+credential in the development vault; the recovery key cannot bring them back.**
 
-The commands below were run with `XDG_CONFIG_HOME` and `XDG_STATE_HOME` pointing at scratch directories. The tokens
-and the `tee` copy of the log were in a scratch directory too, and were removed from there.
-
-This is for development mode only. A protected install is removed with `apt purge`, which asks before it deletes the
-vault; see [Uninstall and purge](../installation/linux-install.md#uninstall-and-purge). To keep the installation and replace the vault, use
-[`iron-vault reset`](reset-vault.md).
+Development mode only. A protected install is removed with `apt purge`; see
+[Uninstall and purge](../installation/linux-install.md#uninstall-and-purge). To keep the installation and replace the
+vault, use [`iron-vault reset`](reset-vault.md).
 
 ## Prerequisites
 
@@ -22,7 +18,7 @@ vault; see [Uninstall and purge](../installation/linux-install.md#uninstall-and-
 
 ### 1. Stop the service
 
-Press Ctrl-C in the service's terminal. Its last two log records are:
+Press Ctrl-C in the service's terminal. Its last log records are:
 
 ```json
 {"message":"stopping on SIGINT"}
@@ -38,9 +34,7 @@ rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/iron-vault-dev" \
        ~/.iron-vault-tokens ~/iron-vault-dev.log
 ```
 
-That removes the published config and its signature, the vault (`identity.age`, the records, the approval state and
-`recovery.toml`), the log directory, the caller tokens, and the `tee` copy of the log. It prints nothing. Your own
-`dev-config.toml` is kept; its `token_hash` lines are useless now, since the tokens are gone.
+It prints nothing. Your own `dev-config.toml` is kept, but its `token_hash` lines no longer match any token.
 
 ### 3. Check
 

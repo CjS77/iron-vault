@@ -3,35 +3,19 @@
 *The prompts below match the code; the test suite runs the same steps against a software TPM without asserting their text.
 **This has had no release check on a real machine yet**, so don't rely on it for real secrets. Ubuntu 24.04 LTS on a protected install only.*
 
-At the end of this recipe a signing key held in your machine's TPM approves your configs once you type its PIN. A
-software approver kept beside it means a forgotten PIN does not cost you the vault.
-
-A TPM approver is one more [approver](approval-signers.md): the vault pins its public key, and any one pinned approver speaks
-for you at `config approve`, `replace`, `rm`, `recipient remove`, `recipient add`, `export` and the approver commands. The
-private key never leaves the TPM and works only on this machine. The service never opens the TPM itself: a separate helper
-program, `iron-vault-tpm-signer`, does, and it signs only the three fixed payloads the service sends it, each under a PIN you
-typed. A vault that unlocks at boot with [TPM unlock](tpm-unlock.md) still needs you, with the PIN, to change its policy.
-
-```mermaid
-flowchart LR
-    CLI["sudo iron-vault config approve<br/>(you type the PIN)"] -->|admin socket| S["iron-vault service<br/>account iron-vault"]
-    S -->|"signer.sock: fixed payload + PIN"| H["iron-vault-tpm-signer<br/>account iron-vault-tpm"]
-    H -->|/dev/tpmrm0| T["TPM<br/>holds the private key"]
-```
-
-The service account has no access to the TPM device; only the helper's account does.
+Enrol a signing key held in your machine's TPM as an [approver](approval-signers.md), used once you type its PIN.
+**Keep a software approver beside it:** a forgotten PIN is recovered only through another approver. See the
+[TPM approval signer design](../../../design/tpm-approval-signer.md) for how the helper reaches the TPM.
 
 ## Before you start
 
 - The package from [the Linux install guide](../installation/linux-install.md), with the service Ready and a config approved.
   A development build never offers the TPM kind.
-- A TPM 2.0 at `/dev/tpmrm0`, readable by the `tss` group. Ubuntu's `tpm-udev` package sets that up, and installing the Iron Vault
-  package installs it too (the TPM libraries depend on it).
+- A TPM 2.0 at `/dev/tpmrm0`, readable by the `tss` group. The package pulls in `tpm-udev`, which sets that up.
 - A TPM whose dictionary-attack settings limit guessing: a lockout recovery interval of **at least 600 seconds** and a maximum
-  of at least 2 failed tries. Firmware TPMs usually ship with far more. `tpm2_getcap properties-variable` shows them. With weaker
-  settings the helper refuses to work until an administrator raises them.
-- A PIN of **at least 6 characters**, different from the vault passphrase. It is not the approval passphrase and it is not a
-  TPM unlock PIN: v0 has none of those.
+  of at least 2 failed tries. `tpm2_getcap properties-variable` shows them; with weaker settings the
+  helper refuses to work.
+- A PIN of **at least 6 characters**, different from the vault passphrase.
 - The approval passphrase of the approver you already have. Keep that approver. See [forgotten PIN](#a-forgotten-pin-or-a-replaced-tpm).
 
 ## Steps
@@ -46,7 +30,7 @@ ls -l /run/iron-vault-tpm/signer.sock
 srw------- 1 iron-vault root 0 Nov 11 09:12 /run/iron-vault-tpm/signer.sock
 ```
 
-The service offers the `tpm` kind while this socket exists. Only the service account and root can connect to it.
+The service offers the `tpm` kind while this socket exists.
 
 ### 2. Enroll the TPM approver
 
@@ -54,7 +38,7 @@ The service offers the `tpm` kind while this socket exists. Only the service acc
 sudo iron-vault approver add --kind tpm --label "laptop TPM"
 ```
 
-The service asks for the passphrase of an approver already pinned, then for the new PIN twice:
+Type the current approval passphrase, then the new PIN twice:
 
 ```text
 enroll an approval signer
@@ -74,13 +58,11 @@ enrolled approver 1f0c5c0e-3a9c-4a58-8f5d-6a1f3b4c9d21 (tpm); the vault has 2 ap
 1f0c5c0e-3a9c-4a58-8f5d-6a1f3b4c9d21
 ```
 
-The TPM made the key and signed a test payload before the vault pinned it, so a TPM that cannot sign enrolls nothing. The
-key's wrapped blob is `approver-<id>.tpm` in the state directory.
+A TPM that cannot sign enrolls nothing.
 
 ### 3. Approve a config with the PIN
 
-The software approver signed the config in force, so it is asked first. Press Ctrl-Y to switch to the TPM approver, then type
-the PIN:
+At the first prompt press Ctrl-Y to switch to the TPM approver, then type the PIN:
 
 ```sh
 sudo iron-vault config approve dev-config.toml
@@ -93,7 +75,7 @@ TPM approval PIN for "laptop TPM" (Ctrl-Y to try another way):
 approved version 3 (blake2b:10cef10967fbeeaece8a5f087bf247f8e3ad253a88f1fc96e2db4d449122e0c7)
 ```
 
-Nothing echoes while you type. Once the TPM approver signs, it is first in the order, and `approver list` marks it `active`.
+Nothing echoes while you type.
 
 ### 4. Check that it worked
 
@@ -108,29 +90,23 @@ d69d992b-fcf3-481b-b12d-1ec89a59ae67  software  2026-11-11T01:21:45Z  -       ap
 
 ## What a wrong PIN costs
 
-Every wrong PIN counts against the TPM's own dictionary-attack counter, which every PIN-protected object on the machine shares,
-including a disk-encryption slot opened with a PIN. So the helper never spends more than half of the TPM's tries, and at most
-16 at a time. When it has spent its share it answers `tpm-locked-out` with the seconds to wait (the TPM forgets one failed try
-per lockout interval), and the software approver still works. The reserve is the other half, for everyone else.
-
-A guess at the PIN is also the cost of a power cut: the TPM counts one failed try after an unclean shutdown if the key was used
-since the last orderly one. Approvals are rare, and the same reserve bounds it.
+Every wrong PIN, and an unclean shutdown after the key was used, counts against the TPM's dictionary-attack counter,
+shared with every PIN-protected object on the machine. The helper spends at most half the TPM's tries, then answers
+`tpm-locked-out` with the seconds to wait; the software approver still works. See the design's
+[lockout reserve](../../../design/tpm-approval-signer.md#lockout-reserve).
 
 ## A forgotten PIN, or a replaced TPM
 
-The TPM keeps no copy of the PIN and no way round it. A forgotten PIN, a TPM cleared by a firmware reset and a replaced board
-all leave the TPM approver unusable (`approval-denied`, or `approval-unavailable` saying `not this TPM`). Another approver is
-the way out:
+A forgotten PIN, a cleared TPM or a replaced board leave the TPM approver unusable (`approval-denied`, or
+`approval-unavailable` saying `not this TPM`). Use another approver:
 
 1. `sudo iron-vault approver add --label "backup passphrase"`, authorized by the software approver (Ctrl-Y at the first prompt).
 2. If the TPM approver signed the config in force (`active` in `approver list`), approve the config again with another
    approver, or the remove fails with `approver-in-use`.
 3. `sudo iron-vault approver remove <the TPM approver's ID>`, which also deletes its blob.
 
-None of this changes the approval counters: the committed and highest reserved versions stay where they were. A vault
-whose only approver is a lost TPM approver has no way left to authorize anything:
-[`reset`](reset-vault.md) is the only way out, which is why this recipe keeps a software approver. The TPM approver's key
-cannot move with a [migration bundle](move-vault.md); a software approver is needed on the destination.
+If a lost TPM approver was the only one, [`reset`](reset-vault.md) is the only way out. The TPM approver's key cannot
+move with a [migration bundle](move-vault.md); the destination needs a software approver.
 
 ## What can go wrong
 
