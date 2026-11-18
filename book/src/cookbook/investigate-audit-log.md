@@ -2,13 +2,8 @@
 
 *Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `378d57d`.*
 
-At the end of this recipe you can answer three questions from the audit log: which requests were refused and why,
-which responses had a secret scrubbed from them, and who changed what, and when. The log is JSON
-Lines, one record per line, and `jq` answers each question in one command. No record holds a secret, a token or a
-header value, so you can share the output.
-
-Every query below was run on the log of a development service that had worked through the other recipes. Long
-outputs are cut to their last lines.
+Use `jq` on the audit log to find which requests were refused and why, which responses had a secret scrubbed, and who
+changed what, and when. Long outputs below are cut to their last lines.
 
 ## Prerequisites
 
@@ -25,15 +20,14 @@ outputs are cut to their last lines.
   LOG=~/iron-vault-dev.log
   ```
 
-  Rotated files have the same format. Read `iron-vault.log.1` with `jq` and the older `iron-vault.log.*.gz` with
-  `zcat … | jq`. The [log operations guide](../reference/log-operations.md) covers locations, permissions, rotation and
-  shipping the log to a collector.
+  Read rotated `iron-vault.log.1` with `jq` and older `iron-vault.log.*.gz` with `zcat … | jq`. See
+  [log operations](../reference/log-operations.md).
 
 ## Steps
 
 ### 1. Count refusals by reason
 
-Every request ends in one `request.completed` record. A refused one has `"outcome":"failure"` and a `reason`:
+A refused request's `request.completed` record has `"outcome":"failure"` and a `reason`:
 
 ```sh
 jq -r 'select(.event == "request.completed" and .outcome == "failure") | .reason' $LOG | sort | uniq -c | sort -rn
@@ -49,14 +43,14 @@ jq -r 'select(.event == "request.completed" and .outcome == "failure") | .reason
       1 method_not_allowed
 ```
 
-What each one points at:
+Where to look:
 
 | Reason | Status | Look at |
 |---|---|---|
 | `unauthenticated` | 401 | a missing, wrong or [revoked](caller-token.md) caller token; such records name no caller |
 | `not_granted`, `method_not_allowed`, `path_not_allowed` | 403 | the caller's `routes`, or the route's `methods` and `paths` ([widen or narrow a route](change-route.md)) |
 | `no_route` | 404 | a base URL missing the route prefix |
-| `rate_limited` | 429 | the route's `rate_limit`; a burst of these straight after an unlock, approval, reload, `replace` or `rm` is the bucket [starting empty](../reference/configuration.md#rate_limit-the-token-bucket) |
+| `rate_limited` | 429 | the route's `rate_limit`; straight after an unlock or approval, the bucket [starting empty](../reference/configuration.md#rate_limit-the-token-bucket) |
 | `locked` | 503 | the service is Locked: [unlock it](lock-unlock-restart.md) |
 | `policy_invalid` | 503 | the config check failed: see [tamper detection](tamper-detection.md) |
 
@@ -78,14 +72,12 @@ jq -c 'select(.event == "request.completed" and .reason == "rate_limited") | {ti
 ```
 
 Swap the `select` for `.route == "brave" and .outcome == "failure"` to see one route's failures, or add
-`and .timestamp >= "2026-11-07T10:20"` to bound the time. Timestamps are UTC RFC 3339, so they compare correctly as
-strings.
+`and .timestamp >= "2026-11-07T10:20"` to bound the time (UTC timestamps compare as strings).
 
 ### 3. Find scrubbed responses
 
-A `response.scrubbed` record means the upstream sent a credential back and Iron Vault removed it before it reached
-the caller. An echo service like httpbin does that on every request. A real API that does it may be logging or
-reflecting your key, so report it to the provider. To list them:
+A `response.scrubbed` record means the upstream sent a credential back. From a real API (not an echo service like
+httpbin), report it to the provider. To list them:
 
 ```sh
 jq -c 'select(.event == "response.scrubbed") | {timestamp, request_id, route, credential, matches}' $LOG
@@ -114,8 +106,7 @@ Use the full ID from the log.
 
 ### 5. Read the admin trail
 
-Credential changes, issued tokens, approvals, config checks, recovery checks, refused passphrases and lock changes,
-with only the fields each one has:
+Credential changes, issued tokens, approvals, config checks, recovery checks, refused passphrases and lock changes:
 
 ```sh
 jq -c 'select(.event | strings | test("^(credential|caller|vault|recovery)\\.|^admin\\.refused|^config\\.(approval|reload|check)|^service\\.lock"))
@@ -148,8 +139,7 @@ Things to look for:
 - an approval or `credential.replaced` you didn't make;
 - a `config.reload-failed`: someone changed the published config.
 
-Every admin connection also writes an `admin.command` record with the command and the connecting account's
-`principal_uid`. A declined or invalid approval writes only that record.
+A declined or invalid approval writes only an `admin.command` record.
 
 ### 6. See what an approval changed
 
@@ -167,7 +157,7 @@ routes:
 
 ### 7. Check that no secret reached the log
 
-Search for a test secret you stored. This prints `0`:
+Search for a test secret you stored:
 
 ```sh
 grep -c -F 'not-a-real-key-123' $LOG
@@ -177,14 +167,14 @@ grep -c -F 'not-a-real-key-123' $LOG
 0
 ```
 
-Don't do this with a real secret on the command line: it would land in your shell history.
+Never do this with a real secret: it would land in your shell history.
 
 ## What can go wrong
 
-- **`jq: error (at …): null (null) cannot be matched, as it is not a string`.** Diagnostic records have no
-  `event` field. Keep the `.event | strings` guard in filters that test the event name.
-- **`Permission denied` on `/var/log/iron-vault`.** The protected log directory belongs to the service account, mode
-  `0750`. Use `sudo`, and don't add a login or caller account to its group.
+- **`jq: error (at …): null (null) cannot be matched, as it is not a string`.** Keep the `.event | strings` guard
+  in filters that test the event name.
+- **`Permission denied` on `/var/log/iron-vault`.** Use `sudo`, and don't add a login or caller
+  account to the log's group.
 - **Nothing since a restart.** In development with `--log-to-stdout`, the log is wherever stdout went. Without the
   `tee`, it is gone.
 

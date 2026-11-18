@@ -1,12 +1,7 @@
 # Rotate the recovery key, or add a machine's key
 
-At the end of this recipe your vault opens with a new recovery key, and new copies of `identity.age` no longer open
-with the old one. The last step enrols an `age` key that you hold on another machine.
-
-A **recipient** is a key the vault identity is wrapped for (the [security model](../security-model.md) explains the
-lockboxes). `init` enrols two: your vault passphrase and the offline recovery key. The `recipient` commands add and
-remove recipients without re-encrypting the credentials. The service refuses any change that would leave the vault
-without its vault passphrase recipient or without a recovery key.
+Replace the recovery key with a new one, and enrol an `age` key that you hold on another machine. A **recipient** is a
+key the vault identity is wrapped for; see the [security model](../security-model.md).
 
 ## Prerequisites
 
@@ -28,13 +23,11 @@ age10dvnun…  operational  2026-11-08T14:54:27Z  vault passphrase
 age1vhncy4…  recovery     2026-11-08T14:54:27Z  recovery key
 ```
 
-Each line is the recipient's `age1…` key, its role, when it was enrolled, and its label. The commands below name a
-recipient by its key, never by its label. Note the old recovery key's `age1…` key for step 4.
+Commands name a recipient by its `age1…` key, never its label. Note the old recovery key's for step 4.
 
 ### 2. Add a new recovery key
 
-Have the service generate the new key. It shows the key once, like `init`; save it, type `yes`, then authorize with
-the vault passphrase:
+The service shows the new key once, like `init`; save it, type `yes`, then type the vault passphrase:
 
 ```sh
 iron-vault recipient add --recovery --label "recovery key 2026"
@@ -62,13 +55,9 @@ If a machine was lost, rotate the provider credentials it could reach.
 Check the new key with iron-vault recovery check, then remove the old recovery key with iron-vault recipient remove.
 ```
 
-It asks for the vault passphrase, not the approval passphrase, because a new recipient can open every credential. The
-service treats adding one like moving the vault to another machine.
-
 ### 3. Check the new key
 
-Prove that the key you saved opens the vault before you remove the old one. Paste the new key at the prompt: the old
-one also passes until step 4.
+Paste the **new** key at the prompt (the old one also passes until step 4):
 
 ```sh
 iron-vault recovery check
@@ -85,7 +74,7 @@ with `iron-vault recipient remove`, then run step 2 again. See
 
 ### 4. Remove the old recovery key
 
-Name it by the `age1…` key from step 1. The service shows what changes, then asks for the approval passphrase:
+Name it by the `age1…` key from step 1, and type the approval passphrase:
 
 ```sh
 iron-vault recipient remove age1vhncy4…
@@ -115,20 +104,16 @@ The old key now fails `recovery check`:
 iron-vault: the service answered error 31 (recovery-check-failed): the recovery key does not open this vault
 ```
 
-Removal does not reach copies of `identity.age` or backups made before it: anyone holding one and the old key can
-still open it. If the old key or a machine was lost, rotate the provider credentials too.
+Copies of `identity.age` and backups made before the removal still open with the old key. If the old key or a machine
+was lost, rotate the provider credentials too.
 
 ### 5. Add another machine's key
 
-Whoever holds an enrolled key's secret half can decrypt every copy of `identity.age` written from now on, and with it
-every credential. In the [Container profile](../installation/compose-install.md), a key placed in the
-[host unlock handoff](../reference/files.md#container) also opens the vault at startup, with no passphrase. Otherwise
-no v0 command uses the key: `unlock` takes only the vault passphrase, and
-[moving a vault to a new machine](move-vault.md) seals the vault identity with an export passphrase instead. Enrol only
-a key you control.
+Whoever holds an enrolled key's secret half can open every credential. **Enrol only a key you control.** It is used by
+the [host unlock handoff](../reference/files.md#container) in the [Container profile](../installation/compose-install.md);
+no other v0 command uses it.
 
-Generate the key on the other machine, for example with `age-keygen`, and enrol its public `age1…` key. The secret half
-never leaves that machine. `--label` says which machine it is:
+Generate the key on the other machine, for example with `age-keygen`, and enrol its public `age1…` key:
 
 ```sh
 iron-vault recipient add age1v4q6gq… --label "bob's new laptop"
@@ -150,14 +135,12 @@ Old copies of identity.age, and backups, still open with a removed key.
 If a machine was lost, rotate the provider credentials it could reach.
 ```
 
-`recipient list` now has a third line, with role `added`. An added key never counts as a recovery key, because the
-service can't tell who holds it, so it doesn't let you remove the last `recovery` recipient. Remove it with
+`recipient list` now has a third line, with role `added`. It never counts as a recovery key. Remove it with
 `recipient remove` when the machine is retired.
 
 ## What can go wrong
 
-- **`declined`.** You didn't type `yes` after the new recovery key was shown. Nothing changed, and the key shown opens
-  nothing: discard it.
+- **`declined`.** You didn't type `yes` after the new recovery key was shown. Nothing changed; discard the key shown.
 - **`recipient-set-invalid`.** The change would leave the vault without its vault passphrase recipient or without a
   recovery key, or with more than 64 recipients. Add the new recovery key before you remove the old one.
 - **`unknown-recipient`** or **`recipient-invalid`.** The key doesn't match an enrolled recipient, or isn't an `age1…`

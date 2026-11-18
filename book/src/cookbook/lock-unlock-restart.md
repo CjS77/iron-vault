@@ -2,23 +2,8 @@
 
 *Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `378d57d`.*
 
-At the end of this recipe you will have locked the service, seen what callers get while it is Locked, unlocked it
-again, and restarted it. Lock the service when you step away from a machine that holds real keys, or when you think
-something on it is misbehaving: `lock` clears the vault identity and every secret from the service's memory, and
-nothing is proxied until someone with the vault passphrase unlocks it.
-
-Every command below was run as shown, against the real httpbin.org. The recipe moves the service around this cycle;
-the [service states](../reference/states.md#the-state-diagram) page has the full diagram:
-
-```mermaid
-stateDiagram-v2
-    Ready --> Locked: iron-vault lock (step 1)
-    Locked --> Checking: iron-vault unlock (step 3)
-    Checking --> Ready: the config check passes
-    Ready --> [*]: stop (step 4)
-    [*] --> Starting: start (step 4)
-    Starting --> Locked: an interactive unlock is needed
-```
+Lock the service, see what callers get while it is Locked, unlock it, and restart it. `lock` clears every secret from
+the service's memory until someone unlocks it with the vault passphrase. See [service states](../reference/states.md).
 
 ## Prerequisites
 
@@ -47,11 +32,11 @@ recovery last checked: never (reminders counting since 2026-11-07)
 credentials: unknown while the vault is locked
 ```
 
-`status` exits with 4, as it does whenever the service is not Ready.
+`status` exits with 4 while the service is not Ready.
 
 ### 2. See what callers get
 
-The listener stays open, so a caller gets an answer that says why, instead of a refused connection:
+The listener stays open:
 
 ```sh
 AUTH="Proxy-Authorization: Bearer $(cat ~/.iron-vault-tokens/me)"
@@ -85,10 +70,10 @@ A wrong passphrase changes nothing:
 iron-vault: the service answered error 14 (unlock-denied): wrong passphrase
 ```
 
-After 5 wrong vault passphrases, `unlock` is refused for a cooldown that starts at 30 s and doubles up to 15 min,
-before any prompt. `lock` does not clear the count.
+After 5 wrong vault passphrases, `unlock` is refused for a cooldown that starts at 30 s and doubles up to 15 min.
+`lock` does not clear the count.
 
-The log shows each change of state, and the refused attempt (fields trimmed):
+The log (trimmed):
 
 ```json
 {"event":"service.lock-transition","from_state":"ready","to_state":"locked"}
@@ -99,14 +84,14 @@ The log shows each change of state, and the refused attempt (fields trimmed):
 
 ### 4. Restart
 
-Stop the service with Ctrl-C in its terminal. It logs `stopping on SIGINT`, then `stopped`. Start it again with the
+Stop the service with Ctrl-C in its terminal, and start it again with the
 command from [getting started](getting-started.md#2-start-the-service):
 
 ```sh
 iron-vault serve --log-to-stdout | tee -a ~/iron-vault-dev.log
 ```
 
-It comes back Locked, with its listeners open from the last published config:
+It comes back Locked:
 
 ```sh
 iron-vault status | head -3
@@ -120,7 +105,7 @@ vault: locked
 HTTP/1.1 503 Service Unavailable
 ```
 
-Nothing survives a restart but the encrypted vault, so unlock it:
+Unlock it:
 
 ```sh
 iron-vault unlock
@@ -158,21 +143,14 @@ HTTP/1.1 200 OK
 
 ## A lock survives a restart
 
-`lock` leaves an empty file, `locked-by-owner`, in the [state directory](../reference/files.md#the-state-directory),
-and a passphrase `unlock` removes it. While it is there, a restart, a crash or a reboot leaves the service Locked, even
-where a host unlock would otherwise open the vault with no one present (the Docker Compose install, or a protected Linux
-install with [TPM unlock](tpm-unlock.md)). The service logs it as `vault.host-unlock`
-with `host_unlock_outcome` `owner_locked`.
-
-If the service cannot write the file, `lock` still locks and clears the vault, and says on stderr that the lock will not
-survive a restart. If a later `unlock` cannot remove it, `unlock` still succeeds and says on stderr that the next start
-will stay Locked; `lock`, then `unlock` again once the state directory is writable, clears it.
+After `lock`, a restart, crash or reboot leaves the service Locked until a passphrase `unlock`, even with a host unlock
+(Docker Compose, or [TPM unlock](tpm-unlock.md)). The log has `vault.host-unlock` with `host_unlock_outcome`
+`owner_locked`. The [owner-lock file](../reference/files.md#the-state-directory) holds this state.
 
 ## In a protected install
 
-The same commands run through `sudo`: `sudo iron-vault lock`, `sudo iron-vault unlock`. The service is restarted by
-systemd, with `sudo systemctl restart iron-vault`, and by every package upgrade; each time it comes back Locked and
-needs `sudo iron-vault unlock`, unless [TPM unlock](tpm-unlock.md) is set up. See [protected Linux install](protected-linux.md).
+Run the commands through `sudo`, and restart with `sudo systemctl restart iron-vault`. After every restart or package
+upgrade, run `sudo iron-vault unlock`, unless [TPM unlock](tpm-unlock.md) is set up.
 
 ## What can go wrong
 
@@ -182,6 +160,8 @@ needs `sudo iron-vault unlock`, unless [TPM unlock](tpm-unlock.md) is set up. Se
   it was started with a different `XDG_RUNTIME_DIR`.
 - **`503` with `policy invalid` after unlocking.** The published config failed its check. See
   [tamper detection and recovery](tamper-detection.md).
+- **`lock` or `unlock` warns on stderr about the owner-lock file.** The state directory is not writable, so the lock
+  will not survive a restart, or the next start will stay Locked. Once it is writable, `lock` then `unlock` again.
 - **`unlock` is refused with `memory-unprotected`** (protected install only). The service could not lock its memory.
   The [installation guide](../installation/linux-install.md#install) says how to fix the limit.
 
