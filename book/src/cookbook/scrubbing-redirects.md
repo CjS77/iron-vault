@@ -3,8 +3,8 @@
 *Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `e10f09e`. The streamed Venice chat
 in step 2 needs a real Venice key and was not run, so no output is shown for it.*
 
-At the end of this recipe you will have seen the scrubber remove a credential from compressed and streamed responses,
-and seen what Iron Vault does with an upstream's redirect.
+See the scrubber remove a credential from compressed and streamed responses, and what Iron Vault does with an
+upstream's redirect.
 
 ## Prerequisites
 
@@ -23,13 +23,13 @@ In `dev-config.toml`, widen the httpbin route's paths:
 paths = ["/anything/**", "/headers", "/gzip", "/stream/*", "/redirect-to"]
 ```
 
-`*` matches exactly one path segment, and `**` any number. Approve it:
+Approve it:
 
 ```sh
 iron-vault config approve dev-config.toml
 ```
 
-The summary shows only the changed route. Your vault ID, digest and versions will differ:
+Your vault ID, digest and versions will differ:
 
 ```text
 Approval summary
@@ -45,12 +45,12 @@ approved version 3 (blake2b:d5c63bfb9766ff1cbf98328c7c50f8e0fd4aeff2c1ce9f897567
 callers: none; route grants: none; routes: 1 changed; listeners: none; limits: none; logging: none; recovery: none
 ```
 
-[Widen or narrow a route](change-route.md) shows how to read the approval summary. The route's bucket starts empty
-after the approval, so wait a few seconds before the next step or the first request may get `429`.
+Wait a few seconds before the next step: the route's bucket
+[starts empty](../reference/configuration.md#rate_limit-the-token-bucket) after the approval.
 
 ### 2. Scrub compressed and streamed responses
 
-httpbin's `/gzip` answers with a gzip-compressed echo of the request, and `/stream/3` with three echoes sent as they are produced:
+httpbin's `/gzip` answers with a gzip-compressed echo, and `/stream/3` with three streamed echoes:
 
 ```sh
 curl -si -H "$AUTH" http://127.0.0.1:7878/httpbin/gzip
@@ -92,18 +92,15 @@ curl -sN -H "$AUTH" http://127.0.0.1:7878/httpbin/stream/3
 {"id":2,"args":{},"headers":{"Accept":"*/*","Accept-Encoding":"gzip, deflate, br","Authorization":"Bearer [iron-vault:scrubbed]","Host":"httpbin.org","User-Agent":"curl/8.5.0"},"origin":"203.0.113.7","url":"https://httpbin.org/stream/3"}
 ```
 
-httpbin's `origin` is your public address, shown here as `203.0.113.7`. In both responses the echoed `Authorization`
-header reads `Bearer [iron-vault:scrubbed]`. The `/gzip` response arrives without `Content-Encoding`: Iron Vault
-decompressed the body to scrub it, and compresses it again if and only if the caller's `Accept-Encoding` rules out an
-uncompressed body. Each response also produces a `response.scrubbed` record in the log, with one match
-per echo. This one is from `/stream/3`:
+In both, `Authorization` reads `Bearer [iron-vault:scrubbed]`. The `/gzip` response arrives without
+`Content-Encoding`, decompressed for scrubbing. Each response produces a `response.scrubbed` record, with one match per
+echo. This one is from `/stream/3`:
 
 ```json
 {"service":"iron-vault","service_version":"0.2.0-alpha","schema_version":1,"deployment_profile":"development","timestamp":"2026-11-08T12:11:11.628275Z","level":"WARN","message":"scrubbed a secret from a response","event":"response.scrubbed","request_id":"4efad803-1ac8-413e-9ad0-221632213ea0","route":"httpbin","credential":"httpbin_key","matches":3,"target":"iron-vault.audit"}
 ```
 
-Venice's chat route streams the same way. Add `"stream": true` and the answer arrives as server-sent events, each
-scrubbed as it passes. This example was not run (see the note at the top), so no output is shown:
+Venice's chat route streams the same way, as server-sent events, with `"stream": true` (not run):
 
 ```sh
 curl -sN -H "$CHAT" -H 'Content-Type: application/json' \
@@ -113,17 +110,7 @@ curl -sN -H "$CHAT" -H 'Content-Type: application/json' \
 
 ### 3. See a redirect come back
 
-Iron Vault never follows a redirect itself, so the credential is never sent anywhere the route doesn't name. It
-passes the redirect back to the caller, after deciding what its `Location` should say:
-
-```mermaid
-flowchart TD
-    R["Upstream answers 3xx with Location"] --> O{"Same origin as the upstream?"}
-    O -- no --> P["Passed to the caller unchanged"]
-    O -- yes --> B{"Inside the upstream's base path?"}
-    B -- yes --> W["Rewritten under the route prefix"]
-    B -- no --> F["Refused with 502 redirect_refused"]
-```
+Iron Vault never follows a redirect; it passes it back to the caller:
 
 ```sh
 # a redirect within httpbin is rewritten under the route prefix
@@ -136,7 +123,7 @@ curl -si -H "$AUTH" 'http://127.0.0.1:7878/httpbin/redirect-to?url=https://examp
 ```
 
 A redirect to the same origin but outside the upstream's base path, such as `/other` from an upstream at `/api/v1`, is
-refused with `502`, so it can't land in another route.
+refused with `502`.
 
 ## What can go wrong
 

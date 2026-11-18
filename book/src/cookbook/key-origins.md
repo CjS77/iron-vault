@@ -2,8 +2,8 @@
 
 *Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `e10f09e`.*
 
-At the end of this recipe you will have seen Iron Vault refuse to send a stored key anywhere its credential record
-doesn't permit, whether the change comes from a config approval or a `replace`.
+See Iron Vault refuse to send a stored key anywhere its credential record doesn't permit, from a config approval or a
+`replace`.
 
 ## Prerequisites
 
@@ -15,8 +15,7 @@ doesn't permit, whether the change comes from a config approval or a `replace`.
 
 ### 1. Point the route at another host
 
-The origins given to `add` are stored inside the encrypted credential record, and only `replace` can change them.
-Approving a config can't. Try pointing the httpbin route somewhere else in `dev-config.toml`:
+Point the httpbin route somewhere else in `dev-config.toml`:
 
 ```toml
 upstream = "https://postman-echo.com"
@@ -26,19 +25,18 @@ upstream = "https://postman-echo.com"
 iron-vault config approve dev-config.toml
 ```
 
-The service refuses before asking anything, with `config-invalid` and the reason:
+The service refuses before asking anything:
 
 ```text
 iron-vault: the service answered error 7 (config-invalid): the proposed config is invalid: route httpbin sends credential httpbin_key to an origin its record does not permit
 ```
 
-The command exits with status 1. No version is used up, and the active config doesn't change: `iron-vault status`
-still shows the same `approval committed` version. Put the upstream back to `https://httpbin.org`.
+The command exits with status 1, and `iron-vault status` still shows the same `approval committed` version. Put the
+upstream back to `https://httpbin.org`.
 
 ### 2. Try it with `replace`
 
-The same check guards `replace`. Replacing the key with a record that permits only another host is refused while a
-route still sends it to httpbin:
+Replace the key with a record that permits only another host:
 
 ```sh
 iron-vault replace httpbin_key --origin postman-echo.com

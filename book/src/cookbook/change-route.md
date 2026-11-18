@@ -2,12 +2,8 @@
 
 *Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `378d57d`.*
 
-At the end of this recipe a route allows more, or less, than it did, and you will have read the approval summary
-before agreeing to it. Every change to a route is an approval of the whole config file. The **approval summary** is
-the service's own account of what that approval changes, so read it, not your editor, before you type `yes`: if
-something else edited the file, the summary is where you see it.
-
-Every command below was run as shown, against the real httpbin.org.
+Make a route allow more, or less, and check the **approval summary** before you type `yes`: it shows what the
+approval changes, including any edit to the file you didn't make.
 
 ## Prerequisites
 
@@ -24,12 +20,7 @@ Allow httpbin's compressed and streamed echoes too. In `[routes.httpbin]`:
 paths = ["/anything/**", "/headers", "/gzip", "/stream/*"]
 ```
 
-`*` matches exactly one path segment, and `**` zero or more:
-
-| Pattern        | Matches                                  | Does not match              |
-|----------------|------------------------------------------|-----------------------------|
-| `/stream/*`    | `/stream/2`                              | `/stream`, `/stream/2/x`    |
-| `/anything/**` | `/anything`, `/anything/a`, `/anything/a/b` | `/anythingx`, `/headers` |
+`*` matches exactly one path segment, and `**` zero or more; see [configuration](../reference/configuration.md).
 
 ```sh
 iron-vault config approve dev-config.toml
@@ -92,7 +83,7 @@ curl -si -H "$AUTH" http://127.0.0.1:7878/httpbin/stream/2 | head -1
 HTTP/1.1 403 Forbidden
 ```
 
-The log gives the reason `path_not_allowed`. Each approval makes the service Ready again, so the route's rate limit
+The log gives the reason `path_not_allowed`. After each approval the route's rate limit
 [starts empty](../reference/configuration.md#rate_limit-the-token-bucket).
 
 ### 3. Read the summary, and say no when it's wrong
@@ -111,19 +102,18 @@ Approve this config as version 10? Type yes to approve: no
 iron-vault: the service answered error 8 (declined): the config was not approved: the confirmation was not `yes`
 ```
 
-Anything but `yes` declines. Nothing changes, and no version is used up: `status` still shows `approval committed: 9`
-and `approval highest reserved: 9`. Fix the file and approve again.
+Anything but `yes` declines. Nothing changes: `status` still shows `approval committed: 9` and
+`approval highest reserved: 9`. Fix the file and approve again.
 
 What to check in a summary:
 
-- **Header.** `vault` is your vault, and `committed version` is the one `status` shows. `no active config`, which
-  appears after [tamper detection](tamper-detection.md) or a failed check, means every table is listed as added.
+- **Header.** `vault` is your vault, and `committed version` is the one `status` shows. After
+  [tamper detection](tamper-detection.md) it reads `no active config`, and every table is listed as added.
 - **`callers`** (`+` added, `-` removed, `~` changed). A new caller, a changed listener or `token changed` you didn't
-  expect means someone else can now use routes.
+  expect.
 - **`route grants`**: which caller gains or loses which route.
 - **`routes`**: each changed field as old `->` new: prefix, upstream, credential, slot, CA file, methods, paths, rate
-  limit and confirmation. Watch `upstream` and `slot` most: they decide where a credential goes and where it sits in
-  the request. A credential still can't go to a host its record doesn't permit; that check runs before the summary.
+  limit and confirmation. Watch `upstream` and `slot` most.
 - **`listeners`**: a new address changes who can reach every route on it.
 - **The last line** counts every section, so `none` in a section confirms nothing changed there.
 
@@ -131,13 +121,11 @@ What to check in a summary:
 
 - **``iron-vault: the service answered error 8 (declined): the config was not approved: the confirmation was not
   `yes` ``.** You typed something other than `yes`. Nothing changed.
-- **`iron-vault: the service answered error 7 (config-invalid): the proposed config is invalid: …`.** The service
-  refuses before the summary, and uses no version. The message names the problem, such as a caller granted a route the
-  config doesn't define. A listener moved to `192.0.2.10:8443` without `tls_certificate` and `tls_key` gives
+- **`iron-vault: the service answered error 7 (config-invalid): the proposed config is invalid: …`.** Refused before
+  the summary; the message names the problem. A listener moved to `192.0.2.10:8443` without `tls_certificate` and `tls_key` gives
   `the proposed config is invalid: listener public on 192.0.2.10:8443 needs tls_certificate and tls_key: plain HTTP is
   allowed only on loopback`. Check the [configuration reference](../reference/configuration.md) for that table.
-- **`403` with `path_not_allowed` after widening.** Patterns match the path after the route prefix, which leaves out
-  the upstream's base path.
+- **`403` with `path_not_allowed` after widening.** Patterns leave out the upstream's base path.
 - **`429` straight after the approval.** The bucket [starts empty](../reference/configuration.md#rate_limit-the-token-bucket).
 
 ## Reference
