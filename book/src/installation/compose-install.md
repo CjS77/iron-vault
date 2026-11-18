@@ -123,8 +123,9 @@ sudo docker build -f packaging/compose/Dockerfile -t iron-vault .
 
 The uid and gid are build arguments, `IRON_VAULT_UID` and `IRON_VAULT_GID`, both 460 by default. Change them only
 together with the host's `sysusers.d` file and the Compose file's `user:`. To use an image you pulled or were given,
-skip the build. A digest pin needs a registry digest: push a local build to a registry you control and read
-`docker image inspect --format '{{index .RepoDigests 0}}' IMAGE`.
+skip the build. Each release also publishes this image to `ghcr.io/<owner>/iron-vault`, tagged with the release version
+(for example `0.5.0-alpha`); final releases also move `latest`. A digest pin needs a registry digest: push a local
+build to a registry you control and read `docker image inspect --format '{{index .RepoDigests 0}}' IMAGE`.
 
 Copy the host CLI out of the image. It is the same binary as the service, which is how the two stay in step:
 
