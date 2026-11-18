@@ -81,7 +81,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      # The image is tagged with the version without its leading v (v0.5.0-alpha is 0.5.0-alpha). `latest` moves only for a
+      # The image is tagged with the version without its leading v (v0.6.0-alpha is 0.6.0-alpha). `latest` moves only for a
       # final release: a tag with a pre-release suffix has a hyphen. A re-run overwrites the same version tag.
       - name: Build and push the image to ghcr.io
         env:

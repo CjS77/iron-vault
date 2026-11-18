@@ -1,7 +1,24 @@
 # Changelog
 
 All notable changes to Iron Vault are recorded here. Versions follow [Semantic Versioning](https://semver.org/); the
-Linux package carries the same version with `~` before the pre-release tag (`0.5.0-alpha` is `0.5.0~alpha-1`).
+Linux package carries the same version with `~` before the pre-release tag (`0.6.0-alpha` is `0.6.0~alpha-1`).
+
+## [0.6.0-alpha] - 2026-11-18
+
+### Added
+
+- The release workflow builds the Docker Compose service image and publishes it as `ghcr.io/cjs77/iron-vault:<version>`
+  when a release is published, after the Linux package checks pass. Only a release with no pre-release tag moves
+  `latest`.
+
+### Changed
+
+- The cookbook recipes are cut down to their steps: prerequisites, commands, expected output and what to do when a step
+  fails. The background they carried is linked instead.
+
+### Removed
+
+- Owner notifications are dropped from the roadmap, the specification, the design documents, the README and the manual.
 
 ## [0.5.0-alpha] - 2026-11-18
 
@@ -131,5 +148,6 @@ it again.
 - sha2: (new) => 0.10.9
 - tss-esapi: (new) => 7.7.0
 
+[0.6.0-alpha]: https://github.com/CjS77/iron-vault/compare/v0.5.0-alpha...v0.6.0-alpha
 [0.5.0-alpha]: https://github.com/CjS77/iron-vault/compare/v0.4.0-alpha...v0.5.0-alpha
 [0.4.0-alpha]: https://github.com/CjS77/iron-vault/compare/v0.3.0-alpha...v0.4.0-alpha

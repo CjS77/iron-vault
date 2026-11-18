@@ -124,7 +124,7 @@ sudo docker build -f packaging/compose/Dockerfile -t iron-vault .
 The uid and gid are build arguments, `IRON_VAULT_UID` and `IRON_VAULT_GID`, both 460 by default. Change them only
 together with the host's `sysusers.d` file and the Compose file's `user:`. To use an image you pulled or were given,
 skip the build. Each release also publishes this image to `ghcr.io/cjs77/iron-vault`, tagged with the release version
-(for example `0.5.0-alpha`); final releases also move `latest`. A digest pin needs a registry digest. An image
+(for example `0.6.0-alpha`); final releases also move `latest`. A digest pin needs a registry digest. An image
 pulled from ghcr already has one; read it with `docker image inspect --format '{{index .RepoDigests 0}}' IMAGE`. For a local
 build, push it to a registry you control first, then read the digest the same way.
 
