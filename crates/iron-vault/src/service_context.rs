@@ -101,12 +101,12 @@ use serving::Serving;
 use unlock::log_foreign_files;
 pub(crate) use unlock::unprotected_reason;
 
+pub use crate::host_unlock_outcome::{HostUnlockOutcome, HostUnlockRefusal};
 pub use approval::{ApprovalEnd, ApprovalReview, NO_ASKABLE_APPROVER};
 pub use approver_change::{ApproverChangePlan, ApproverRefusal};
 pub use approver_list::ApproverListRefusal;
 pub use export::{ExportError, ExportStream};
 pub use forget_machine::ForgetCheck;
-pub use host_unlock::{HostUnlockOutcome, HostUnlockRefusal};
 pub use import::{BundleRefusal, ImportSlot};
 pub use init::{HostUnlockUnavailable, InitRefusal, step_names};
 pub use migration::MigrationSession;

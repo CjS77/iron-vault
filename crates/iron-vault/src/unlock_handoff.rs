@@ -74,9 +74,16 @@ pub fn read_handoff(profile: DeploymentProfile, owner: ExpectedOwner, path: &Pat
 /// Returns `true` if and only if the unseal-failure file is at `path`: a regular file owned by `owner`, found without
 /// following a symlink. A symlink, a directory, another owner's file or any error counts as not there, since the file
 /// is a diagnostic and never a reason to refuse anything.
+#[cfg(target_os = "linux")]
 pub fn unseal_failed_present(owner: ExpectedOwner, path: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
     std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.uid() == owner.uid)
+}
+
+/// There is no host unlock off Linux (see `read_leaf`), so no unseal-failure file counts as present.
+#[cfg(not(target_os = "linux"))]
+pub fn unseal_failed_present(_owner: ExpectedOwner, _path: &Path) -> bool {
+    false
 }
 
 fn collect_kind(error: &CollectError) -> io::ErrorKind {

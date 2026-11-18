@@ -15,9 +15,8 @@ pub mod connection_tags;
 pub mod content_coding;
 pub mod deployment;
 pub mod hardening;
+pub mod host_unlock_outcome;
 pub mod library_error;
-// It maps the Linux-only `request_listeners::OpenError`.
-#[cfg(target_os = "linux")]
 pub mod listener_failure;
 // The TLS acceptor runs on tokio and tokio-rustls, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
