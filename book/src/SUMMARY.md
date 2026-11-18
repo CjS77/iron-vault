@@ -39,7 +39,6 @@
 - [Move a vault to a new machine](cookbook/move-vault.md)
 - [Not yet available](cookbook/roadmap/index.md)
     - [Log in to an OAuth provider](cookbook/roadmap/oauth.md)
-    - [Get owner notifications on the desktop](cookbook/roadmap/notifications.md)
     - [Restrict what a request may contain](cookbook/roadmap/request-content.md)
     - [Use a YubiKey](cookbook/roadmap/yubikey.md)
     - [Other credential kinds](cookbook/roadmap/credential-kinds.md)

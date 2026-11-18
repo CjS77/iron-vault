@@ -81,9 +81,8 @@ Still to come in v0:
 
 - the v0 release acceptance suite.
 
-Later phases add OAuth login and refresh, owner notifications, more credential kinds
-(JWT, GitHub App, HMAC, AWS Signature Version 4), YubiKey recipients with PIN/touch policies, and macOS and Windows
-services.
+Later phases add OAuth login and refresh, more credential kinds (JWT, GitHub App, HMAC, AWS Signature Version 4),
+YubiKey recipients with PIN/touch policies, and macOS and Windows services.
 
 ## Use cases
 
@@ -100,7 +99,7 @@ services.
 | Phase       | Scope                                                                                                                                                                                                                                             |
 |-------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | v0          | Base-URL proxy; static and Basic credentials; caller authentication; route restrictions and rate limits; encrypted storage; versioned approval; vault passphrase attempt limits; scrubbing; recovery and migration                                |
-| v1          | Service-owned OAuth consent, account identity, access-token caching, and safe refresh-token rotation; owner notifications; request-content restrictions (allow-lists on query parameters and JSON body fields, such as the models a key may call) |
+| v1          | Service-owned OAuth consent, account identity, access-token caching, and safe refresh-token rotation; request-content restrictions (allow-lists on query parameters and JSON body fields, such as the models a key may call)                      |
 | Later       | YubiKey unlock/signing and per-request touch confirmation; additional credential kinds; password-manager sync                                                                                                                                     |
 | Conditional | Forward-proxy interception if required callers cannot use base-URL mode                                                                                                                                                                           |
 

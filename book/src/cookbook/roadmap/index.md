@@ -7,7 +7,6 @@ feature ships.
 | Recipe | Phase |
 |---|---|
 | [Log in to an OAuth provider](oauth.md) | v1 |
-| [Get owner notifications on the desktop](notifications.md) | v1 |
 | [Restrict what a request may contain](request-content.md) | v1 |
 | [Use a YubiKey](yubikey.md) | later |
 | [Other credential kinds](credential-kinds.md) | later |
