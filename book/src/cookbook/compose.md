@@ -3,18 +3,14 @@
 *Not run: this recipe needs root, Docker, systemd and a TPM 2.0 on a host, and none was available when it was
 checked, so no output is shown. Every command comes from the [Compose install guide](../installation/compose-install.md).*
 
-At the end of this recipe Iron Vault runs as a container, with one isolated network and one TLS listener per caller
-container. The host hands the service its unlock identity at startup, sealed to the host's TPM, so after a restart or
-reboot the service comes back Ready with no one typing a passphrase. A caller container is recognised by the network it
-is on and sends no token.
+Run Iron Vault as a container, with one isolated network and TLS listener per caller container, that comes back Ready
+after a restart from an unlock identity sealed to the host's TPM.
 
 **The Compose profile has had no release check on a real machine yet, so don't rely on it to protect real secrets.**
 
-Whoever controls the Docker daemon is root on the host and can read the service's memory after unlock, so the
-daemon's administrators are trusted. Use [protected Linux](protected-linux.md) on a desktop or a shared workstation.
-
-This page is the order of work. The [install guide](../installation/compose-install.md) holds the detail, and each
-step links to its section.
+**Whoever controls the Docker daemon can read the service's secrets.** Use [protected Linux](protected-linux.md) on a
+desktop or a shared workstation. Each step links to its section of the
+[install guide](../installation/compose-install.md).
 
 ## Prerequisites
 
@@ -48,9 +44,7 @@ reaches its route.
 
 ## Not yet built
 
-- **A TPM approval signer.** In this profile every approver is opened by its approval passphrase. The
-  [TPM approval signer](tpm-approval.md), a key in the host's TPM reached through a host-side helper, is built for the
-  Linux package but not yet for this profile.
+- The [TPM approval signer](tpm-approval.md): in this profile every approver uses an approval passphrase.
 
 ## Reference
 

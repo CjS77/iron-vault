@@ -1,34 +1,17 @@
 # Retire a machine
 
-At the end of this recipe a machine that used to open your vault is no longer one of its recipients, and you have the
-steps to retire what it held: its sealed unlock credential and, if nothing else needs it, its TPM. Iron Vault checks and
-advises; you run every step on the retired machine yourself. `forget-machine` never removes a recipient, deletes a file or
-runs a TPM tool.
+Remove a retired machine's recipient key from the vault that stays, then retire its sealed unlock credential and, if
+nothing else needs it, its TPM. `forget-machine` only checks and prints the steps; you run them yourself.
 
-Removing a recipient protects future copies of `identity.age` only. Old copies and backups still open with the removed key,
-so a machine that was lost, as opposed to retired, also means rotating the provider credentials it could reach.
+Old copies of `identity.age` and backups still open with a removed key: **if the machine was lost, rotate the
+provider credentials it could reach** (step 4).
 
-The commands below are for a protected installation: run every `iron-vault` command through `sudo` (see [`sudo` in a
-protected installation](../reference/cli.md#sudo-in-a-protected-installation)).
-
-The work is split between two machines:
-
-```mermaid
-flowchart LR
-    subgraph stays["The vault that stays"]
-        A["1. recipient remove age1…"] --> B["2. forget-machine age1…"]
-    end
-    subgraph retired["The retired machine"]
-        C["3. check what else uses the TPM"] --> D["delete the sealed credential"] --> E["clear the TPM, if nothing else needs it"]
-    end
-    B -- prints the steps --> C
-    B -. lost or stolen .-> F["4. replace each credential"]
-```
+Run every `iron-vault` command through `sudo` (see [`sudo` in a protected
+installation](../reference/cli.md#sudo-in-a-protected-installation)).
 
 ## Prerequisites
 
-- **The vault that stays**, running and Ready, on another machine. `forget-machine` reads its recipient list; the retired
-  machine's own copy of the vault still lists the machine's key, so the command is not run there.
+- **The vault that stays**, running and Ready, on another machine. Don't run the commands on the retired machine.
 - **The retired machine's recipient key**, the `age1…` text. For a machine with TPM unlock it is the `host-unlock` line of
   `iron-vault recipient list`, or what the provisioning script printed. If the machine's vault was moved with
   `export` and `import`, the new vault never held the old key; use the one the old machine's `recipient list` or
@@ -44,8 +27,7 @@ iron-vault recipient list
 iron-vault recipient remove age1…
 ```
 
-`recipient remove` asks for the approval passphrase. It refuses the `operational` recipient, the last `recovery`
-recipient and a host unlock identity that this service's own unlock handoff holds; see [manage recipients](recipients.md).
+`recipient remove` asks for the approval passphrase; see [manage recipients](recipients.md).
 
 ### 2. Check that it is gone
 
@@ -53,10 +35,7 @@ recipient and a host unlock identity that this service's own unlock handoff hold
 iron-vault forget-machine age1…
 ```
 
-If the key is still a recipient, the command exits with code 1 and the code `machine-not-forgotten`; the message gives
-the key's role and says to run `recipient remove` with the same key. Nothing is changed.
-
-If the key is not a recipient, the command prints three facts and then the steps for the retired machine:
+If the key is gone, it prints three facts and then the steps for the retired machine:
 
 ```text
 age1… is not a recipient of this vault. Check that it is the key the retired machine had: this command cannot tell a removed key from one that was never enrolled.
@@ -66,13 +45,12 @@ recovery last checked: 2026-11-04 (7 days ago)
 
 A mistyped key also reads as gone, so compare the key it repeats with the one on the retired machine.
 
-Any warnings are printed first, on stderr, above the steps. A warning means something needs fixing before you clear any TPM:
+Fix any warning (printed first, on stderr) before you clear any TPM:
 
 - **`the recovery check is overdue`, `has never run` or `is not on record`.** Run [`recovery check`](recovery-key.md) with
-  your offline recovery key. Retiring a machine removes one way into the vault; the check proves another still works. A new
-  vault that has never run the check gets this warning too, however young it is.
-- **`the vault no longer meets the independence rule`.** The vault lacks an `operational` or `recovery` recipient, or has
-  too few recipients. Add the missing one with `recipient add` before you go on.
+  your offline recovery key.
+- **`the vault no longer meets the independence rule`.** Add the missing `operational` or `recovery`
+  recipient with `recipient add`.
 
 ### 3. Follow the steps it prints, on the retired machine
 
@@ -99,8 +77,8 @@ purging the package, and delete `/etc/iron-vault-host/provisioning.txt` beside t
 
 ### 4. If the machine was lost or stolen, rotate
 
-Run this on the vault that stays. Removing a recipient cannot revoke ciphertext an attacker already holds. For each
-credential in `iron-vault list`, have the provider reissue the key, then give the name and the origins `list` shows:
+On the vault that stays, for each credential in `iron-vault list`, have the provider reissue the key, then give the
+name and the origins `list` shows:
 
 ```sh
 iron-vault replace NAME --origin openexchangerates.org
