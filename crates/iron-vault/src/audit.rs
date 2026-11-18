@@ -66,6 +66,8 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub const CONSTANT_FIELDS: [&str; 4] = ["service", "service_version", "schema_version", "deployment_profile"];
 
 /// A length as a `u64` field; a length never exceeds `u64::MAX` on a supported target, so the fallback is unreachable.
+// Every event with a count is emitted by the Linux-only service context, request server or proxy handler.
+#[cfg(target_os = "linux")]
 pub(crate) fn count_of(len: usize) -> u64 {
     u64::try_from(len).unwrap_or(u64::MAX)
 }

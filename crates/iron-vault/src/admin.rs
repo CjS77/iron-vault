@@ -44,7 +44,6 @@ mod approver_remove;
 pub mod dispatch;
 #[cfg(target_os = "linux")]
 mod export;
-#[cfg(target_os = "linux")]
 mod forget_machine;
 #[cfg(target_os = "linux")]
 mod import;

@@ -17,7 +17,7 @@
 //! ```
 
 use super::FrameError;
-use crate::host_unlock_outcome::{HostUnlockOutcome, HostUnlockRefusal};
+use crate::service_context::{HostUnlockOutcome, HostUnlockRefusal};
 
 pub(super) const TAG_OUTCOME: u16 = 18;
 

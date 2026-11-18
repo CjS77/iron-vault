@@ -15,8 +15,8 @@ use super::recovery_status::{self, RecoveryStatus};
 use super::{FrameError, body::TAG_COMMAND};
 use crate::deployment::DeploymentProfile;
 use crate::hardening::MemoryProtection;
-use crate::host_unlock_outcome::HostUnlockOutcome;
 use crate::listener_failure::{ListenerFailure, ListenerFailureReason};
+use crate::service_context::HostUnlockOutcome;
 use crate::service_state::{FailureReason, ServiceState};
 use crate::standing::{CredentialStanding, RouteFault, RouteFaultKind, Standing};
 
