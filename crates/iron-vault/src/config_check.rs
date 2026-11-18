@@ -393,9 +393,15 @@ fn run(
         .map_err(|error| CheckFailure::Config(InvalidConfig::Snapshot(error)))
 }
 
+/// Parses `bytes` and validates its sections against each other, the part of the check that needs neither the vault nor
+/// the host. `config approve`, the config check and `iron-vault config check` all start here, so they cannot disagree
+/// about what a valid config is. Only [`InvalidConfig::Parse`] and [`InvalidConfig::Validation`] come back.
+pub fn validate_config(bytes: &[u8]) -> Result<ValidatedConfig, InvalidConfig> {
+    let parsed = ParsedConfig::from_toml(bytes).map_err(InvalidConfig::Parse)?;
+    ValidatedConfig::try_from(parsed).map_err(InvalidConfig::Validation)
+}
+
 /// Parses, validates and activates `bytes` against `vault`'s credential catalog.
 pub(crate) fn activate_config(bytes: &[u8], vault: &Vault, accounts: &impl AccountDirectory) -> Result<ActivePolicy, InvalidConfig> {
-    let parsed = ParsedConfig::from_toml(bytes).map_err(InvalidConfig::Parse)?;
-    let config = ValidatedConfig::try_from(parsed).map_err(InvalidConfig::Validation)?;
-    activate(&config, vault, accounts).map_err(InvalidConfig::Activation)
+    activate(&validate_config(bytes)?, vault, accounts).map_err(InvalidConfig::Activation)
 }

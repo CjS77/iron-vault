@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! `iron-vault config check FILE`: parses and validates a config file with no service, no vault and no root.
 //!
-//! This is advisory. It runs the same parser and cross-section validation the service runs on `config approve`, but not
+//! This is advisory. It runs [`validate_config`], the parser and cross-section validation that `config approve` runs too, but not
 //! activation: whether each credential exists, permits its route's host and fits its slot, whether a peer caller's
 //! account exists on this host, the upstream TLS settings and the log destination all need the vault or the host, so
 //! only an approval learns them. The service never trusts this result; it checks again.
@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use iron_vault::admin::protocol::{MAX_CONFIG_LEN, ProposedConfig};
-use iron_vault_policy::{ParsedConfig, ValidatedConfig};
+use iron_vault::config_check::{InvalidConfig, validate_config};
 
 use super::Exit;
 
@@ -48,18 +48,22 @@ pub(super) fn read_config(file: &Path) -> Result<ProposedConfig, String> {
     ProposedConfig::new(bytes).ok_or_else(|| format!("the config file {} is longer than {MAX_CONFIG_LEN} bytes", file.display()))
 }
 
-/// Parses and validates `bytes`, reporting every cross-section failure rather than the first.
+/// Parses and validates `bytes` with the service's own [`validate_config`], and reports every failure rather than the
+/// first. The text is the parser's own, which may quote a short value: it goes to the owner's terminal, not a log.
 pub fn check_bytes(bytes: &[u8]) -> Result<(), CheckError> {
-    let parsed = ParsedConfig::from_toml(bytes).map_err(|e| CheckError::Invalid(format!("the config is not valid: {e}")))?;
-    ValidatedConfig::try_from(parsed)
-        .map(drop)
-        .map_err(|failures| CheckError::Invalid(validation_text(&failures)))
+    validate_config(bytes).map(drop).map_err(|e| CheckError::Invalid(invalid_text(&e)))
 }
 
-/// The cross-section failures, one per line under a heading, so a long list stays readable.
-fn validation_text(failures: &[iron_vault_policy::ValidationError]) -> String {
-    let lines = failures.iter().map(|failure| format!("\n  - {failure}"));
-    format!("the config is not valid:{}", lines.collect::<String>())
+/// What the owner is told about a config that is not valid: the error, then each cross-section failure on a line of its own.
+fn invalid_text(error: &InvalidConfig) -> String {
+    match error {
+        InvalidConfig::Parse(e) => format!("the config is not valid: {e}"),
+        InvalidConfig::Validation(failures) => {
+            let lines = failures.iter().map(|failure| format!("\n  - {failure}"));
+            format!("the config is not valid:{}", lines.collect::<String>())
+        }
+        other => format!("the config is not valid: {other}"),
+    }
 }
 
 /// Checks the config at `file`.
